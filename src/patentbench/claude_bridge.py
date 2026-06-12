@@ -40,8 +40,9 @@ DIGEST_TIMEOUT = float(os.environ.get("PB_DIGEST_TIMEOUT", "300"))
 MAX_HISTORY = 24            # turns kept in the prompt
 MAX_TURN_CHARS = 4000       # each history turn clipped
 MAX_SKILL_CHARS = 16_000    # each skill doctrine clipped
-MAX_DOC_CHARS = 9000        # each stored document clipped (abstract+digest+claims first)
-MAX_DOCS_CHARS = 260_000    # total candidate budget per prompt (26 docs fit un-skipped)
+MAX_DOC_CHARS = 9000        # per-candidate ceiling (abstract+digest+claims first)
+MAX_DOCS_CHARS = 400_000    # total candidate budget per prompt
+MIN_DOC_CHARS = 1200        # floor below which a candidate block stops being useful
 MAX_FULLTEXT_CHARS = 400_000  # full document fed to the digest/deep-map model
 
 _PREAMBLE = (
@@ -202,20 +203,22 @@ def build_prompt(question: str, history: list[dict] | None = None,
             "are compared AGAINST this; when ranking or matching, anchor on its "
             "claims and technical solution:\n\n" + _benchmark_block(benchmark))
     if documents:
-        blocks, used = [], 0
-        skipped = 0
-        for d in documents:
-            if used >= MAX_DOCS_CHARS:
-                skipped += 1
-                continue
-            b = _document_block(d, min(MAX_DOC_CHARS, MAX_DOCS_CHARS - used))
-            blocks.append(b)
-            used += len(b)
-        note = (f"\n\n(NOTE: {skipped} more document(s) did not fit the context "
-                "budget — say so if they may matter.)" if skipped else "")
-        parts.append("CANDIDATE DOCUMENTS of this tab (fetched and stored locally — "
-                     "this is your primary evidence; cite publication numbers):\n\n"
-                     + "\n\n".join(blocks) + note)
+        # EVERY candidate is always present: the per-candidate slice shrinks as
+        # the list grows instead of dropping the tail (which is arbitrary —
+        # insertion order says nothing about relevance). Only past the hard
+        # floor (~330 candidates) does skipping start, loudly.
+        per_doc = min(MAX_DOC_CHARS, max(MIN_DOC_CHARS, MAX_DOCS_CHARS // len(documents)))
+        cap = max(1, MAX_DOCS_CHARS // MIN_DOC_CHARS)
+        included, skipped = documents[:cap], len(documents[cap:])
+        blocks = [_document_block(d, per_doc) for d in included]
+        note = (f"\n\n(NOTE: {skipped} more document(s) did not fit even at the "
+                "minimum slice — tell the user to use Deep compare for full "
+                "coverage.)" if skipped else "")
+        parts.append("CANDIDATE DOCUMENTS of this tab — ALL "
+                     f"{len(included)} of them (fetched and stored locally; "
+                     f"each clipped to ~{per_doc} chars, abstract+digest first; "
+                     "use Deep compare for unclipped full-text reads); cite "
+                     "publication numbers:\n\n" + "\n\n".join(blocks) + note)
     if history:
         lines = []
         for h in history[-MAX_HISTORY:]:

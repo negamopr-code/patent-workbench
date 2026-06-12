@@ -67,3 +67,16 @@ def test_two_pass_image_ocr_flags_disagreement(monkeypatch):
     res = extract.numbers_from_image("/tmp/x.png")
     assert "US10395648B1" in res["numbers"]
     assert set(res["uncertain"]) == {"CN119134413", "CN119334413"}
+
+
+def test_all_candidates_always_in_prompt():
+    # regression: 34 docs x 9k per-doc cap > 260k total budget used to DROP the
+    # last 5 candidates from chat ("5 did not fit the context budget"). 2026-06-12.
+    from patentbench import claude_bridge as cb
+    docs = [{"number": f"US{i:07}", "title": f"t{i}", "abstract": "a" * 20000}
+            for i in range(60)]
+    p = cb.build_prompt("q", documents=docs)
+    for d in docs:
+        assert d["number"] in p
+    assert "did not fit" not in p
+    assert "ALL 60 of them" in p
