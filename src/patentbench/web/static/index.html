@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patent Workbench</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">📜 Patent Workbench</div>
+  <div id="health" class="health"></div>
+</header>
+
+<nav id="tabbar" class="tabbar">
+  <div id="tabs" class="tabs"></div>
+  <button id="tab-add" class="tab-add" title="New tab">＋</button>
+</nav>
+
+<main id="main" class="main hidden">
+  <!-- LEFT: input -->
+  <section class="pane pane-input">
+    <h2>Add documents</h2>
+    <textarea id="in-text" rows="5"
+      placeholder="Paste patent numbers, Google Patents / Espacenet links, or any text containing them…"></textarea>
+    <button id="in-add" class="btn primary">Add numbers</button>
+
+    <div id="dropzone" class="dropzone">
+      <p>📷 Drop a <b>photo</b> of a document list,<br>a <b>PDF</b> or a <b>.txt</b> here<br><span class="muted">or</span></p>
+      <label class="btn">Choose file<input id="in-file" type="file" hidden
+        accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.txt"></label>
+    </div>
+    <div id="upload-status" class="muted"></div>
+
+    <div id="candidates" class="candidates hidden">
+      <h3>Extracted numbers — confirm</h3>
+      <div id="cand-list"></div>
+      <div class="row">
+        <button id="cand-all" class="btn small">All</button>
+        <button id="cand-none" class="btn small">None</button>
+        <button id="cand-add" class="btn primary small">Add selected</button>
+        <button id="cand-cancel" class="btn small">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- MIDDLE: documents -->
+  <section class="pane pane-docs">
+    <h2>Documents <span id="doc-count" class="chip"></span></h2>
+    <div id="docs" class="docs"></div>
+  </section>
+
+  <!-- RIGHT: chat -->
+  <section class="pane pane-chat">
+    <div class="chat-toolbar">
+      <select id="model" title="Claude model"></select>
+      <details class="skills-dd">
+        <summary id="skills-summary">🧠 Skills</summary>
+        <div id="skills" class="skills-list"></div>
+      </details>
+      <label class="check"><input type="checkbox" id="use-docs" checked> 📄 Use documents</label>
+      <button id="nb-btn" class="btn small">🔗 Notebook…</button>
+      <span id="nb-chip" class="chip hidden"></span>
+    </div>
+
+    <div id="chat" class="chat"></div>
+
+    <div class="chat-input">
+      <textarea id="q" rows="3" placeholder="Ask about this tab's documents…"></textarea>
+      <div class="chat-buttons">
+        <label class="check small"><input type="checkbox" id="ask-nb"> include NotebookLM</label>
+        <button id="ask-claude" class="btn primary">Ask Claude</button>
+        <button id="ask-notebook" class="btn">Notebook only</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="empty" class="empty">Create a tab to start a patent project →</div>
+
+<!-- Notebook connect modal -->
+<div id="nb-modal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Connect NotebookLM notebook</h3>
+    <div id="nb-list" class="nb-list">Loading…</div>
+    <div id="nb-sources-wrap" class="hidden">
+      <h4>Sources <span class="muted">(restrict questions to selected documents)</span></h4>
+      <div class="row">
+        <button id="src-all" class="btn small">Select all</button>
+        <button id="src-none" class="btn small">Select none</button>
+        <span id="src-count" class="chip"></span>
+      </div>
+      <div id="nb-sources" class="nb-sources"></div>
+    </div>
+    <div class="row right">
+      <button id="nb-disconnect" class="btn small danger">Disconnect</button>
+      <button id="nb-save" class="btn primary">Save</button>
+      <button id="nb-cancel" class="btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save-lesson modal -->
+<div id="lesson-modal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Save lesson to skill</h3>
+    <select id="lesson-skill"></select>
+    <textarea id="lesson-text" rows="6" placeholder="One concise, generalizable lesson…"></textarea>
+    <div class="row right">
+      <button id="lesson-save" class="btn primary">Append to skill</button>
+      <button id="lesson-cancel" class="btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
