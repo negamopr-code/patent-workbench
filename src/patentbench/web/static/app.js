@@ -17,6 +17,7 @@ let tabs = [];
 let activeTab = null;
 let docsPoll = null;
 let bmPoll = null;
+let docSelection = new Set();   // candidate ids picked for a scoped deep compare
 let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
 let lessonDefaultText = '';
@@ -98,6 +99,7 @@ function showEmpty() {
 }
 
 async function selectTab(id) {
+  if (activeTab !== id) docSelection = new Set();
   activeTab = id;
   location.hash = id;
   $('main').classList.remove('hidden');
@@ -306,6 +308,17 @@ function renderDocs(docs) {
     el.className = 'doc';
     const row1 = document.createElement('div');
     row1.className = 'doc-row';
+    if (d.status === 'fetched') {
+      const sel = document.createElement('input');
+      sel.type = 'checkbox';
+      sel.checked = docSelection.has(d.id);
+      sel.title = 'Select for a scoped deep analysis (🏆 Best match runs only on selected; none selected = whole list)';
+      sel.onchange = () => {
+        sel.checked ? docSelection.add(d.id) : docSelection.delete(d.id);
+        updateDocSelChip();
+      };
+      row1.appendChild(sel);
+    }
     const num = document.createElement('span');
     num.className = 'num'; num.textContent = d.number;
     row1.appendChild(num);
@@ -380,6 +393,20 @@ function renderDocs(docs) {
     el.appendChild(row2);
     wrap.appendChild(el);
   }
+  // prune selection of deleted/refetched-away docs
+  const ids = new Set(docs.map(d => d.id));
+  docSelection = new Set([...docSelection].filter(id => ids.has(id)));
+  updateDocSelChip();
+}
+
+function updateDocSelChip() {
+  const chip = $('doc-sel');
+  if (docSelection.size) {
+    chip.textContent = `🏆 ${docSelection.size} selected for deep analysis · clear`;
+    chip.classList.remove('hidden');
+    chip.style.cursor = 'pointer';
+    chip.onclick = () => { docSelection = new Set(); refreshDocs(); };
+  } else chip.classList.add('hidden');
 }
 
 async function refreshDocs() {
@@ -550,19 +577,24 @@ $('ask-claude').onclick = () => sendChat(false);
 $('ask-notebook').onclick = () => sendChat(true);
 $('best-match').onclick = async () => {
   if (!activeTab) return;
-  if (!confirm('Deep compare: a cheap model reads EVERY candidate in FULL against ' +
-               'the benchmark, then the selected model compiles the ranking. ' +
-               'Takes a few minutes. Start?')) return;
+  const ids = [...docSelection];
+  const scope = ids.length ? `the ${ids.length} SELECTED candidate(s)` : 'EVERY candidate';
+  if (!confirm(`Deep compare: a cheap model reads ${scope} in FULL against ` +
+               'the benchmark, then the selected model compiles the answer. ' +
+               (ids.length ? '' : 'Takes a few minutes. ') + 'Start?')) return;
   const q = $('q').value.trim();          // optional custom task; default ranking otherwise
   $('q').value = '';
   const tabAtSend = activeTab;
-  appendMsg({ role: 'q', text: `[Deep compare — full text]${q ? '\n' + q : ''}` });
-  setBusy(true, 'Deep comparing — reading every candidate in full');
+  appendMsg({ role: 'q', text: `[Deep compare — full text, ${ids.length || 'all'} candidate(s)]${q ? '\n' + q : ''}` });
+  setBusy(true, ids.length
+    ? `Deep comparing ${ids.length} selected candidate(s) at full text`
+    : 'Deep comparing — reading every candidate in full');
   const res = await api(`/api/tabs/${tabAtSend}/deep-compare`, {
     method: 'POST', body: JSON.stringify({
       model: $('model').value,
       skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
       question: q || null,
+      doc_ids: ids.length ? ids : null,
     }) });
   setBusy(false);
   if (activeTab !== tabAtSend) return;

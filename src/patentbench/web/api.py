@@ -510,14 +510,23 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
     bm = db.get_benchmark(tab_id)
     if not bm or bm.get("status") != "ready":
         raise HTTPException(400, "benchmark is not ready — set it first")
-    docs = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    all_docs = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    if body.doc_ids:
+        want = set(body.doc_ids)
+        docs = [d for d in all_docs if d["id"] in want]
+    else:
+        docs = all_docs
     if not docs:
-        raise HTTPException(400, "no fetched candidate documents")
+        raise HTTPException(400, "no fetched candidate documents"
+                            + (" among the selected ones" if body.doc_ids else ""))
+    scope = (f"{len(docs)} of {len(all_docs)}" if len(docs) != len(all_docs)
+             else f"all {len(docs)}")
     model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
     question = (body.question or "").strip() or DEEP_DEFAULT_QUESTION
     history = db.list_messages(tab_id, limit=claude_bridge.MAX_HISTORY)
-    db.append_message(tab_id, "q", f"[Deep compare — {len(docs)} candidates at full "
-                                   f"text]\n{question}")
+    db.append_message(tab_id, "q", f"[Deep compare — {scope} candidates at full "
+                                   f"text: {', '.join(d['number'] for d in docs[:30])}]"
+                                   f"\n{question}")
     bm_text = _benchmark_fulltext(bm)
 
     def one(d: dict) -> dict:
@@ -538,7 +547,7 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
     participants = [{"kind": "model", "title": model},
                     {"kind": "benchmark",
                      "title": bm.get("number") or f"{len(bm.get('files') or [])} file(s)"},
-                    {"kind": "documents", "title": f"{len(docs)} candidates · full text"}]
+                    {"kind": "documents", "title": f"{scope} candidates · full text"}]
     for name in body.skills:
         content = claude_bridge.load_skill(name)
         if content:

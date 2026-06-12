@@ -48,6 +48,7 @@ class DeepCompareRequest(BaseModel):
     model: str | None = None
     skills: list[str] = []
     question: str | None = Field(default=None, max_length=20_000)
+    doc_ids: list[int] | None = None   # subset to analyze; None/empty = all candidates
 
 
 class LessonCreate(BaseModel):

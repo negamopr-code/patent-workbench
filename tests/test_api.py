@@ -201,3 +201,22 @@ def test_deep_compare(client):
     # no benchmark -> 400
     tab2 = client.post("/api/tabs", json={"name": "NoBM"}).json()
     assert client.post(f"/api/tabs/{tab2['id']}/deep-compare", json={}).status_code == 400
+
+
+def test_deep_compare_subset(client):
+    tab = client.post("/api/tabs", json={"name": "DeepSel"}).json()
+    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tab['id']}/documents",
+                json={"text": "EP3667902A1 CN114547092 CN119134413"})
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    pick = [d["id"] for d in docs[:2]]
+    r = client.post(f"/api/tabs/{tab['id']}/deep-compare", json={"doc_ids": pick}).json()
+    assert "2/2 candidates at FULL text" in r["messages"][0]["text"]
+    parts = r["messages"][1]["participants"]
+    assert any(p["title"] == "2 of 3 candidates · full text" for p in parts)
+    state = client.get(f"/api/tabs/{tab['id']}/state").json()
+    q = [m for m in state["messages"] if m["role"] == "q"][-1]
+    assert "2 of 3 candidates" in q["text"]
+    # unknown ids only -> 400
+    assert client.post(f"/api/tabs/{tab['id']}/deep-compare",
+                       json={"doc_ids": [99999]}).status_code == 400
