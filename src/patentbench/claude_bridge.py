@@ -19,7 +19,10 @@ import subprocess
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 # Latest first — Fable 5 is the default; the UI offers the rest as a dropdown.
 MODELS = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
-CHAT_MODEL = os.environ.get("CLAUDE_CHAT_MODEL", "claude-fable-5")
+# Default chat/compile model: sonnet is the cost/quality optimum for routine
+# Q&A and deep-compare reduces — pick fable-5 from the dropdown for the final,
+# decisive ranking only (it weighs hardest on the subscription session limit).
+CHAT_MODEL = os.environ.get("CLAUDE_CHAT_MODEL", "claude-sonnet-4-6")
 EXTRACT_MODEL = os.environ.get("CLAUDE_EXTRACT_MODEL", "claude-haiku-4-5")
 # ALL document reading (page transcription, photo number-OCR, digests, deep-map
 # full-text reads) defaults to the MOST AFFORDABLE model — the user picks a
