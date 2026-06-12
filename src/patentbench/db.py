@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS documents(
   error TEXT,
   source TEXT NOT NULL DEFAULT 'manual',
   digest TEXT,
+  score REAL,
+  score_note TEXT,
+  scored_at INTEGER,
   added_at INTEGER NOT NULL,
   fetched_at INTEGER,
   UNIQUE(tab_id, number));
@@ -88,6 +91,10 @@ def _conn():
         dcols = {r[1] for r in con.execute("PRAGMA table_info(documents)")}
         if "digest" not in dcols:
             con.execute("ALTER TABLE documents ADD COLUMN digest TEXT")
+        if "score" not in dcols:
+            con.execute("ALTER TABLE documents ADD COLUMN score REAL")
+            con.execute("ALTER TABLE documents ADD COLUMN score_note TEXT")
+            con.execute("ALTER TABLE documents ADD COLUMN scored_at INTEGER")
         yield con
         con.commit()
     finally:
@@ -152,6 +159,7 @@ def add_documents(tab_id: int, numbers: list[str], source: str = "manual") -> di
 def list_documents(tab_id: int, full: bool = False) -> list[dict]:
     cols = ("*" if full else
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
+            "score, score_note, scored_at, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
             "length(description) AS description_len, length(digest) AS digest_len")
     with _conn() as c:
@@ -181,7 +189,8 @@ def set_document_number(tab_id: int, doc_id: int, number: str) -> dict:
         try:
             cur = c.execute(
                 "UPDATE documents SET number=?, status='pending', error=NULL, title=NULL, "
-                "abstract=NULL, claims=NULL, description=NULL, digest=NULL, fetched_at=NULL "
+                "abstract=NULL, claims=NULL, description=NULL, digest=NULL, fetched_at=NULL, "
+                "score=NULL, score_note=NULL, scored_at=NULL "
                 "WHERE id=? AND tab_id=?", (number, doc_id, tab_id))
         except sqlite3.IntegrityError:
             return {"error": f"{number} is already in this tab"}

@@ -80,3 +80,12 @@ def test_all_candidates_always_in_prompt():
         assert d["number"] in p
     assert "did not fit" not in p
     assert "ALL 60 of them" in p
+
+
+def test_parse_verdict():
+    from patentbench import claude_bridge as cb
+    v = cb.parse_verdict("MATCH SCORE: 9\nKEY FEATURES: A + B + C\nOVERLAP: x")
+    assert v == {"score": 9.0, "features": "A + B + C"}
+    assert cb.parse_verdict("MATCH SCORE: 7.5\nKEY FEATURES: none")["features"] is None
+    assert cb.parse_verdict("no structure at all") == {"score": None, "features": None}
+    assert cb.parse_verdict("MATCH SCORE: 55")["score"] == 10.0  # clamped

@@ -542,8 +542,13 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
 
     def one(d: dict) -> dict:
         res = claude_bridge.deep_map(bm_text, d, model=read_model)
-        return {"number": d["number"], "title": d.get("title"),
-                "verdict": res.get("verdict") or f"(read failed: {res.get('error')})"}
+        verdict = res.get("verdict") or f"(read failed: {res.get('error')})"
+        parsed = claude_bridge.parse_verdict(verdict)
+        if parsed["score"] is not None:
+            # the score + shared-features one-liner land on the candidate row
+            db.update_document(d["id"], score=parsed["score"],
+                               score_note=parsed["features"], scored_at=db._now())
+        return {"number": d["number"], "title": d.get("title"), "verdict": verdict}
 
     with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
         verdicts = list(ex.map(one, docs))

@@ -307,6 +307,9 @@ _DEEP_MAP_PROMPT = (
     "You compare ONE candidate patent against a BENCHMARK document, both given in "
     "FULL below. Output exactly:\n"
     "MATCH SCORE: <0-10>\n"
+    "KEY FEATURES: the decisive SHARED features, 3-6 items of 1-4 words each, "
+    "joined with ' + ' (e.g. 'AGC frequency signal + ESS hierarchy + droop "
+    "control'); if nothing meaningful is shared, write 'none'\n"
     "OVERLAP: bullet list of features the candidate shares with the benchmark — "
     "cite claim/paragraph numbers, include description-level disclosure "
     "(embodiments, named components), not just claims\n"
@@ -331,6 +334,22 @@ def deep_map(benchmark_text: str, doc: dict, model: str | None = None) -> dict:
     if "error" in res:
         return res
     return {"verdict": res["answer"]}
+
+
+_SCORE_RE = re.compile(r"MATCH SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+_FEATURES_RE = re.compile(r"KEY FEATURES:\s*(.+)", re.IGNORECASE)
+
+
+def parse_verdict(text: str) -> dict:
+    """Pull the structured bits out of a deep-map verdict for the candidates
+    column: {score: float|None, features: str|None}."""
+    m = _SCORE_RE.search(text or "")
+    score = min(10.0, max(0.0, float(m.group(1)))) if m else None
+    f = _FEATURES_RE.search(text or "")
+    features = f.group(1).strip()[:200] if f else None
+    if features and features.lower() in ("none", "none.", "-"):
+        features = None
+    return {"score": score, "features": features}
 
 
 def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],

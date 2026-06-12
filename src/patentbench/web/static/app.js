@@ -311,6 +311,9 @@ function renderDocs(docs) {
   const wrap = $('docs');
   wrap.innerHTML = '';
   $('doc-count').textContent = docs.length || '';
+  // deep-compare scores define the order: best fit first, unscored after (by insertion)
+  docs = [...docs].sort((a, b) =>
+    (b.score ?? -1) - (a.score ?? -1) || a.id - b.id);
   for (const d of docs) {
     const el = document.createElement('div');
     el.className = 'doc';
@@ -348,6 +351,14 @@ function renderDocs(docs) {
       const t = document.createElement('div');
       t.className = 'title'; t.textContent = d.title;
       el.appendChild(t);
+    }
+    if (d.score != null) {
+      const sc = document.createElement('div');
+      sc.className = 'score';
+      sc.textContent = `🏆 ${d.score}/10` + (d.score_note ? ` — ${d.score_note}` : '');
+      sc.title = 'Match score vs the benchmark from the last full-text deep compare'
+        + (d.scored_at ? ` (${new Date(d.scored_at * 1000).toLocaleString()})` : '');
+      el.appendChild(sc);
     }
     if (d.status === 'fetched') {
       const sz = document.createElement('div');
@@ -609,6 +620,7 @@ $('best-match').onclick = async () => {
     }) });
   setBusy(false);
   if (activeTab !== tabAtSend) return;
+  refreshDocs();                       // new scores re-order the candidates column
   if (res.error && !(res.messages || []).length) {
     appendMsg({ role: 's', text: `Error: ${res.error}` });
     return;

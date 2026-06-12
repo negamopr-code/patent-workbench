@@ -243,3 +243,18 @@ def test_reading_model_plumbed(client, monkeypatch):
     client.post(f"/api/tabs/{tab['id']}/documents",
                 json={"text": "CN114547092", "reading_model": "gpt-9"})
     assert seen["digest"] is None  # noqa: E501 — invalid name rejected, default used
+
+
+def test_deep_compare_stores_scores(client, monkeypatch):
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None: {"verdict":
+                            f"MATCH SCORE: 8.5\nKEY FEATURES: AGC fan-out + ESS hierarchy\n"
+                            f"OVERLAP: ...\nVERDICT: close for {d['number']}"})
+    tab = client.post("/api/tabs", json={"name": "Score"}).json()
+    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "EP3667902A1"})
+    client.post(f"/api/tabs/{tab['id']}/deep-compare", json={})
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    assert docs[0]["score"] == 8.5
+    assert docs[0]["score_note"] == "AGC fan-out + ESS hierarchy"
+    assert docs[0]["scored_at"]
