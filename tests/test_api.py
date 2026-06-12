@@ -16,6 +16,12 @@ def client(tmp_path, monkeypatch):
                                    "claims": "1. A method.", "description": "desc"})
     monkeypatch.setattr(claude_bridge, "chat",
                         lambda *a, **k: {"answer": "claude says hi", "model": "claude-fable-5"})
+    monkeypatch.setattr(claude_bridge, "digest_document",
+                        lambda n, t, x: {"digest": f"digest of {n}"})
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d: {"verdict": f"MATCH SCORE: 7 for {d['number']}"})
+    monkeypatch.setattr(claude_bridge, "deep_reduce",
+                        lambda *a, **k: {"answer": "ranking: best is X"})
     monkeypatch.setattr(nlm_bridge, "query",
                         lambda nb, q, source_ids=None: {"answer": f"nlm[{nb}]:{source_ids}",
                                                         "sources_used": []})
@@ -170,3 +176,28 @@ def test_benchmark_upload_natural_page_order(client, monkeypatch):
     st = client.get(f"/api/tabs/{tab['id']}/state").json()
     assert [f["name"] for f in st["benchmark"]["files"]] == \
         ["page (1).png", "page (2).png", "page (10).png"]
+
+
+def test_digest_stored_at_fetch_time(client):
+    tab = client.post("/api/tabs", json={"name": "Dg"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    assert docs[0]["digest_len"] and docs[0]["status"] == "fetched"
+    full = client.get(f"/api/tabs/{tab['id']}/documents/{docs[0]['id']}").json()
+    assert full["digest"] == "digest of US10395648B1"
+
+
+def test_deep_compare(client):
+    tab = client.post("/api/tabs", json={"name": "Deep"}).json()
+    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "EP3667902A1 CN114547092"})
+    r = client.post(f"/api/tabs/{tab['id']}/deep-compare", json={}).json()
+    roles = [m["role"] for m in r["messages"]]
+    assert roles == ["s", "c"]
+    assert "2/2 candidates at FULL text" in r["messages"][0]["text"]
+    assert r["messages"][1]["text"] == "ranking: best is X"
+    parts = r["messages"][1]["participants"]
+    assert any(p["title"].endswith("full text") for p in parts if p["kind"] == "documents")
+    # no benchmark -> 400
+    tab2 = client.post("/api/tabs", json={"name": "NoBM"}).json()
+    assert client.post(f"/api/tabs/{tab2['id']}/deep-compare", json={}).status_code == 400

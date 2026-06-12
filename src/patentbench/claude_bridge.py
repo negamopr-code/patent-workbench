@@ -30,11 +30,17 @@ TRANSCRIBE_MODEL = os.environ.get("PB_TRANSCRIBE_MODEL", "claude-sonnet-4-6")
 CHAT_TIMEOUT = float(os.environ.get("CLAUDE_CHAT_TIMEOUT", "240"))
 SKILLS_DIR = os.environ.get("CLAUDE_SKILLS_DIR", os.path.expanduser("~/.claude/skills"))
 
+# Cheap model that reads each candidate's FULL text: at fetch time it writes the
+# stored digest, and in deep-compare it judges one candidate vs the benchmark.
+DIGEST_MODEL = os.environ.get("PB_DIGEST_MODEL", "claude-haiku-4-5")
+DIGEST_TIMEOUT = float(os.environ.get("PB_DIGEST_TIMEOUT", "300"))
+
 MAX_HISTORY = 24            # turns kept in the prompt
 MAX_TURN_CHARS = 4000       # each history turn clipped
 MAX_SKILL_CHARS = 16_000    # each skill doctrine clipped
-MAX_DOC_CHARS = 6000        # each stored document clipped (abstract+claims first)
-MAX_DOCS_CHARS = 60_000     # total document budget per prompt
+MAX_DOC_CHARS = 9000        # each stored document clipped (abstract+digest+claims first)
+MAX_DOCS_CHARS = 260_000    # total candidate budget per prompt (26 docs fit un-skipped)
+MAX_FULLTEXT_CHARS = 400_000  # full document fed to the digest/deep-map model
 
 _PREAMBLE = (
     "You are the assistant of a Patent Workbench — a multi-tab patent project app. "
@@ -132,7 +138,9 @@ def _document_block(doc: dict, budget: int) -> str:
     description inside the per-doc budget."""
     head = f"[{doc.get('number', '?')} — {doc.get('title') or 'no title fetched'}]"
     body_parts = []
-    for label, key in (("Abstract", "abstract"), ("Claims", "claims"),
+    for label, key in (("Abstract", "abstract"),
+                       ("Full-text digest (covers the description)", "digest"),
+                       ("Claims", "claims"),
                        ("Description", "description")):
         text = (doc.get(key) or "").strip()
         if not text:
@@ -255,6 +263,94 @@ def chat(question: str, history: list[dict] | None = None,
     prompt = build_prompt(question, history, documents, sources, skills,
                           benchmark=benchmark)
     res = _run_claude(prompt, model or CHAT_MODEL)
+    if "error" in res:
+        return res
+    lessons = LESSON_RE.findall(res["answer"])
+    if lessons:
+        res["answer"] = LESSON_RE.sub("", res["answer"]).strip()
+        res["lessons"] = [{"skill": s, "lesson": t.strip()} for s, t in lessons]
+    return res
+
+
+_DIGEST_PROMPT = (
+    "You are indexing a patent document for later comparison work. Read the FULL "
+    "text below and produce a dense, factual digest (600-900 words) with sections:\n"
+    "1. Technical field & problem solved\n"
+    "2. Core solution / mechanism (how it works)\n"
+    "3. Key claim features (independent claims, characterizing parts)\n"
+    "4. Embodiment details — every concrete component, system, protocol or term "
+    "named anywhere in the description (e.g. DCS, AGC, PLC, specific sensors, "
+    "control loops), even in passing; these matter for prior-art matching\n"
+    "5. Anything unusual or distinguishing\n"
+    "Be specific, cite paragraph/claim numbers where visible. No fluff, no "
+    "introduction — start directly with section 1.\n\nFULL TEXT:\n"
+)
+
+
+def digest_document(number: str, title: str, fulltext: str) -> dict:
+    """One cheap-model pass over the ENTIRE document at fetch time → stored digest.
+    {digest} | {error}."""
+    prompt = f"Document {number} — {title}\n\n" + _DIGEST_PROMPT + fulltext[:MAX_FULLTEXT_CHARS]
+    res = _run_claude(prompt, DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"digest": res["answer"]}
+
+
+_DEEP_MAP_PROMPT = (
+    "You compare ONE candidate patent against a BENCHMARK document, both given in "
+    "FULL below. Output exactly:\n"
+    "MATCH SCORE: <0-10>\n"
+    "OVERLAP: bullet list of features the candidate shares with the benchmark — "
+    "cite claim/paragraph numbers, include description-level disclosure "
+    "(embodiments, named components), not just claims\n"
+    "DIFFERENCES: bullet list of what the benchmark has that this candidate lacks "
+    "(and vice versa where relevant)\n"
+    "VERDICT: 2-3 sentences — how close is this candidate to the benchmark's "
+    "technical solution and why\n"
+    "Ground every statement in the provided texts; do not invent."
+)
+
+
+def deep_map(benchmark_text: str, doc: dict) -> dict:
+    """Map phase of deep-compare: cheap model reads the candidate's FULL text vs
+    the benchmark. {verdict} | {error}."""
+    fulltext = "\n\n".join(filter(None, [
+        doc.get("abstract"), doc.get("claims"), doc.get("description")]))
+    prompt = (_DEEP_MAP_PROMPT
+              + "\n\n===== BENCHMARK =====\n" + benchmark_text[:200_000]
+              + f"\n\n===== CANDIDATE {doc.get('number')} — {doc.get('title') or ''} =====\n"
+              + fulltext[:MAX_FULLTEXT_CHARS])
+    res = _run_claude(prompt, DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"verdict": res["answer"]}
+
+
+def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
+                skills: list[dict] | None = None, model: str | None = None,
+                history: list[dict] | None = None) -> dict:
+    """Reduce phase: the chat model compiles per-candidate FULL-TEXT verdicts into
+    a final ranking/answer. Same return contract as chat()."""
+    blocks = "\n\n".join(
+        f"[{v['number']} — {v.get('title') or ''}]\n{v['verdict'][:8000]}"
+        for v in verdicts)
+    parts = [_PREAMBLE]
+    if skills:
+        sk = "\n\n".join(f"[Skill /{s['name']}]\n{s['content']}" for s in skills)
+        parts.append("USER-SELECTED SKILL DOCTRINES:\n" + sk)
+        parts.append(_LESSON_INSTRUCTION)
+    parts.append("BENCHMARK DOCUMENT:\n\n" + _benchmark_block(benchmark))
+    parts.append(
+        "FULL-TEXT VERDICTS — every candidate was read IN FULL (claims AND "
+        "description) by an analyst model and compared against the benchmark; "
+        "these verdicts are your evidence base:\n\n" + blocks)
+    if history:
+        lines = [f"{_ROLE.get(h.get('role', ''), 'User')}: "
+                 f"{(h.get('text') or '')[:MAX_TURN_CHARS]}" for h in history[-MAX_HISTORY:]]
+        parts.append("CONVERSATION HISTORY:\n" + "\n\n".join(lines))
+    parts.append("TASK:\n" + question)
+    res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL)
     if "error" in res:
         return res
     lessons = LESSON_RE.findall(res["answer"])

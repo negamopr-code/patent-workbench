@@ -240,6 +240,9 @@ def benchmark_clear(tab_id: int):
 
 # ---------- documents ----------
 
+DIGEST_WORKERS = int(os.environ.get("PB_DIGEST_WORKERS", "4"))
+
+
 def _fetch_into_db(doc_id: int) -> None:
     doc = db.get_document(doc_id)
     if not doc:
@@ -250,6 +253,30 @@ def _fetch_into_db(doc_id: int) -> None:
     else:
         db.update_document(doc_id, status="fetched", error=None,
                            fetched_at=db._now(), **res)
+
+
+def _digest_doc(doc_id: int) -> None:
+    """Cheap-model pass over the candidate's FULL text → stored digest, so the
+    chat is description-aware for every candidate from the get-go."""
+    doc = db.get_document(doc_id)
+    if not doc or doc["status"] != "fetched" or doc.get("digest"):
+        return
+    fulltext = "\n\n".join(filter(None, [doc.get("abstract"), doc.get("claims"),
+                                         doc.get("description")]))
+    if not fulltext:
+        return
+    res = claude_bridge.digest_document(doc["number"], doc.get("title") or "", fulltext)
+    if "digest" in res:
+        db.update_document(doc_id, digest=res["digest"])
+
+
+def _process_documents(doc_ids: list[int]) -> None:
+    """Background pipeline for a batch: fetch each (throttled by the fetcher's
+    own gap), then digest all fetched docs concurrently."""
+    for doc_id in doc_ids:
+        _fetch_into_db(doc_id)
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(_digest_doc, doc_ids))
 
 
 @app.post("/api/tabs/{tab_id}/documents")
@@ -263,8 +290,8 @@ def documents_add(tab_id: int, body: schemas.DocumentsAdd, bg: BackgroundTasks):
     if not nums:
         return {"inserted": [], "skipped": [], "error": "no plausible patent numbers found"}
     res = db.add_documents(tab_id, nums, source=body.source)
-    for doc_id in res["inserted"]:
-        bg.add_task(_fetch_into_db, doc_id)
+    if res["inserted"]:
+        bg.add_task(_process_documents, res["inserted"])
     return res
 
 
@@ -297,7 +324,7 @@ def document_edit_number(tab_id: int, doc_id: int, body: schemas.DocumentNumberE
     res = db.set_document_number(tab_id, doc_id, n)
     if "error" in res:
         raise HTTPException(400, res["error"])
-    bg.add_task(_fetch_into_db, doc_id)
+    bg.add_task(_process_documents, [doc_id])
     return {"ok": True, "number": n}
 
 
@@ -307,7 +334,7 @@ def document_refetch(tab_id: int, doc_id: int, bg: BackgroundTasks):
     if not doc or doc["tab_id"] != tab_id:
         raise HTTPException(404, "document not found")
     db.update_document(doc_id, status="pending", error=None)
-    bg.add_task(_fetch_into_db, doc_id)
+    bg.add_task(_process_documents, [doc_id])
     return {"ok": True}
 
 
@@ -446,6 +473,85 @@ def chat(tab_id: int, body: schemas.ChatRequest):
     out_messages.append(db.append_message(tab_id, "c", res["answer"], model=model,
                                           participants=participants))
 
+    for les in res.get("lessons", []):
+        saved = lessons.append_lesson(les["skill"], les["lesson"])
+        note = (f"Lesson auto-appended to skill /{les['skill']} (references/lessons.md)."
+                if saved.get("ok") else
+                f"Lesson for /{les['skill']} NOT saved: {saved.get('error')}\n\n{les['lesson']}")
+        out_messages.append(db.append_message(tab_id, "s", note))
+    return {"messages": out_messages}
+
+
+# ---------- deep compare (full-text map-reduce) ----------
+
+DEEP_DEFAULT_QUESTION = (
+    "Rank ALL candidates by how closely they match the benchmark's technical "
+    "solution, using the full-text verdicts. For each: score, the decisive "
+    "overlapping features (claims AND description-level disclosure), and what "
+    "disqualifies or weakens it. Name the single best fit and the runner-up, and "
+    "state explicitly what evidence would change the ranking."
+)
+
+
+def _benchmark_fulltext(bm: dict) -> str:
+    if bm.get("text"):
+        return bm["text"]
+    return "\n\n".join(filter(None, [
+        f"{bm.get('number') or ''} — {bm.get('title') or ''}",
+        bm.get("abstract"), bm.get("claims"), bm.get("description")]))
+
+
+@app.post("/api/tabs/{tab_id}/deep-compare")
+def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
+    """Full-text comparison: a cheap model reads EVERY candidate in full against
+    the benchmark (map, parallel), then the chosen model compiles the ranking
+    (reduce). No candidate is judged on abstract/claims alone."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("status") != "ready":
+        raise HTTPException(400, "benchmark is not ready — set it first")
+    docs = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    if not docs:
+        raise HTTPException(400, "no fetched candidate documents")
+    model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
+    question = (body.question or "").strip() or DEEP_DEFAULT_QUESTION
+    history = db.list_messages(tab_id, limit=claude_bridge.MAX_HISTORY)
+    db.append_message(tab_id, "q", f"[Deep compare — {len(docs)} candidates at full "
+                                   f"text]\n{question}")
+    bm_text = _benchmark_fulltext(bm)
+
+    def one(d: dict) -> dict:
+        res = claude_bridge.deep_map(bm_text, d)
+        return {"number": d["number"], "title": d.get("title"),
+                "verdict": res.get("verdict") or f"(read failed: {res.get('error')})"}
+
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        verdicts = list(ex.map(one, docs))
+    failed = sum(1 for v in verdicts if v["verdict"].startswith("(read failed"))
+
+    out_messages = [db.append_message(
+        tab_id, "s", f"Read {len(docs) - failed}/{len(docs)} candidates at FULL text "
+                     f"({claude_bridge.DIGEST_MODEL})"
+                     + (f"; {failed} failed and are judged as unread" if failed else ""))]
+
+    skill_blocks = []
+    participants = [{"kind": "model", "title": model},
+                    {"kind": "benchmark",
+                     "title": bm.get("number") or f"{len(bm.get('files') or [])} file(s)"},
+                    {"kind": "documents", "title": f"{len(docs)} candidates · full text"}]
+    for name in body.skills:
+        content = claude_bridge.load_skill(name)
+        if content:
+            skill_blocks.append({"name": name, "content": content})
+            participants.append({"kind": "skill", "title": name})
+
+    res = claude_bridge.deep_reduce(question, bm, verdicts, skills=skill_blocks,
+                                    model=model, history=history)
+    if "error" in res:
+        out_messages.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
+        return {"messages": out_messages, "error": res["error"]}
+    out_messages.append(db.append_message(tab_id, "c", res["answer"], model=model,
+                                          participants=participants))
     for les in res.get("lessons", []):
         saved = lessons.append_lesson(les["skill"], les["lesson"])
         note = (f"Lesson auto-appended to skill /{les['skill']} (references/lessons.md)."

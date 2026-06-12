@@ -44,6 +44,12 @@ class AskNotebookRequest(BaseModel):
     question: str = Field(min_length=1, max_length=20_000)
 
 
+class DeepCompareRequest(BaseModel):
+    model: str | None = None
+    skills: list[str] = []
+    question: str | None = Field(default=None, max_length=20_000)
+
+
 class LessonCreate(BaseModel):
     skill: str
     lesson: str = Field(min_length=1, max_length=8000)

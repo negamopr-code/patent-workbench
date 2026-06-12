@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS documents(
   status TEXT NOT NULL DEFAULT 'pending',
   error TEXT,
   source TEXT NOT NULL DEFAULT 'manual',
+  digest TEXT,
   added_at INTEGER NOT NULL,
   fetched_at INTEGER,
   UNIQUE(tab_id, number));
@@ -80,10 +81,13 @@ def _conn():
     con.execute("PRAGMA foreign_keys=ON")
     try:
         con.executescript(_SCHEMA)
-        # migration for DBs created before the column existed
+        # migrations for DBs created before these columns existed
         cols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "progress" not in cols:
             con.execute("ALTER TABLE benchmark ADD COLUMN progress TEXT")
+        dcols = {r[1] for r in con.execute("PRAGMA table_info(documents)")}
+        if "digest" not in dcols:
+            con.execute("ALTER TABLE documents ADD COLUMN digest TEXT")
         yield con
         con.commit()
     finally:
@@ -149,7 +153,7 @@ def list_documents(tab_id: int, full: bool = False) -> list[dict]:
     cols = ("*" if full else
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
-            "length(description) AS description_len")
+            "length(description) AS description_len, length(digest) AS digest_len")
     with _conn() as c:
         rows = c.execute(f"SELECT {cols} FROM documents WHERE tab_id=? ORDER BY id",
                          (tab_id,)).fetchall()
@@ -177,7 +181,7 @@ def set_document_number(tab_id: int, doc_id: int, number: str) -> dict:
         try:
             cur = c.execute(
                 "UPDATE documents SET number=?, status='pending', error=NULL, title=NULL, "
-                "abstract=NULL, claims=NULL, description=NULL, fetched_at=NULL "
+                "abstract=NULL, claims=NULL, description=NULL, digest=NULL, fetched_at=NULL "
                 "WHERE id=? AND tab_id=?", (number, doc_id, tab_id))
         except sqlite3.IntegrityError:
             return {"error": f"{number} is already in this tab"}

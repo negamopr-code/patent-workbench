@@ -332,8 +332,11 @@ function renderDocs(docs) {
       const sz = document.createElement('div');
       sz.className = 'sizes';
       const fmt = n => !n ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-      sz.textContent = `abstract ${fmt(d.abstract_len)} · claims ${fmt(d.claims_len)} · description ${fmt(d.description_len)} chars`;
-      sz.title = 'How much text was actually fetched and stored for the chat';
+      sz.textContent = `abstract ${fmt(d.abstract_len)} · claims ${fmt(d.claims_len)} · description ${fmt(d.description_len)} chars · ` +
+        (d.digest_len ? 'full-text digest ✓' : 'digesting full text…');
+      sz.title = d.digest_len
+        ? 'Stored text sizes; a cheap model has read the FULL document and stored a digest the chat always sees'
+        : 'Stored text sizes; the full-text digest is still being generated';
       el.appendChild(sz);
     }
     const row2 = document.createElement('div');
@@ -388,7 +391,10 @@ async function refreshDocs() {
 
 function scheduleDocsPoll(docs) {
   clearTimeout(docsPoll);
-  if (docs.some(d => d.status === 'pending')) docsPoll = setTimeout(refreshDocs, 3000);
+  const now = Date.now() / 1000;
+  const busy = docs.some(d => d.status === 'pending'
+    || (d.status === 'fetched' && !d.digest_len && now - (d.fetched_at || 0) < 1800));
+  if (busy) docsPoll = setTimeout(refreshDocs, 4000);
 }
 
 $('in-add').onclick = async () => {
@@ -542,13 +548,29 @@ async function sendChat(notebookOnly) {
 
 $('ask-claude').onclick = () => sendChat(false);
 $('ask-notebook').onclick = () => sendChat(true);
-$('best-match').onclick = () => {
-  $('q').value =
-    'Compare each candidate document against the benchmark document. Rank the ' +
-    'candidates by how closely they match the benchmark\'s claims and technical ' +
-    'solution, justify each ranking with citations of publication numbers and ' +
-    'specific features, and name the single best fit.';
-  $('q').focus();
+$('best-match').onclick = async () => {
+  if (!activeTab) return;
+  if (!confirm('Deep compare: a cheap model reads EVERY candidate in FULL against ' +
+               'the benchmark, then the selected model compiles the ranking. ' +
+               'Takes a few minutes. Start?')) return;
+  const q = $('q').value.trim();          // optional custom task; default ranking otherwise
+  $('q').value = '';
+  const tabAtSend = activeTab;
+  appendMsg({ role: 'q', text: `[Deep compare — full text]${q ? '\n' + q : ''}` });
+  setBusy(true, 'Deep comparing — reading every candidate in full');
+  const res = await api(`/api/tabs/${tabAtSend}/deep-compare`, {
+    method: 'POST', body: JSON.stringify({
+      model: $('model').value,
+      skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
+      question: q || null,
+    }) });
+  setBusy(false);
+  if (activeTab !== tabAtSend) return;
+  if (res.error && !(res.messages || []).length) {
+    appendMsg({ role: 's', text: `Error: ${res.error}` });
+    return;
+  }
+  for (const m of res.messages || []) appendMsg(m);
 };
 $('q').onkeydown = e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat(false);
@@ -560,7 +582,7 @@ function openViewer(title, doc) {
   $('view-meta').textContent = doc.title || '';
   const parts = [];
   if (doc.text) parts.push(doc.text);              // upload-based benchmark
-  for (const [label, key] of [['ABSTRACT', 'abstract'], ['CLAIMS', 'claims'], ['DESCRIPTION', 'description']]) {
+  for (const [label, key] of [['ABSTRACT', 'abstract'], ['FULL-TEXT DIGEST', 'digest'], ['CLAIMS', 'claims'], ['DESCRIPTION', 'description']]) {
     if (doc[key] && typeof doc[key] === 'string') parts.push(`===== ${label} =====\n${doc[key]}`);
   }
   $('view-body').textContent = parts.join('\n\n') || '(no stored text)';
