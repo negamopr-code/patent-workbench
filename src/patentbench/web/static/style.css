@@ -133,6 +133,7 @@ textarea, select, input[type="text"] {
   padding-bottom: 8px; border-bottom: 1px solid var(--border);
 }
 .chat-toolbar select { width: auto; }
+.model-pick { display: inline-flex; align-items: center; gap: 3px; font-size: 13px; }
 .check { display: inline-flex; gap: 5px; align-items: center; font-size: 13px; white-space: nowrap; }
 .check.small { font-size: 12px; color: var(--muted); }
 .skills-dd { position: relative; }

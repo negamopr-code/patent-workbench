@@ -7,7 +7,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +32,11 @@ def _tab_or_404(tab_id: int) -> None:
         raise HTTPException(404, "tab not found")
 
 
+def _read_model(m: str | None) -> str | None:
+    """Validated reading-model override; None falls back to the cheap default."""
+    return m if m in claude_bridge.MODELS else None
+
+
 # ---------- health / meta ----------
 
 @app.get("/api/health")
@@ -49,7 +54,8 @@ def health():
 def skills():
     return {"skills": claude_bridge.list_skills(),
             "models": claude_bridge.MODELS,
-            "default_model": claude_bridge.CHAT_MODEL}
+            "default_model": claude_bridge.CHAT_MODEL,
+            "default_read_model": claude_bridge.READ_MODEL}
 
 
 # ---------- tabs ----------
@@ -114,7 +120,7 @@ def _fetch_benchmark(tab_id: int) -> None:
 TRANSCRIBE_WORKERS = int(os.environ.get("PB_TRANSCRIBE_WORKERS", "4"))
 
 
-def _extract_benchmark_files(tab_id: int) -> None:
+def _extract_benchmark_files(tab_id: int, model: str | None = None) -> None:
     """Background: build the benchmark's text from its uploaded files —
     pdftotext for PDFs, Claude haiku page transcription for pictures.
     Pages are transcribed CONCURRENTLY and progress is written to the DB so the
@@ -131,7 +137,7 @@ def _extract_benchmark_files(tab_id: int) -> None:
     def one(f: dict) -> tuple[dict, dict]:
         nonlocal done
         res = (extract.text_from_pdf(f["path"]) if f["kind"] == "pdf"
-               else extract.text_from_image(f["path"]))
+               else extract.text_from_image(f["path"], model=model))
         with lock:
             done += 1
             db.update_benchmark(tab_id, progress=f"{done}/{total}")
@@ -172,7 +178,8 @@ def benchmark_set_number(tab_id: int, body: schemas.BenchmarkSet, bg: Background
 
 @app.post("/api/tabs/{tab_id}/benchmark/upload")
 async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
-                           files: list[UploadFile] = File(...)):
+                           files: list[UploadFile] = File(...),
+                           reading_model: str | None = Form(None)):
     """Set the benchmark from uploaded files: one PDF, or a BUNCH of page photos.
     All files land in the benchmark's own directory under the tab's uploads."""
     _tab_or_404(tab_id)
@@ -212,7 +219,7 @@ async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
         except OSError:
             pass
     db.set_benchmark(tab_id, source="pdf" if "pdf" in kinds else "images", files=saved)
-    bg.add_task(_extract_benchmark_files, tab_id)
+    bg.add_task(_extract_benchmark_files, tab_id, _read_model(reading_model))
     return {"ok": True, "benchmark": _benchmark_view(tab_id)}
 
 
@@ -255,7 +262,7 @@ def _fetch_into_db(doc_id: int) -> None:
                            fetched_at=db._now(), **res)
 
 
-def _digest_doc(doc_id: int) -> None:
+def _digest_doc(doc_id: int, model: str | None = None) -> None:
     """Cheap-model pass over the candidate's FULL text → stored digest, so the
     chat is description-aware for every candidate from the get-go."""
     doc = db.get_document(doc_id)
@@ -265,18 +272,19 @@ def _digest_doc(doc_id: int) -> None:
                                          doc.get("description")]))
     if not fulltext:
         return
-    res = claude_bridge.digest_document(doc["number"], doc.get("title") or "", fulltext)
+    res = claude_bridge.digest_document(doc["number"], doc.get("title") or "", fulltext,
+                                        model=model)
     if "digest" in res:
         db.update_document(doc_id, digest=res["digest"])
 
 
-def _process_documents(doc_ids: list[int]) -> None:
+def _process_documents(doc_ids: list[int], model: str | None = None) -> None:
     """Background pipeline for a batch: fetch each (throttled by the fetcher's
     own gap), then digest all fetched docs concurrently."""
     for doc_id in doc_ids:
         _fetch_into_db(doc_id)
     with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
-        list(ex.map(_digest_doc, doc_ids))
+        list(ex.map(lambda i: _digest_doc(i, model), doc_ids))
 
 
 @app.post("/api/tabs/{tab_id}/documents")
@@ -291,7 +299,7 @@ def documents_add(tab_id: int, body: schemas.DocumentsAdd, bg: BackgroundTasks):
         return {"inserted": [], "skipped": [], "error": "no plausible patent numbers found"}
     res = db.add_documents(tab_id, nums, source=body.source)
     if res["inserted"]:
-        bg.add_task(_process_documents, res["inserted"])
+        bg.add_task(_process_documents, res["inserted"], _read_model(body.reading_model))
     return res
 
 
@@ -348,7 +356,8 @@ def document_delete(tab_id: int, doc_id: int):
 # ---------- upload (photo / PDF / txt → candidate numbers) ----------
 
 @app.post("/api/tabs/{tab_id}/upload")
-async def upload(tab_id: int, file: UploadFile = File(...)):
+async def upload(tab_id: int, file: UploadFile = File(...),
+                 reading_model: str | None = Form(None)):
     _tab_or_404(tab_id)
     data = await file.read()
     if len(data) > MAX_UPLOAD:
@@ -362,7 +371,7 @@ async def upload(tab_id: int, file: UploadFile = File(...)):
         fh.write(data)
 
     if ext in IMAGE_EXT:
-        kind, res = "image", extract.numbers_from_image(path)
+        kind, res = "image", extract.numbers_from_image(path, model=_read_model(reading_model))
     elif ext == ".pdf":
         kind, res = "pdf", extract.numbers_from_pdf(path)
     else:
@@ -529,8 +538,10 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
                                    f"\n{question}")
     bm_text = _benchmark_fulltext(bm)
 
+    read_model = _read_model(body.reading_model) or claude_bridge.DIGEST_MODEL
+
     def one(d: dict) -> dict:
-        res = claude_bridge.deep_map(bm_text, d)
+        res = claude_bridge.deep_map(bm_text, d, model=read_model)
         return {"number": d["number"], "title": d.get("title"),
                 "verdict": res.get("verdict") or f"(read failed: {res.get('error')})"}
 
@@ -540,7 +551,7 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
 
     out_messages = [db.append_message(
         tab_id, "s", f"Read {len(docs) - failed}/{len(docs)} candidates at FULL text "
-                     f"({claude_bridge.DIGEST_MODEL})"
+                     f"({read_model})"
                      + (f"; {failed} failed and are judged as unread" if failed else ""))]
 
     skill_blocks = []

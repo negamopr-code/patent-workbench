@@ -222,9 +222,10 @@ $('bm-file').onchange = e => { if (e.target.files.length) uploadBenchmark(e.targ
 async function uploadBenchmark(fileList) {
   const fd = new FormData();
   for (const f of fileList) fd.append('files', f);
+  fd.append('reading_model', $('read-model').value);
   $('bm-status').textContent =
-    `Uploading ${fileList.length} file(s)… (pictures are transcribed by Claude, ` +
-    `4 pages in parallel — the card shows page progress)`;
+    `Uploading ${fileList.length} file(s)… (pictures transcribed by ` +
+    `${$('read-model').value.replace('claude-', '')}, 4 pages in parallel — the card shows progress)`;
   const res = await api(`/api/tabs/${activeTab}/benchmark/upload`, { method: 'POST', body: fd });
   $('bm-file').value = '';
   if (res.error) { $('bm-status').textContent = `Error: ${res.error}`; return; }
@@ -238,6 +239,7 @@ function savePrefs() {
   if (!activeTab) return;
   localStorage.setItem(prefsKey(), JSON.stringify({
     model: $('model').value,
+    readModel: $('read-model').value,
     skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
     useDocs: $('use-docs').checked,
     askNb: $('ask-nb').checked,
@@ -248,6 +250,7 @@ function loadPrefs() {
   try { p = JSON.parse(localStorage.getItem(prefsKey()) || '{}'); } catch {}
   if (p.model) $('model').value = p.model;
   else $('model').value = skillsMeta.default_model;
+  $('read-model').value = p.readModel || skillsMeta.default_read_model || 'claude-haiku-4-5';
   const want = new Set(p.skills || defaultSkills());
   document.querySelectorAll('#skills input').forEach(i => { i.checked = want.has(i.value); });
   $('use-docs').checked = p.useDocs !== false;
@@ -263,13 +266,17 @@ function defaultSkills() {
 async function loadSkills() {
   skillsMeta = await api('/api/skills');
   const sel = $('model');
-  sel.innerHTML = '';
+  const rsel = $('read-model');
+  sel.innerHTML = ''; rsel.innerHTML = '';
   for (const m of skillsMeta.models || []) {
-    const o = document.createElement('option');
-    o.value = m; o.textContent = m.replace('claude-', '');
-    sel.appendChild(o);
+    for (const target of [sel, rsel]) {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m.replace('claude-', '');
+      target.appendChild(o);
+    }
   }
   sel.value = skillsMeta.default_model;
+  rsel.value = skillsMeta.default_read_model || 'claude-haiku-4-5';
   const wrap = $('skills');
   wrap.innerHTML = '';
   const lessonSel = $('lesson-skill');
@@ -290,6 +297,7 @@ async function loadSkills() {
     lessonSel.appendChild(o);
   }
   sel.onchange = savePrefs;
+  rsel.onchange = savePrefs;
   $('use-docs').onchange = savePrefs;
   $('ask-nb').onchange = savePrefs;
 }
@@ -428,7 +436,7 @@ $('in-add').onclick = async () => {
   const text = $('in-text').value.trim();
   if (!text) return;
   const res = await api(`/api/tabs/${activeTab}/documents`, {
-    method: 'POST', body: JSON.stringify({ text }) });
+    method: 'POST', body: JSON.stringify({ text, reading_model: $('read-model').value }) });
   if (res.error) { $('upload-status').textContent = res.error; return; }
   $('in-text').value = '';
   $('upload-status').textContent =
@@ -450,6 +458,7 @@ async function uploadFile(file) {
   $('upload-status').textContent = `Extracting numbers from ${file.name}… (images go through Claude OCR, ~30 s)`;
   const fd = new FormData();
   fd.append('file', file);
+  fd.append('reading_model', $('read-model').value);
   const res = await api(`/api/tabs/${activeTab}/upload`, { method: 'POST', body: fd });
   $('in-file').value = '';
   if (res.error) { $('upload-status').textContent = `Error: ${res.error}`; return; }
@@ -482,7 +491,8 @@ $('cand-add').onclick = async () => {
   const nums = [...document.querySelectorAll('#cand-list input:checked')].map(i => i.value);
   if (!nums.length) return;
   const res = await api(`/api/tabs/${activeTab}/documents`, {
-    method: 'POST', body: JSON.stringify({ numbers: nums, source: 'image' }) });
+    method: 'POST', body: JSON.stringify({ numbers: nums, source: 'image',
+                                           reading_model: $('read-model').value }) });
   $('candidates').classList.add('hidden');
   $('upload-status').textContent = res.error || `Added ${res.inserted.length} document(s).`;
   refreshDocs();
@@ -595,6 +605,7 @@ $('best-match').onclick = async () => {
       skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
       question: q || null,
       doc_ids: ids.length ? ids : null,
+      reading_model: $('read-model').value,
     }) });
   setBusy(false);
   if (activeTab !== tabAtSend) return;

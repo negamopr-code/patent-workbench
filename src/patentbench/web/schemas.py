@@ -16,6 +16,7 @@ class DocumentsAdd(BaseModel):
     text: str | None = None            # free text / pasted numbers / URLs
     numbers: list[str] | None = None   # pre-confirmed canonical numbers (upload flow)
     source: str = "manual"
+    reading_model: str | None = None   # model for the full-text digest; None = cheapest
 
 
 class DocumentNumberEdit(BaseModel):
@@ -45,10 +46,11 @@ class AskNotebookRequest(BaseModel):
 
 
 class DeepCompareRequest(BaseModel):
-    model: str | None = None
+    model: str | None = None           # answer/compile model (chat dropdown)
     skills: list[str] = []
     question: str | None = Field(default=None, max_length=20_000)
     doc_ids: list[int] | None = None   # subset to analyze; None/empty = all candidates
+    reading_model: str | None = None   # model that reads full texts; None = cheapest
 
 
 class LessonCreate(BaseModel):

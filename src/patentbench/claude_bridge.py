@@ -21,16 +21,18 @@ CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 MODELS = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
 CHAT_MODEL = os.environ.get("CLAUDE_CHAT_MODEL", "claude-fable-5")
 EXTRACT_MODEL = os.environ.get("CLAUDE_EXTRACT_MODEL", "claude-haiku-4-5")
-# Reading patent numbers off a photo is high-stakes (one wrong digit = a WRONG but
-# existing patent gets fetched silently) → strongest model; it's a single call.
-OCR_MODEL = os.environ.get("PB_OCR_MODEL", "claude-fable-5")
-# Page transcription is bulk work (one call per page) but feeds the benchmark text
-# the whole comparison anchors on → sonnet as the cost/quality middle ground.
-TRANSCRIBE_MODEL = os.environ.get("PB_TRANSCRIBE_MODEL", "claude-sonnet-4-6")
+# ALL document reading (page transcription, photo number-OCR, digests, deep-map
+# full-text reads) defaults to the MOST AFFORDABLE model — the user picks a
+# stronger one per task via the UI's separate "reading model" dropdown when
+# quality demands it. Misread-digit risk on cheap OCR is mitigated by the
+# two-pass disagreement check, which flags inconsistent numbers as uncertain.
+READ_MODEL = os.environ.get("PB_READ_MODEL", "claude-haiku-4-5")
+OCR_MODEL = os.environ.get("PB_OCR_MODEL", READ_MODEL)
+TRANSCRIBE_MODEL = os.environ.get("PB_TRANSCRIBE_MODEL", READ_MODEL)
 CHAT_TIMEOUT = float(os.environ.get("CLAUDE_CHAT_TIMEOUT", "240"))
 SKILLS_DIR = os.environ.get("CLAUDE_SKILLS_DIR", os.path.expanduser("~/.claude/skills"))
 
-# Cheap model that reads each candidate's FULL text: at fetch time it writes the
+# Model that reads each candidate's FULL text: at fetch time it writes the
 # stored digest, and in deep-compare it judges one candidate vs the benchmark.
 DIGEST_MODEL = os.environ.get("PB_DIGEST_MODEL", "claude-haiku-4-5")
 DIGEST_TIMEOUT = float(os.environ.get("PB_DIGEST_TIMEOUT", "300"))
@@ -287,11 +289,12 @@ _DIGEST_PROMPT = (
 )
 
 
-def digest_document(number: str, title: str, fulltext: str) -> dict:
-    """One cheap-model pass over the ENTIRE document at fetch time → stored digest.
-    {digest} | {error}."""
+def digest_document(number: str, title: str, fulltext: str,
+                    model: str | None = None) -> dict:
+    """One reading-model pass over the ENTIRE document at fetch time → stored
+    digest. {digest} | {error}."""
     prompt = f"Document {number} — {title}\n\n" + _DIGEST_PROMPT + fulltext[:MAX_FULLTEXT_CHARS]
-    res = _run_claude(prompt, DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    res = _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
     if "error" in res:
         return res
     return {"digest": res["answer"]}
@@ -312,16 +315,16 @@ _DEEP_MAP_PROMPT = (
 )
 
 
-def deep_map(benchmark_text: str, doc: dict) -> dict:
-    """Map phase of deep-compare: cheap model reads the candidate's FULL text vs
-    the benchmark. {verdict} | {error}."""
+def deep_map(benchmark_text: str, doc: dict, model: str | None = None) -> dict:
+    """Map phase of deep-compare: the reading model reads the candidate's FULL
+    text vs the benchmark. {verdict} | {error}."""
     fulltext = "\n\n".join(filter(None, [
         doc.get("abstract"), doc.get("claims"), doc.get("description")]))
     prompt = (_DEEP_MAP_PROMPT
               + "\n\n===== BENCHMARK =====\n" + benchmark_text[:200_000]
               + f"\n\n===== CANDIDATE {doc.get('number')} — {doc.get('title') or ''} =====\n"
               + fulltext[:MAX_FULLTEXT_CHARS])
-    res = _run_claude(prompt, DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    res = _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
     if "error" in res:
         return res
     return {"verdict": res["answer"]}

@@ -17,9 +17,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(claude_bridge, "chat",
                         lambda *a, **k: {"answer": "claude says hi", "model": "claude-fable-5"})
     monkeypatch.setattr(claude_bridge, "digest_document",
-                        lambda n, t, x: {"digest": f"digest of {n}"})
+                        lambda n, t, x, model=None: {"digest": f"digest of {n}"})
     monkeypatch.setattr(claude_bridge, "deep_map",
-                        lambda bm, d: {"verdict": f"MATCH SCORE: 7 for {d['number']}"})
+                        lambda bm, d, model=None: {"verdict": f"MATCH SCORE: 7 for {d['number']}"})
     monkeypatch.setattr(claude_bridge, "deep_reduce",
                         lambda *a, **k: {"answer": "ranking: best is X"})
     monkeypatch.setattr(nlm_bridge, "query",
@@ -110,7 +110,7 @@ def test_benchmark_by_number(client):
 def test_benchmark_upload_images(client, monkeypatch):
     from patentbench import extract
     monkeypatch.setattr(extract, "text_from_image",
-                        lambda p: {"text": f"page text of {p.rsplit('-', 1)[-1]}"})
+                        lambda p, model=None: {"text": f"page text of {p.rsplit('-', 1)[-1]}"})
     tab = client.post("/api/tabs", json={"name": "BMimg"}).json()
     r = client.post(f"/api/tabs/{tab['id']}/benchmark/upload",
                     files=[("files", ("p1.png", b"x", "image/png")),
@@ -159,7 +159,7 @@ def test_document_full_and_edit_number(client):
 
 def test_benchmark_full_view(client, monkeypatch):
     from patentbench import extract
-    monkeypatch.setattr(extract, "text_from_image", lambda p: {"text": "page one text"})
+    monkeypatch.setattr(extract, "text_from_image", lambda p, model=None: {"text": "page one text"})
     tab = client.post("/api/tabs", json={"name": "BMview"}).json()
     client.post(f"/api/tabs/{tab['id']}/benchmark/upload",
                 files=[("files", ("p1.png", b"x", "image/png"))])
@@ -169,7 +169,7 @@ def test_benchmark_full_view(client, monkeypatch):
 
 def test_benchmark_upload_natural_page_order(client, monkeypatch):
     from patentbench import extract
-    monkeypatch.setattr(extract, "text_from_image", lambda p: {"text": "t"})
+    monkeypatch.setattr(extract, "text_from_image", lambda p, model=None: {"text": "t"})
     tab = client.post("/api/tabs", json={"name": "Order"}).json()
     client.post(f"/api/tabs/{tab['id']}/benchmark/upload",
                 files=[("files", (f"page ({i}).png", b"x", "image/png")) for i in (10, 2, 1)])
@@ -220,3 +220,26 @@ def test_deep_compare_subset(client):
     # unknown ids only -> 400
     assert client.post(f"/api/tabs/{tab['id']}/deep-compare",
                        json={"doc_ids": [99999]}).status_code == 400
+
+
+def test_reading_model_plumbed(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "digest_document",
+                        lambda n, t, x, model=None: seen.update(digest=model)
+                        or {"digest": "d"})
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None: seen.update(map=model)
+                        or {"verdict": "MATCH SCORE: 5"})
+    tab = client.post("/api/tabs", json={"name": "RM"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents",
+                json={"text": "US10395648B1", "reading_model": "claude-sonnet-4-6"})
+    assert seen["digest"] == "claude-sonnet-4-6"
+    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP3667902A1"})
+    client.post(f"/api/tabs/{tab['id']}/deep-compare",
+                json={"reading_model": "claude-sonnet-4-6"})
+    assert seen["map"] == "claude-sonnet-4-6"
+    # invalid model name falls back to the cheap default (None -> DIGEST_MODEL)
+    seen.clear()
+    client.post(f"/api/tabs/{tab['id']}/documents",
+                json={"text": "CN114547092", "reading_model": "gpt-9"})
+    assert seen["digest"] is None  # noqa: E501 — invalid name rejected, default used

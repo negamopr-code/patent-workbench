@@ -72,7 +72,8 @@
   <!-- RIGHT: chat -->
   <section class="pane pane-chat">
     <div class="chat-toolbar">
-      <select id="model" title="Claude model"></select>
+      <label class="model-pick" title="Model that ANSWERS chat questions and compiles deep-compare rankings">💬<select id="model"></select></label>
+      <label class="model-pick" title="Model that READS documents: page transcription, photo OCR, full-text digests and deep reads. Cheapest by default — raise it only when reading quality disappoints.">📖<select id="read-model"></select></label>
       <details class="skills-dd">
         <summary id="skills-summary">🧠 Skills</summary>
         <div id="skills" class="skills-list"></div>
