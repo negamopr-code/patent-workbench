@@ -9,7 +9,10 @@ from __future__ import annotations
 import re
 from urllib.parse import unquote
 
-NUMBER_RE = re.compile(r"\b([A-Z]{2}\s?\d[\d\s/.-]*[A-Z]?\d*)\b")
+# Separators inside a number are space/slash/dot/dash but NEVER a newline:
+# with \s the match absorbs the next line's list index ("…AU 2020/192686\n3." →
+# AU20201926863, one digit too long → 404 on Google Patents). Seen live 2026-06-12.
+NUMBER_RE = re.compile(r"\b([A-Z]{2}[ ]?\d[\d /.-]*[A-Z]?\d*)\b")
 
 # Patent numbers embedded in URLs (Google Patents path, Espacenet publication path
 # or pn= query) — matched case-insensitively because query strings are often

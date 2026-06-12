@@ -169,6 +169,13 @@ textarea, select, input[type="text"] {
   background: var(--pane); border: 1px solid var(--border); border-radius: 12px;
   padding: 16px; width: min(560px, 92vw); max-height: 86vh; overflow-y: auto;
 }
+.modal-box.wide { width: min(900px, 94vw); }
+.view-body {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; max-height: 60vh; overflow-y: auto; white-space: pre-wrap;
+  word-break: break-word; font-size: 12px;
+}
+.doc .sizes { font-size: 11px; color: var(--muted); }
 .nb-list label, .nb-sources label { display: block; padding: 4px 2px; font-size: 13px; }
 .nb-sources { max-height: 240px; overflow-y: auto; background: var(--pane2);
   border-radius: 8px; padding: 8px; margin-top: 6px; }

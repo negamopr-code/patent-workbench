@@ -136,9 +136,20 @@ function renderBenchmark(bm) {
   row.appendChild(name);
   const st = document.createElement('span');
   st.className = 'status ' + (bm.status === 'ready' ? 'fetched' : bm.status);
-  st.textContent = bm.status;
+  st.textContent = bm.status === 'pending' && bm.progress
+    ? `transcribing ${bm.progress}` : bm.status;
   if (bm.error) st.title = bm.error;
   row.appendChild(st);
+  if (bm.status === 'ready') {
+    const view = document.createElement('button');
+    view.className = 'btn small'; view.textContent = '👁 view';
+    view.title = 'Show the stored content of the benchmark';
+    view.onclick = async () => {
+      const full = await api(`/api/tabs/${activeTab}/benchmark/full`);
+      openViewer(full.number || 'Benchmark (uploaded files)', full);
+    };
+    row.appendChild(view);
+  }
   const del = document.createElement('button');
   del.className = 'btn small del'; del.textContent = '🗑';
   del.title = 'Remove benchmark';
@@ -210,7 +221,8 @@ async function uploadBenchmark(fileList) {
   const fd = new FormData();
   for (const f of fileList) fd.append('files', f);
   $('bm-status').textContent =
-    `Uploading ${fileList.length} file(s)… (pictures are transcribed by Claude, ~30 s per page)`;
+    `Uploading ${fileList.length} file(s)… (pictures are transcribed by Claude, ` +
+    `4 pages in parallel — the card shows page progress)`;
   const res = await api(`/api/tabs/${activeTab}/benchmark/upload`, { method: 'POST', body: fd });
   $('bm-file').value = '';
   if (res.error) { $('bm-status').textContent = `Error: ${res.error}`; return; }
@@ -316,12 +328,30 @@ function renderDocs(docs) {
       t.className = 'title'; t.textContent = d.title;
       el.appendChild(t);
     }
+    if (d.status === 'fetched') {
+      const sz = document.createElement('div');
+      sz.className = 'sizes';
+      const fmt = n => !n ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+      sz.textContent = `abstract ${fmt(d.abstract_len)} · claims ${fmt(d.claims_len)} · description ${fmt(d.description_len)} chars`;
+      sz.title = 'How much text was actually fetched and stored for the chat';
+      el.appendChild(sz);
+    }
     const row2 = document.createElement('div');
     row2.className = 'doc-row';
     for (const [label, url] of [['Google Patents', d.links.google], ['Espacenet', d.links.espacenet]]) {
       const a = document.createElement('a');
       a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = label;
       row2.appendChild(a);
+    }
+    if (d.status === 'fetched') {
+      const view = document.createElement('button');
+      view.className = 'btn small'; view.textContent = '👁 view';
+      view.title = 'Show the stored full text';
+      view.onclick = async () => {
+        const full = await api(`/api/tabs/${activeTab}/documents/${d.id}`);
+        openViewer(full.number, full);
+      };
+      row2.appendChild(view);
     }
     if (d.status === 'error') {
       const retry = document.createElement('button');
@@ -331,6 +361,18 @@ function renderDocs(docs) {
         refreshDocs();
       };
       row2.appendChild(retry);
+      const edit = document.createElement('button');
+      edit.className = 'btn small'; edit.textContent = '✏️ fix number';
+      edit.title = 'Edit an OCR-damaged number and refetch';
+      edit.onclick = async () => {
+        const n = prompt(`Correct the patent number:`, d.number);
+        if (!n || n === d.number) return;
+        const res = await api(`/api/tabs/${activeTab}/documents/${d.id}`, {
+          method: 'PATCH', body: JSON.stringify({ number: n }) });
+        if (res.error) alert(res.error);
+        refreshDocs();
+      };
+      row2.appendChild(edit);
     }
     el.appendChild(row2);
     wrap.appendChild(el);
@@ -379,19 +421,23 @@ async function uploadFile(file) {
   $('in-file').value = '';
   if (res.error) { $('upload-status').textContent = `Error: ${res.error}`; return; }
   if (!res.numbers.length) { $('upload-status').textContent = 'No patent numbers found in the file.'; return; }
-  $('upload-status').textContent = `Found ${res.numbers.length} number(s) in ${file.name}:`;
-  showCandidates(res.numbers);
+  const unc = (res.uncertain || []).length;
+  $('upload-status').textContent = `Found ${res.numbers.length} number(s) in ${file.name}` +
+    (unc ? ` — ⚠ ${unc} read inconsistently between two OCR passes, verify them against the photo:` : ':');
+  showCandidates(res.numbers, res.uncertain || []);
 }
 
-function showCandidates(numbers) {
+function showCandidates(numbers, uncertain) {
   const wrap = $('cand-list');
+  const uncSet = new Set(uncertain || []);
   wrap.innerHTML = '';
   for (const n of numbers) {
     const label = document.createElement('label');
     const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = true; cb.value = n;
+    cb.type = 'checkbox'; cb.checked = !uncSet.has(n); cb.value = n;
     label.appendChild(cb);
-    label.appendChild(document.createTextNode(' ' + n));
+    label.appendChild(document.createTextNode(' ' + n + (uncSet.has(n) ? ' ⚠' : '')));
+    if (uncSet.has(n)) label.title = 'The two OCR passes disagreed on this number — check the photo';
     wrap.appendChild(label);
   }
   $('candidates').classList.remove('hidden');
@@ -507,6 +553,20 @@ $('best-match').onclick = () => {
 $('q').onkeydown = e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat(false);
 };
+
+/* ---------- content viewer ---------- */
+function openViewer(title, doc) {
+  $('view-title').textContent = title;
+  $('view-meta').textContent = doc.title || '';
+  const parts = [];
+  if (doc.text) parts.push(doc.text);              // upload-based benchmark
+  for (const [label, key] of [['ABSTRACT', 'abstract'], ['CLAIMS', 'claims'], ['DESCRIPTION', 'description']]) {
+    if (doc[key] && typeof doc[key] === 'string') parts.push(`===== ${label} =====\n${doc[key]}`);
+  }
+  $('view-body').textContent = parts.join('\n\n') || '(no stored text)';
+  $('view-modal').classList.remove('hidden');
+}
+$('view-close').onclick = () => $('view-modal').classList.add('hidden');
 
 /* ---------- lesson modal ---------- */
 function openLessonModal(answerText) {

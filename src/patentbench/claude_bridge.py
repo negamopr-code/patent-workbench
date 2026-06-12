@@ -21,6 +21,12 @@ CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 MODELS = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
 CHAT_MODEL = os.environ.get("CLAUDE_CHAT_MODEL", "claude-fable-5")
 EXTRACT_MODEL = os.environ.get("CLAUDE_EXTRACT_MODEL", "claude-haiku-4-5")
+# Reading patent numbers off a photo is high-stakes (one wrong digit = a WRONG but
+# existing patent gets fetched silently) → strongest model; it's a single call.
+OCR_MODEL = os.environ.get("PB_OCR_MODEL", "claude-fable-5")
+# Page transcription is bulk work (one call per page) but feeds the benchmark text
+# the whole comparison anchors on → sonnet as the cost/quality middle ground.
+TRANSCRIBE_MODEL = os.environ.get("PB_TRANSCRIBE_MODEL", "claude-sonnet-4-6")
 CHAT_TIMEOUT = float(os.environ.get("CLAUDE_CHAT_TIMEOUT", "240"))
 SKILLS_DIR = os.environ.get("CLAUDE_SKILLS_DIR", os.path.expanduser("~/.claude/skills"))
 
@@ -43,7 +49,7 @@ _PREAMBLE = (
     "instead of guessing. This is analytical assistance, not legal advice."
 )
 
-MAX_BENCHMARK_CHARS = 24_000   # the benchmark gets a larger budget than candidates
+MAX_BENCHMARK_CHARS = 40_000   # the benchmark gets a larger budget than candidates
 
 _LESSON_INSTRUCTION = (
     "SELF-IMPROVEMENT: if (and ONLY if) this exchange surfaced a durable, "
@@ -258,8 +264,8 @@ def chat(question: str, history: list[dict] | None = None,
     return res
 
 
-def run_extract(prompt: str, allow_read: bool = False) -> dict:
-    """Cheap one-shot extraction run on the haiku model (optionally with the Read
-    tool so the model can open an image/file). Returns {answer, model} | {error}."""
+def run_extract(prompt: str, allow_read: bool = False, model: str | None = None) -> dict:
+    """One-shot extraction run (optionally with the Read tool so the model can
+    open an image/file). Returns {answer, model} | {error}."""
     extra = ["--allowedTools", "Read"] if allow_read else None
-    return _run_claude(prompt, EXTRACT_MODEL, extra_args=extra)
+    return _run_claude(prompt, model or EXTRACT_MODEL, extra_args=extra)

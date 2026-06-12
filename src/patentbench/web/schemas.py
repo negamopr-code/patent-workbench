@@ -18,6 +18,10 @@ class DocumentsAdd(BaseModel):
     source: str = "manual"
 
 
+class DocumentNumberEdit(BaseModel):
+    number: str = Field(min_length=4, max_length=40)
+
+
 class BenchmarkSet(BaseModel):
     text: str = Field(min_length=1, max_length=2000)   # a number or a link containing one
 

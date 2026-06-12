@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS benchmark(
   status TEXT NOT NULL DEFAULT 'pending',
   error TEXT,
   source TEXT,
+  progress TEXT,
   updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS uploads(
   id INTEGER PRIMARY KEY,
@@ -79,6 +80,10 @@ def _conn():
     con.execute("PRAGMA foreign_keys=ON")
     try:
         con.executescript(_SCHEMA)
+        # migration for DBs created before the column existed
+        cols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
+        if "progress" not in cols:
+            con.execute("ALTER TABLE benchmark ADD COLUMN progress TEXT")
         yield con
         con.commit()
     finally:
@@ -141,7 +146,10 @@ def add_documents(tab_id: int, numbers: list[str], source: str = "manual") -> di
 
 
 def list_documents(tab_id: int, full: bool = False) -> list[dict]:
-    cols = "*" if full else "id, tab_id, number, title, status, error, source, added_at, fetched_at"
+    cols = ("*" if full else
+            "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
+            "length(abstract) AS abstract_len, length(claims) AS claims_len, "
+            "length(description) AS description_len")
     with _conn() as c:
         rows = c.execute(f"SELECT {cols} FROM documents WHERE tab_id=? ORDER BY id",
                          (tab_id,)).fetchall()
@@ -160,6 +168,22 @@ def update_document(doc_id: int, **fields) -> None:
     sets = ", ".join(f"{k}=?" for k in fields)
     with _conn() as c:
         c.execute(f"UPDATE documents SET {sets} WHERE id=?", (*fields.values(), doc_id))
+
+
+def set_document_number(tab_id: int, doc_id: int, number: str) -> dict:
+    """Edit a document's number (e.g. fixing an OCR-damaged one) and reset it to
+    pending. Returns {ok} | {error} on duplicate within the tab."""
+    with _conn() as c:
+        try:
+            cur = c.execute(
+                "UPDATE documents SET number=?, status='pending', error=NULL, title=NULL, "
+                "abstract=NULL, claims=NULL, description=NULL, fetched_at=NULL "
+                "WHERE id=? AND tab_id=?", (number, doc_id, tab_id))
+        except sqlite3.IntegrityError:
+            return {"error": f"{number} is already in this tab"}
+        if cur.rowcount == 0:
+            return {"error": "document not found"}
+    return {"ok": True}
 
 
 def delete_document(tab_id: int, doc_id: int) -> bool:

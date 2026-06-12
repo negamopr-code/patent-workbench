@@ -33,7 +33,8 @@ def text_from_image(path: str) -> dict:
     """Full-text transcription of one page photo: {text} | {error}."""
     prompt = (f"First read the image at {path} with the Read tool. "
               f"Then do the following based on its content.\n\n{TRANSCRIBE_PROMPT}")
-    res = claude_bridge.run_extract(prompt, allow_read=True)
+    res = claude_bridge.run_extract(prompt, allow_read=True,
+                                    model=claude_bridge.TRANSCRIBE_MODEL)
     if "error" in res:
         return res
     return {"text": res["answer"]}
@@ -60,14 +61,25 @@ def numbers_from_text(text: str) -> dict:
 
 
 def numbers_from_image(path: str) -> dict:
-    """{numbers: [...]} | {error}. The headless CLI reads the image with its Read
-    tool — the only tool allowed — so the model actually sees the pixels."""
-    prompt = (f"First read the image at {path} with the Read tool. "
+    """{numbers: [...], uncertain: [...]} | {error}. The headless CLI reads the
+    image with its Read tool — the only tool allowed — so the model actually sees
+    the pixels. TWO independent passes are run and numbers that differ between
+    them are flagged `uncertain` — digit misreads on noisy photos (screen moiré)
+    are inconsistent run-to-run, so disagreement is the cheapest error signal.
+    A wrong digit can silently fetch a real-but-WRONG patent, hence the paranoia."""
+    prompt = (f"First read the image at {path} with the Read tool. Read carefully, "
+              "digit by digit — photos of screens have moiré noise.\n"
               f"Then do the following based on its content.\n\n{OCR_PROMPT}")
-    res = claude_bridge.run_extract(prompt, allow_read=True)
-    if "error" in res:
-        return res
-    return {"numbers": patents.extract_candidates(res["answer"])}
+    passes = []
+    for _ in range(2):
+        res = claude_bridge.run_extract(prompt, allow_read=True,
+                                        model=claude_bridge.OCR_MODEL)
+        if "error" in res:
+            return res
+        passes.append(patents.extract_candidates(res["answer"]))
+    first, second = set(passes[0]), set(passes[1])
+    ordered = list(dict.fromkeys(passes[0] + passes[1]))
+    return {"numbers": ordered, "uncertain": sorted(first ^ second)}
 
 
 def numbers_from_pdf(path: str) -> dict:

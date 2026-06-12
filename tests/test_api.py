@@ -135,3 +135,27 @@ def test_benchmark_clear(client):
     client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
     assert client.delete(f"/api/tabs/{tab['id']}/benchmark").json()["ok"]
     assert client.get(f"/api/tabs/{tab['id']}/state").json()["benchmark"] is None
+
+
+def test_document_full_and_edit_number(client):
+    tab = client.post("/api/tabs", json={"name": "Fix"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    assert docs[0]["abstract_len"] == 3          # stubbed "abs"
+    full = client.get(f"/api/tabs/{tab['id']}/documents/{docs[0]['id']}").json()
+    assert full["claims"] == "1. A method."
+    r = client.patch(f"/api/tabs/{tab['id']}/documents/{docs[0]['id']}",
+                     json={"number": "US2023278430"}).json()
+    assert r["number"] == "US20230278430"        # canonicalized (missing zero injected)
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    assert docs[0]["number"] == "US20230278430" and docs[0]["status"] == "fetched"
+
+
+def test_benchmark_full_view(client, monkeypatch):
+    from patentbench import extract
+    monkeypatch.setattr(extract, "text_from_image", lambda p: {"text": "page one text"})
+    tab = client.post("/api/tabs", json={"name": "BMview"}).json()
+    client.post(f"/api/tabs/{tab['id']}/benchmark/upload",
+                files=[("files", ("p1.png", b"x", "image/png"))])
+    full = client.get(f"/api/tabs/{tab['id']}/benchmark/full").json()
+    assert "page one text" in full["text"]

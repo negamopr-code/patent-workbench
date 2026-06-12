@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.requests import Request
@@ -108,28 +110,45 @@ def _fetch_benchmark(tab_id: int) -> None:
         db.update_benchmark(tab_id, status="ready", error=None, **res)
 
 
+TRANSCRIBE_WORKERS = int(os.environ.get("PB_TRANSCRIBE_WORKERS", "4"))
+
+
 def _extract_benchmark_files(tab_id: int) -> None:
     """Background: build the benchmark's text from its uploaded files —
-    pdftotext for PDFs, Claude haiku page transcription for pictures."""
+    pdftotext for PDFs, Claude haiku page transcription for pictures.
+    Pages are transcribed CONCURRENTLY and progress is written to the DB so the
+    UI can show 'page 12/30' instead of a bare 'pending'."""
     bm = db.get_benchmark(tab_id)
     if not bm:
         return
+    files = bm.get("files") or []
+    total = len(files)
+    done = 0
+    lock = threading.Lock()
+    db.update_benchmark(tab_id, progress=f"0/{total}")
+
+    def one(f: dict) -> tuple[dict, dict]:
+        nonlocal done
+        res = (extract.text_from_pdf(f["path"]) if f["kind"] == "pdf"
+               else extract.text_from_image(f["path"]))
+        with lock:
+            done += 1
+            db.update_benchmark(tab_id, progress=f"{done}/{total}")
+        return f, res
+
     chunks, errors = [], []
-    for f in bm.get("files") or []:
-        if f["kind"] == "pdf":
-            res = extract.text_from_pdf(f["path"])
-        else:
-            res = extract.text_from_image(f["path"])
-        if "error" in res:
-            errors.append(f"{f['name']}: {res['error']}")
-        else:
-            chunks.append(f"--- {f['name']} ---\n{res['text']}")
+    with ThreadPoolExecutor(max_workers=TRANSCRIBE_WORKERS) as ex:
+        for f, res in ex.map(one, files):       # ex.map preserves page order
+            if "error" in res:
+                errors.append(f"{f['name']}: {res['error']}")
+            else:
+                chunks.append(f"--- {f['name']} ---\n{res['text']}")
     text = "\n\n".join(chunks)
     if not text:
-        db.update_benchmark(tab_id, status="error",
+        db.update_benchmark(tab_id, status="error", progress=None,
                             error="; ".join(errors) or "no text extracted")
         return
-    db.update_benchmark(tab_id, status="ready", text=text,
+    db.update_benchmark(tab_id, status="ready", text=text, progress=None,
                         error="; ".join(errors) or None)
 
 
@@ -190,6 +209,17 @@ async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
     return {"ok": True, "benchmark": _benchmark_view(tab_id)}
 
 
+@app.get("/api/tabs/{tab_id}/benchmark/full")
+def benchmark_full(tab_id: int):
+    """Full benchmark content (fetched fields / transcribed text) for the viewer —
+    so the user can verify WHAT was actually stored, not just the title."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm:
+        raise HTTPException(404, "no benchmark set")
+    return bm
+
+
 @app.delete("/api/tabs/{tab_id}/benchmark")
 def benchmark_clear(tab_id: int):
     _tab_or_404(tab_id)
@@ -240,6 +270,30 @@ def documents_list(tab_id: int):
     return {"documents": docs}
 
 
+@app.get("/api/tabs/{tab_id}/documents/{doc_id}")
+def document_full(tab_id: int, doc_id: int):
+    """Full stored text of one candidate (title/abstract/claims/description)."""
+    doc = db.get_document(doc_id)
+    if not doc or doc["tab_id"] != tab_id:
+        raise HTTPException(404, "document not found")
+    doc["links"] = patents.links(doc["number"])
+    return doc
+
+
+@app.patch("/api/tabs/{tab_id}/documents/{doc_id}")
+def document_edit_number(tab_id: int, doc_id: int, body: schemas.DocumentNumberEdit,
+                         bg: BackgroundTasks):
+    """Fix an OCR-damaged number; the document is refetched under the new number."""
+    n = patents.canonicalize(body.number)
+    if not patents.is_plausible(n):
+        raise HTTPException(400, f"not a plausible patent number: {n}")
+    res = db.set_document_number(tab_id, doc_id, n)
+    if "error" in res:
+        raise HTTPException(400, res["error"])
+    bg.add_task(_fetch_into_db, doc_id)
+    return {"ok": True, "number": n}
+
+
 @app.post("/api/tabs/{tab_id}/documents/{doc_id}/refetch")
 def document_refetch(tab_id: int, doc_id: int, bg: BackgroundTasks):
     doc = db.get_document(doc_id)
@@ -286,7 +340,8 @@ async def upload(tab_id: int, file: UploadFile = File(...)):
     db.record_upload(tab_id, path, name, kind)
     if "error" in res:
         return {"kind": kind, "error": res["error"], "numbers": []}
-    return {"kind": kind, "numbers": res["numbers"]}
+    return {"kind": kind, "numbers": res["numbers"],
+            "uncertain": res.get("uncertain", [])}
 
 
 # ---------- NotebookLM ----------

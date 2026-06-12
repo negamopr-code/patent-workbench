@@ -46,3 +46,24 @@ def test_links():
     l = patents.links("US10395648B1")
     assert l["google"] == "https://patents.google.com/patent/US10395648B1/en"
     assert "pn%3DUS10395648B1" in l["espacenet"]
+
+
+def test_number_does_not_absorb_next_line_list_index():
+    # regression: with \s in the separator class the match crossed the newline and
+    # swallowed the next line's list numbering -> AU20201926863 (404). 2026-06-12.
+    text = "6. US 2018/560640\n7. AU 2020/192686\n3. CN 114853847\n"
+    nums = patents.extract_candidates(text)
+    assert "US20180560640" in nums      # missing-zero rule now fires (10 digits)
+    assert "AU2020192686" in nums
+    assert "CN114853847" in nums
+    assert not any(n.startswith("AU202019268") and len(n) > len("AU2020192686") for n in nums)
+
+
+def test_two_pass_image_ocr_flags_disagreement(monkeypatch):
+    from patentbench import claude_bridge, extract
+    answers = iter(["US10395648B1\nCN119134413", "US10395648B1\nCN119334413"])
+    monkeypatch.setattr(claude_bridge, "run_extract",
+                        lambda *a, **k: {"answer": next(answers)})
+    res = extract.numbers_from_image("/tmp/x.png")
+    assert "US10395648B1" in res["numbers"]
+    assert set(res["uncertain"]) == {"CN119134413", "CN119334413"}
