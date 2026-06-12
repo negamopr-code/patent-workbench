@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -193,6 +194,12 @@ async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
                       "kind": "pdf" if ext == ".pdf" else "image"})
     if not saved:
         raise HTTPException(400, "no files received")
+    # browsers send multi-selected files in arbitrary order — natural-sort by name
+    # so "page (2)" precedes "page (10)" and the transcription reads in page order
+    def natkey(f):
+        return [int(t) if t.isdigit() else t.lower()
+                for t in re.split(r"(\d+)", f["name"])]
+    saved.sort(key=natkey)
     kinds = {f["kind"] for f in saved}
     if kinds == {"pdf"} and len(saved) > 1:
         raise HTTPException(400, "upload ONE PDF, or multiple pictures — not several PDFs")

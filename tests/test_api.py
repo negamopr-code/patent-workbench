@@ -159,3 +159,14 @@ def test_benchmark_full_view(client, monkeypatch):
                 files=[("files", ("p1.png", b"x", "image/png"))])
     full = client.get(f"/api/tabs/{tab['id']}/benchmark/full").json()
     assert "page one text" in full["text"]
+
+
+def test_benchmark_upload_natural_page_order(client, monkeypatch):
+    from patentbench import extract
+    monkeypatch.setattr(extract, "text_from_image", lambda p: {"text": "t"})
+    tab = client.post("/api/tabs", json={"name": "Order"}).json()
+    client.post(f"/api/tabs/{tab['id']}/benchmark/upload",
+                files=[("files", (f"page ({i}).png", b"x", "image/png")) for i in (10, 2, 1)])
+    st = client.get(f"/api/tabs/{tab['id']}/state").json()
+    assert [f["name"] for f in st["benchmark"]["files"]] == \
+        ["page (1).png", "page (2).png", "page (10).png"]
