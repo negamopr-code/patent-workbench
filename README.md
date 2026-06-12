@@ -4,17 +4,23 @@ Multi-tab patent project app — NotebookLM-style, but the chat is **Claude**.
 
 **Live:** http://localhost:8099/ (container `patent-bench`, `--restart unless-stopped`)
 
-Each **tab** is a named project (create / rename / delete, unlimited):
+Each **tab** is a named project (create / rename / delete, unlimited) with a clear
+**benchmark vs candidates** split:
 
-- **Add documents** (left): type/paste patent numbers, Google Patents or Espacenet
-  links, or any text containing them — or drop a **photo** of a printed document
-  list / a **PDF** / a `.txt`. Numbers are extracted (photos via Claude haiku OCR,
-  no NotebookLM quota), canonicalized (OCR-recovery rules from patent-wiki-analyzer)
-  and confirmed by you before insert.
-- **Documents** (middle): each number is fetched from Google Patents in the
-  background (title / abstract / claims / description, PDF-pdftotext fallback) and
-  stored in SQLite — the chat works on the full text **without** NotebookLM.
-  Google Patents + Espacenet links on every row.
+- **🎯 Benchmark document** (left): THE reference document of the tab. Set it by
+  patent number / link (fetched from Google Patents), or upload the document
+  itself — one **PDF** or a **bunch of page photos**, kept together in the
+  benchmark's own directory; pictures are transcribed page-by-page by Claude
+  haiku, PDFs go through pdftotext. The chat anchors comparisons on it.
+- **📚 Candidates** (middle): the pool you search for the best fit to the
+  benchmark. Type/paste patent numbers, Google Patents or Espacenet links, or any
+  text containing them — or drop a **photo** of a printed document list / a PDF /
+  a `.txt`. Numbers are extracted (photos via Claude haiku OCR, no NotebookLM
+  quota), canonicalized (OCR-recovery rules from patent-wiki-analyzer) and
+  confirmed by you before insert. Each candidate is fetched from Google Patents in
+  the background (title / abstract / claims / description, PDF-pdftotext fallback)
+  and stored in SQLite — the chat works on the full text **without** NotebookLM.
+  A **🏆 Best match** button pre-fills a ranking question.
 - **Chat** (right): Claude model dropdown (fable-5 default), combinable **skill**
   checkboxes (from `~/.claude/skills`, injected into the prompt), "use documents"
   toggle, full per-tab history persisted. Optionally connect the tab to a

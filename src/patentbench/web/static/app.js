@@ -16,6 +16,7 @@ const api = async (path, opts = {}) => {
 let tabs = [];
 let activeTab = null;
 let docsPoll = null;
+let bmPoll = null;
 let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
 let lessonDefaultText = '';
@@ -105,10 +106,116 @@ async function selectTab(id) {
   loadPrefs();
   const st = await api(`/api/tabs/${id}/state`);
   if (st.error) { alert(st.error); return; }
+  renderBenchmark(st.benchmark);
   renderDocs(st.documents || []);
   renderChat(st.messages || []);
   renderNbChip(st.notebook);
   scheduleDocsPoll(st.documents || []);
+}
+
+/* ---------- benchmark (reference document) ---------- */
+function renderBenchmark(bm) {
+  clearTimeout(bmPoll);
+  const card = $('bm-card');
+  const setup = $('bm-setup');
+  if (!bm) {
+    card.classList.add('hidden');
+    setup.classList.remove('hidden');
+    $('bm-status').textContent = '';
+    return;
+  }
+  setup.classList.add('hidden');
+  card.classList.remove('hidden');
+  card.innerHTML = '';
+
+  const row = document.createElement('div');
+  row.className = 'doc-row';
+  const name = document.createElement('span');
+  name.className = 'num';
+  name.textContent = bm.number || `📷 ${(bm.files || []).length} uploaded file(s)`;
+  row.appendChild(name);
+  const st = document.createElement('span');
+  st.className = 'status ' + (bm.status === 'ready' ? 'fetched' : bm.status);
+  st.textContent = bm.status;
+  if (bm.error) st.title = bm.error;
+  row.appendChild(st);
+  const del = document.createElement('button');
+  del.className = 'btn small del'; del.textContent = '🗑';
+  del.title = 'Remove benchmark';
+  del.onclick = async () => {
+    if (!confirm('Remove the benchmark document (uploaded files are deleted)?')) return;
+    await api(`/api/tabs/${activeTab}/benchmark`, { method: 'DELETE' });
+    renderBenchmark(null);
+  };
+  row.appendChild(del);
+  card.appendChild(row);
+
+  if (bm.title) {
+    const t = document.createElement('div');
+    t.className = 'title'; t.textContent = bm.title;
+    card.appendChild(t);
+  }
+  for (const f of bm.files || []) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = (f.kind === 'pdf' ? '📄 ' : '🖼 ') + f.name;
+    card.appendChild(chip);
+  }
+  if (bm.links) {
+    const row2 = document.createElement('div');
+    row2.className = 'doc-row';
+    for (const [label, url] of [['Google Patents', bm.links.google], ['Espacenet', bm.links.espacenet]]) {
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = label;
+      row2.appendChild(a);
+    }
+    card.appendChild(row2);
+  }
+  if (bm.status === 'error') {
+    const e = document.createElement('div');
+    e.className = 'muted'; e.textContent = `Error: ${bm.error}`;
+    card.appendChild(e);
+  }
+  if (bm.status === 'pending') {
+    const tabAtPoll = activeTab;
+    bmPoll = setTimeout(async () => {
+      if (activeTab !== tabAtPoll) return;
+      const st2 = await api(`/api/tabs/${tabAtPoll}/state`);
+      if (activeTab === tabAtPoll) renderBenchmark(st2.benchmark);
+    }, 3000);
+  }
+}
+
+$('bm-set').onclick = async () => {
+  const text = $('bm-text').value.trim();
+  if (!text) return;
+  const res = await api(`/api/tabs/${activeTab}/benchmark`, {
+    method: 'PUT', body: JSON.stringify({ text }) });
+  if (res.error) { $('bm-status').textContent = res.error; return; }
+  $('bm-text').value = '';
+  $('bm-status').textContent = '';
+  renderBenchmark(res.benchmark);
+};
+
+const bmDz = $('bm-dropzone');
+bmDz.ondragover = e => { e.preventDefault(); bmDz.classList.add('drag'); };
+bmDz.ondragleave = () => bmDz.classList.remove('drag');
+bmDz.ondrop = e => {
+  e.preventDefault(); bmDz.classList.remove('drag');
+  if (e.dataTransfer.files.length) uploadBenchmark(e.dataTransfer.files);
+};
+$('bm-file').onchange = e => { if (e.target.files.length) uploadBenchmark(e.target.files); };
+
+async function uploadBenchmark(fileList) {
+  const fd = new FormData();
+  for (const f of fileList) fd.append('files', f);
+  $('bm-status').textContent =
+    `Uploading ${fileList.length} file(s)… (pictures are transcribed by Claude, ~30 s per page)`;
+  const res = await api(`/api/tabs/${activeTab}/benchmark/upload`, { method: 'POST', body: fd });
+  $('bm-file').value = '';
+  if (res.error) { $('bm-status').textContent = `Error: ${res.error}`; return; }
+  $('bm-status').textContent = '';
+  renderBenchmark(res.benchmark);
 }
 
 /* ---------- prefs (model/skills/toggles per tab) ---------- */
@@ -323,7 +430,7 @@ function appendMsg(m) {
     for (const p of m.participants || []) {
       const chip = document.createElement('span');
       chip.className = 'chip';
-      chip.textContent = ({ model: '🧬 ', skill: '🧠 ', notebook: '📓 ', documents: '📄 ' }[p.kind] || '') + p.title;
+      chip.textContent = ({ model: '🧬 ', skill: '🧠 ', notebook: '📓 ', documents: '📚 ', benchmark: '🎯 ' }[p.kind] || '') + p.title;
       meta.appendChild(chip);
     }
     el.appendChild(meta);
@@ -389,6 +496,14 @@ async function sendChat(notebookOnly) {
 
 $('ask-claude').onclick = () => sendChat(false);
 $('ask-notebook').onclick = () => sendChat(true);
+$('best-match').onclick = () => {
+  $('q').value =
+    'Compare each candidate document against the benchmark document. Rank the ' +
+    'candidates by how closely they match the benchmark\'s claims and technical ' +
+    'solution, justify each ranking with citations of publication numbers and ' +
+    'specific features, and name the single best fit.';
+  $('q').focus();
+};
 $('q').onkeydown = e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat(false);
 };

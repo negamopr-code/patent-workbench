@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS tab_notebook_config(
   notebook_title TEXT,
   selected_source_ids TEXT,
   updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS benchmark(
+  tab_id INTEGER PRIMARY KEY REFERENCES tabs(id) ON DELETE CASCADE,
+  number TEXT,
+  title TEXT, abstract TEXT, claims TEXT, description TEXT,
+  text TEXT,
+  files TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  error TEXT,
+  source TEXT,
+  updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS uploads(
   id INTEGER PRIMARY KEY,
   tab_id INTEGER NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
@@ -212,6 +222,50 @@ def set_notebook_config(tab_id: int, notebook_id: str | None, notebook_title: st
             "updated_at=excluded.updated_at",
             (tab_id, notebook_id, notebook_title,
              json.dumps(source_ids or [], ensure_ascii=False), _now()))
+
+
+# ---------- benchmark (one reference document per tab) ----------
+
+def get_benchmark(tab_id: int, full: bool = True) -> dict | None:
+    with _conn() as c:
+        r = c.execute("SELECT * FROM benchmark WHERE tab_id=?", (tab_id,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    d["files"] = json.loads(d["files"]) if d["files"] else []
+    if not full:
+        for k in ("abstract", "claims", "description", "text"):
+            d[k] = bool(d[k])      # presence flags only — keep state payload small
+    return d
+
+
+def set_benchmark(tab_id: int, source: str, number: str | None = None,
+                  files: list[dict] | None = None) -> None:
+    """Replace the tab's benchmark with a fresh pending one (number- or file-based)."""
+    with _conn() as c:
+        c.execute("DELETE FROM benchmark WHERE tab_id=?", (tab_id,))
+        c.execute(
+            "INSERT INTO benchmark(tab_id, number, files, status, source, updated_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (tab_id, number, json.dumps(files or [], ensure_ascii=False),
+             "pending", source, _now()))
+
+
+def update_benchmark(tab_id: int, **fields) -> None:
+    if not fields:
+        return
+    fields["updated_at"] = _now()
+    sets = ", ".join(f"{k}=?" for k in fields)
+    with _conn() as c:
+        c.execute(f"UPDATE benchmark SET {sets} WHERE tab_id=?", (*fields.values(), tab_id))
+
+
+def clear_benchmark(tab_id: int) -> list[dict]:
+    """Remove the benchmark; returns its uploaded files so the caller can delete them."""
+    bm = get_benchmark(tab_id)
+    with _conn() as c:
+        c.execute("DELETE FROM benchmark WHERE tab_id=?", (tab_id,))
+    return (bm or {}).get("files") or []
 
 
 # ---------- uploads ----------

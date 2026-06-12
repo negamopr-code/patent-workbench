@@ -21,6 +21,40 @@ OCR_PROMPT = (
 )
 
 
+TRANSCRIBE_PROMPT = (
+    "Transcribe ALL text visible in the image, preserving its structure "
+    "(headings, paragraph numbering like [0007], claim numbering, tables as plain "
+    "text). Output ONLY the transcription — no commentary, no summaries. If a "
+    "region is unreadable, mark it as [unreadable]."
+)
+
+
+def text_from_image(path: str) -> dict:
+    """Full-text transcription of one page photo: {text} | {error}."""
+    prompt = (f"First read the image at {path} with the Read tool. "
+              f"Then do the following based on its content.\n\n{TRANSCRIBE_PROMPT}")
+    res = claude_bridge.run_extract(prompt, allow_read=True)
+    if "error" in res:
+        return res
+    return {"text": res["answer"]}
+
+
+def text_from_pdf(path: str) -> dict:
+    """Plain text of a PDF via pdftotext: {text} | {error}."""
+    try:
+        proc = subprocess.run(["pdftotext", "-layout", path, "-"],
+                              capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        return {"error": "pdftotext not installed in this image"}
+    except subprocess.TimeoutExpired:
+        return {"error": "pdftotext timed out"}
+    text = (proc.stdout or "").strip() if proc.returncode == 0 else ""
+    if not text:
+        return {"error": "no extractable text in the PDF (scanned image-only PDF?) — "
+                         "upload the pages as pictures instead"}
+    return {"text": text}
+
+
 def numbers_from_text(text: str) -> dict:
     return {"numbers": patents.extract_candidates(text)}
 

@@ -32,14 +32,18 @@ MAX_DOCS_CHARS = 60_000     # total document budget per prompt
 
 _PREAMBLE = (
     "You are the assistant of a Patent Workbench — a multi-tab patent project app. "
-    "Each tab holds a set of patent documents (number, title, abstract, claims, "
-    "description) stored locally, optionally backed by a NotebookLM notebook. "
+    "Each tab holds ONE BENCHMARK document (the reference — a patent number or an "
+    "uploaded document/page photos) and a pool of CANDIDATE documents; the typical "
+    "task is to find which candidate(s) best fit the benchmark, comparing features, "
+    "claims and embodiments. A NotebookLM notebook may back the tab as well. "
     "Ground every claim about a document in its actual stored text and CITE the "
     "publication number (e.g. US10395648B1) when you do. Be precise about claim "
     "language vs description language. Honestly flag gaps: if a document's text "
     "was not fetched or a question goes beyond the provided material, say so "
     "instead of guessing. This is analytical assistance, not legal advice."
 )
+
+MAX_BENCHMARK_CHARS = 24_000   # the benchmark gets a larger budget than candidates
 
 _LESSON_INSTRUCTION = (
     "SELF-IMPROVEMENT: if (and ONLY if) this exchange surfaced a durable, "
@@ -137,10 +141,38 @@ def _document_block(doc: dict, budget: int) -> str:
     return head + "\n" + "\n".join(body_parts)
 
 
+def _benchmark_block(bm: dict) -> str:
+    """The benchmark document as a prompt block — number-based (fetched fields) or
+    upload-based (transcribed/extracted text), within MAX_BENCHMARK_CHARS."""
+    head = "[BENCHMARK"
+    if bm.get("number"):
+        head += f" — {bm['number']}"
+    if bm.get("title"):
+        head += f" — {bm['title']}"
+    head += "]"
+    body = []
+    if bm.get("text"):
+        body.append(bm["text"][:MAX_BENCHMARK_CHARS])
+    else:
+        budget = MAX_BENCHMARK_CHARS
+        for label, key in (("Abstract", "abstract"), ("Claims", "claims"),
+                           ("Description", "description")):
+            t = (bm.get(key) or "").strip()
+            if t and budget > 100:
+                chunk = f"{label}: {t[:budget]}"
+                body.append(chunk)
+                budget -= len(chunk)
+    if not body:
+        body.append(f"(content not ready — status: {bm.get('status', '?')}"
+                    + (f", error: {bm['error']}" if bm.get("error") else "") + ")")
+    return head + "\n" + "\n".join(body)
+
+
 def build_prompt(question: str, history: list[dict] | None = None,
                  documents: list[dict] | None = None,
                  sources: list[dict] | None = None,
-                 skills: list[dict] | None = None) -> str:
+                 skills: list[dict] | None = None,
+                 benchmark: dict | None = None) -> str:
     parts = [_PREAMBLE]
     if skills:
         blocks = "\n\n".join(f"[Skill /{s['name']}]\n{s['content']}" for s in skills)
@@ -148,6 +180,11 @@ def build_prompt(question: str, history: list[dict] | None = None,
             "USER-SELECTED SKILL DOCTRINES — apply their rules, methods and "
             "anti-patterns; if two skills conflict, flag it explicitly:\n" + blocks)
         parts.append(_LESSON_INSTRUCTION)
+    if benchmark:
+        parts.append(
+            "BENCHMARK DOCUMENT — the reference document of this tab. Candidates "
+            "are compared AGAINST this; when ranking or matching, anchor on its "
+            "claims and technical solution:\n\n" + _benchmark_block(benchmark))
     if documents:
         blocks, used = [], 0
         skipped = 0
@@ -160,8 +197,8 @@ def build_prompt(question: str, history: list[dict] | None = None,
             used += len(b)
         note = (f"\n\n(NOTE: {skipped} more document(s) did not fit the context "
                 "budget — say so if they may matter.)" if skipped else "")
-        parts.append("DOCUMENTS OF THIS TAB (fetched and stored locally — this is "
-                     "your primary evidence; cite publication numbers):\n\n"
+        parts.append("CANDIDATE DOCUMENTS of this tab (fetched and stored locally — "
+                     "this is your primary evidence; cite publication numbers):\n\n"
                      + "\n\n".join(blocks) + note)
     if history:
         lines = []
@@ -205,10 +242,12 @@ def _run_claude(prompt: str, model: str, extra_args: list[str] | None = None,
 
 def chat(question: str, history: list[dict] | None = None,
          documents: list[dict] | None = None, sources: list[dict] | None = None,
-         skills: list[dict] | None = None, model: str | None = None) -> dict:
+         skills: list[dict] | None = None, model: str | None = None,
+         benchmark: dict | None = None) -> dict:
     """One stateless turn. Returns {answer, model, lessons:[(skill, text)]} | {error}.
-    No tools — pure text; documents arrive pre-fetched from the local DB."""
-    prompt = build_prompt(question, history, documents, sources, skills)
+    No tools — pure text; benchmark + documents arrive pre-fetched from the local DB."""
+    prompt = build_prompt(question, history, documents, sources, skills,
+                          benchmark=benchmark)
     res = _run_claude(prompt, model or CHAT_MODEL)
     if "error" in res:
         return res

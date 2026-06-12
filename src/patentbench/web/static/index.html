@@ -18,17 +18,39 @@
 </nav>
 
 <main id="main" class="main hidden">
-  <!-- LEFT: input -->
+  <!-- LEFT: benchmark document (the reference) -->
   <section class="pane pane-input">
-    <h2>Add documents</h2>
-    <textarea id="in-text" rows="5"
-      placeholder="Paste patent numbers, Google Patents / Espacenet links, or any text containing them…"></textarea>
-    <button id="in-add" class="btn primary">Add numbers</button>
+    <h2>🎯 Benchmark document</h2>
+    <p class="muted">The reference document. Candidates on the right are matched <b>against</b> it.</p>
 
-    <div id="dropzone" class="dropzone">
-      <p>📷 Drop a <b>photo</b> of a document list,<br>a <b>PDF</b> or a <b>.txt</b> here<br><span class="muted">or</span></p>
-      <label class="btn">Choose file<input id="in-file" type="file" hidden
-        accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.txt"></label>
+    <div id="bm-card" class="bm-card hidden"></div>
+
+    <div id="bm-setup">
+      <input id="bm-text" type="text"
+        placeholder="Patent number or link (e.g. US10395648B1)…">
+      <button id="bm-set" class="btn primary">Set benchmark by number</button>
+
+      <div id="bm-dropzone" class="dropzone">
+        <p>📄 Drop the benchmark itself:<br>one <b>PDF</b> or a <b>bunch of page photos</b><br><span class="muted">or</span></p>
+        <label class="btn">Choose file(s)<input id="bm-file" type="file" hidden multiple
+          accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf"></label>
+      </div>
+    </div>
+    <div id="bm-status" class="muted"></div>
+  </section>
+
+  <!-- MIDDLE: candidate documents -->
+  <section class="pane pane-docs">
+    <h2>📚 Candidates <span id="doc-count" class="chip"></span></h2>
+    <p class="muted">The pool to search for the best fit to the benchmark.</p>
+    <textarea id="in-text" rows="3"
+      placeholder="Paste patent numbers, Google Patents / Espacenet links, or any text containing them…"></textarea>
+    <button id="in-add" class="btn primary">Add candidates</button>
+
+    <div id="dropzone" class="dropzone slim">
+      <p>📷 Drop a <b>photo of a document list</b>, a PDF or a .txt
+        <label class="btn small">Choose file<input id="in-file" type="file" hidden
+          accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.txt"></label></p>
     </div>
     <div id="upload-status" class="muted"></div>
 
@@ -42,11 +64,7 @@
         <button id="cand-cancel" class="btn small">Cancel</button>
       </div>
     </div>
-  </section>
 
-  <!-- MIDDLE: documents -->
-  <section class="pane pane-docs">
-    <h2>Documents <span id="doc-count" class="chip"></span></h2>
     <div id="docs" class="docs"></div>
   </section>
 
@@ -68,6 +86,7 @@
     <div class="chat-input">
       <textarea id="q" rows="3" placeholder="Ask about this tab's documents…"></textarea>
       <div class="chat-buttons">
+        <button id="best-match" class="btn small" title="Pre-fill a ranking question">🏆 Best match</button>
         <label class="check small"><input type="checkbox" id="ask-nb"> include NotebookLM</label>
         <button id="ask-claude" class="btn primary">Ask Claude</button>
         <button id="ask-notebook" class="btn">Notebook only</button>

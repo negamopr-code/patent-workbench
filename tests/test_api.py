@@ -84,3 +84,54 @@ def test_upload_txt(client, tmp_path):
     r2 = client.post(f"/api/tabs/{tab['id']}/documents",
                      json={"numbers": r["numbers"], "source": "image"}).json()
     assert len(r2["inserted"]) == 2
+
+
+def test_benchmark_by_number(client):
+    tab = client.post("/api/tabs", json={"name": "BM"}).json()
+    r = client.put(f"/api/tabs/{tab['id']}/benchmark",
+                   json={"text": "https://patents.google.com/patent/US10395648B1/en"}).json()
+    assert r["ok"]
+    st = client.get(f"/api/tabs/{tab['id']}/state").json()
+    bm = st["benchmark"]
+    assert bm["number"] == "US10395648B1"
+    assert bm["status"] == "ready"            # bg fetch ran inline, stubbed fetcher
+    assert bm["links"]["google"].endswith("/US10395648B1/en")
+    # no plausible number → 400
+    assert client.put(f"/api/tabs/{tab['id']}/benchmark",
+                      json={"text": "hello world"}).status_code == 400
+
+
+def test_benchmark_upload_images(client, monkeypatch):
+    from patentbench import extract
+    monkeypatch.setattr(extract, "text_from_image",
+                        lambda p: {"text": f"page text of {p.rsplit('-', 1)[-1]}"})
+    tab = client.post("/api/tabs", json={"name": "BMimg"}).json()
+    r = client.post(f"/api/tabs/{tab['id']}/benchmark/upload",
+                    files=[("files", ("p1.png", b"x", "image/png")),
+                           ("files", ("p2.png", b"y", "image/png"))]).json()
+    assert r["ok"]
+    st = client.get(f"/api/tabs/{tab['id']}/state").json()
+    bm = st["benchmark"]
+    assert bm["status"] == "ready" and bm["source"] == "images"
+    assert [f["name"] for f in bm["files"]] == ["p1.png", "p2.png"]
+    assert bm["text"] is True                  # presence flag in slim state view
+    # mixing pdf and images rejected
+    r2 = client.post(f"/api/tabs/{tab['id']}/benchmark/upload",
+                     files=[("files", ("a.pdf", b"x", "application/pdf")),
+                            ("files", ("b.png", b"y", "image/png"))])
+    assert r2.status_code == 400
+
+
+def test_chat_includes_benchmark_participant(client):
+    tab = client.post("/api/tabs", json={"name": "BMchat"}).json()
+    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
+    r = client.post(f"/api/tabs/{tab['id']}/chat", json={"question": "best fit?"}).json()
+    parts = r["messages"][-1]["participants"]
+    assert any(p["kind"] == "benchmark" and p["title"] == "US10395648B1" for p in parts)
+
+
+def test_benchmark_clear(client):
+    tab = client.post("/api/tabs", json={"name": "BMdel"}).json()
+    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
+    assert client.delete(f"/api/tabs/{tab['id']}/benchmark").json()["ok"]
+    assert client.get(f"/api/tabs/{tab['id']}/state").json()["benchmark"] is None

@@ -81,8 +81,25 @@ textarea, select, input[type="text"] {
 .chip.ok { color: var(--ok); border-color: var(--ok); }
 .chip.err { color: var(--err); border-color: var(--err); }
 
-/* input pane */
-.pane-input #in-add { margin-top: 8px; }
+/* benchmark pane */
+.pane-input #bm-set { margin-top: 8px; width: 100%; }
+.bm-card {
+  background: var(--pane2); border: 1px solid var(--accent); border-radius: 8px;
+  padding: 10px; margin-bottom: 10px;
+}
+.bm-card .doc-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.bm-card .num { font-family: ui-monospace, monospace; font-weight: 600; }
+.bm-card .title { font-size: 12px; color: var(--muted); margin: 4px 0; }
+.bm-card .chip { margin: 3px 3px 0 0; }
+.bm-card .del { margin-left: auto; }
+.bm-card a { color: var(--accent2); text-decoration: none; font-size: 12px; }
+.bm-card a:hover { text-decoration: underline; }
+
+/* candidates pane */
+.pane-docs #in-add { margin-top: 8px; }
+.pane-docs .docs { margin-top: 12px; }
+.dropzone.slim { padding: 8px; margin-top: 10px; font-size: 12px; }
+.dropzone.slim p { margin: 4px 0; }
 .dropzone {
   margin-top: 14px; border: 2px dashed var(--border); border-radius: 10px;
   padding: 16px; text-align: center; color: var(--muted);

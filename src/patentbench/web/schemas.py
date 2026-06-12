@@ -18,6 +18,10 @@ class DocumentsAdd(BaseModel):
     source: str = "manual"
 
 
+class BenchmarkSet(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)   # a number or a link containing one
+
+
 class NotebookConfig(BaseModel):
     notebook_id: str | None = None     # None/empty disconnects
     notebook_title: str | None = None

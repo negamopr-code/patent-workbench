@@ -76,15 +76,129 @@ def tabs_delete(tab_id: int):
     return {"ok": True}
 
 
+def _benchmark_view(tab_id: int) -> dict | None:
+    bm = db.get_benchmark(tab_id, full=False)
+    if bm and bm.get("number"):
+        bm["links"] = patents.links(bm["number"])
+    return bm
+
+
 @app.get("/api/tabs/{tab_id}/state")
 def tab_state(tab_id: int):
     _tab_or_404(tab_id)
     docs = db.list_documents(tab_id)
     for d in docs:
         d["links"] = patents.links(d["number"])
-    return {"documents": docs,
+    return {"benchmark": _benchmark_view(tab_id),
+            "documents": docs,
             "messages": db.list_messages(tab_id),
             "notebook": db.get_notebook_config(tab_id)}
+
+
+# ---------- benchmark (the reference document, one per tab) ----------
+
+def _fetch_benchmark(tab_id: int) -> None:
+    bm = db.get_benchmark(tab_id)
+    if not bm or not bm.get("number"):
+        return
+    res = fetcher.fetch_document(bm["number"])
+    if "error" in res:
+        db.update_benchmark(tab_id, status="error", error=res["error"])
+    else:
+        db.update_benchmark(tab_id, status="ready", error=None, **res)
+
+
+def _extract_benchmark_files(tab_id: int) -> None:
+    """Background: build the benchmark's text from its uploaded files —
+    pdftotext for PDFs, Claude haiku page transcription for pictures."""
+    bm = db.get_benchmark(tab_id)
+    if not bm:
+        return
+    chunks, errors = [], []
+    for f in bm.get("files") or []:
+        if f["kind"] == "pdf":
+            res = extract.text_from_pdf(f["path"])
+        else:
+            res = extract.text_from_image(f["path"])
+        if "error" in res:
+            errors.append(f"{f['name']}: {res['error']}")
+        else:
+            chunks.append(f"--- {f['name']} ---\n{res['text']}")
+    text = "\n\n".join(chunks)
+    if not text:
+        db.update_benchmark(tab_id, status="error",
+                            error="; ".join(errors) or "no text extracted")
+        return
+    db.update_benchmark(tab_id, status="ready", text=text,
+                        error="; ".join(errors) or None)
+
+
+@app.put("/api/tabs/{tab_id}/benchmark")
+def benchmark_set_number(tab_id: int, body: schemas.BenchmarkSet, bg: BackgroundTasks):
+    """Set the benchmark by patent number (or a link containing one)."""
+    _tab_or_404(tab_id)
+    nums = patents.extract_candidates(body.text)
+    if not nums:
+        raise HTTPException(400, "no plausible patent number found")
+    for f in db.clear_benchmark(tab_id):       # replacing: drop previous uploads
+        try:
+            os.unlink(f["path"])
+        except OSError:
+            pass
+    db.set_benchmark(tab_id, source="number", number=nums[0])
+    bg.add_task(_fetch_benchmark, tab_id)
+    return {"ok": True, "benchmark": _benchmark_view(tab_id)}
+
+
+@app.post("/api/tabs/{tab_id}/benchmark/upload")
+async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
+                           files: list[UploadFile] = File(...)):
+    """Set the benchmark from uploaded files: one PDF, or a BUNCH of page photos.
+    All files land in the benchmark's own directory under the tab's uploads."""
+    _tab_or_404(tab_id)
+    bm_dir = os.path.join(UPLOADS, str(tab_id), "benchmark")
+    os.makedirs(bm_dir, exist_ok=True)
+    saved = []
+    for uf in files:
+        data = await uf.read()
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(413, f"{uf.filename}: too large (25 MB max)")
+        name = os.path.basename(uf.filename or "page")
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in IMAGE_EXT and ext != ".pdf":
+            raise HTTPException(400, f"{name}: only PDF or images allowed for the benchmark")
+        path = os.path.join(bm_dir, f"{uuid.uuid4().hex[:8]}-{name}")
+        with open(path, "wb") as fh:
+            fh.write(data)
+        saved.append({"path": path, "name": name,
+                      "kind": "pdf" if ext == ".pdf" else "image"})
+    if not saved:
+        raise HTTPException(400, "no files received")
+    kinds = {f["kind"] for f in saved}
+    if kinds == {"pdf"} and len(saved) > 1:
+        raise HTTPException(400, "upload ONE PDF, or multiple pictures — not several PDFs")
+    if "pdf" in kinds and "image" in kinds:
+        raise HTTPException(400, "upload either a PDF or pictures, not a mix")
+    # replacing the benchmark: drop previous uploaded files from disk
+    for f in db.clear_benchmark(tab_id):
+        try:
+            os.unlink(f["path"])
+        except OSError:
+            pass
+    db.set_benchmark(tab_id, source="pdf" if "pdf" in kinds else "images", files=saved)
+    bg.add_task(_extract_benchmark_files, tab_id)
+    return {"ok": True, "benchmark": _benchmark_view(tab_id)}
+
+
+@app.delete("/api/tabs/{tab_id}/benchmark")
+def benchmark_clear(tab_id: int):
+    _tab_or_404(tab_id)
+    for f in db.clear_benchmark(tab_id):
+        try:
+            os.unlink(f["path"])
+        except OSError:
+            pass
+    return {"ok": True}
 
 
 # ---------- documents ----------
@@ -245,6 +359,7 @@ def chat(tab_id: int, body: schemas.ChatRequest):
                 tab_id, "s", "Ask-notebook was on, but no notebook is connected to this tab."))
 
     documents = db.list_documents(tab_id, full=True) if body.use_documents else None
+    benchmark = db.get_benchmark(tab_id) if body.use_documents else None
     skill_blocks = []
     for name in body.skills:
         content = claude_bridge.load_skill(name)
@@ -253,14 +368,19 @@ def chat(tab_id: int, body: schemas.ChatRequest):
             participants.append({"kind": "skill", "title": name})
 
     res = claude_bridge.chat(body.question, history=history, documents=documents,
-                             sources=nlm_sources, skills=skill_blocks, model=model)
+                             sources=nlm_sources, skills=skill_blocks, model=model,
+                             benchmark=benchmark)
     if "error" in res:
         out_messages.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
         return {"messages": out_messages, "error": res["error"]}
 
     participants.insert(0, {"kind": "model", "title": model})
+    if benchmark:
+        participants.append({"kind": "benchmark",
+                             "title": benchmark.get("number")
+                             or f"{len(benchmark.get('files') or [])} file(s)"})
     if body.use_documents and documents:
-        participants.append({"kind": "documents", "title": f"{len(documents)} docs"})
+        participants.append({"kind": "documents", "title": f"{len(documents)} candidates"})
     out_messages.append(db.append_message(tab_id, "c", res["answer"], model=model,
                                           participants=participants))
 
