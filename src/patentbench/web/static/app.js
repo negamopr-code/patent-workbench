@@ -365,7 +365,8 @@ function renderDocs(docs) {
       sz.className = 'sizes';
       const fmt = n => !n ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
       sz.textContent = `abstract ${fmt(d.abstract_len)} · claims ${fmt(d.claims_len)} · description ${fmt(d.description_len)} chars · ` +
-        (d.digest_len ? 'full-text digest ✓' : 'digesting full text…');
+        (d.digest_len ? 'full-text digest ✓' : 'digesting full text…') +
+        (d.nlm_source_notebook ? ' · 📓 in notebook' : '');
       sz.title = d.digest_len
         ? 'Stored text sizes; a cheap model has read the FULL document and stored a digest the chat always sees'
         : 'Stored text sizes; the full-text digest is still being generated';
@@ -671,7 +672,8 @@ function renderNbChip(cfg) {
   const chip = $('nb-chip');
   if (cfg && cfg.notebook_id) {
     const n = (cfg.selected_source_ids || []).length;
-    chip.textContent = `📓 ${cfg.notebook_title || cfg.notebook_id}` + (n ? ` · ${n} src` : ' · all src');
+    chip.textContent = `📓 ${cfg.notebook_title || cfg.notebook_id}` + (n ? ` · ${n} src` : ' · all src')
+      + (cfg.auto_add ? ' · 📤auto' : '');
     chip.classList.remove('hidden');
   } else chip.classList.add('hidden');
 }
@@ -686,6 +688,8 @@ $('nb-btn').onclick = async () => {
   ]);
   nbState = { notebooks: res.notebooks || [], chosen: null, sources: [], selected: new Set() };
   const current = st.notebook;
+  $('nb-auto-add').checked = !!(current && current.auto_add);
+  $('nb-sync-status').textContent = '';
   const wrap = $('nb-list');
   wrap.innerHTML = '';
   if (res.error) { wrap.textContent = `NotebookLM unavailable: ${res.error}`; return; }
@@ -745,6 +749,29 @@ $('src-none').onclick = () => {
   document.querySelectorAll('#nb-sources input').forEach(i => i.checked = false);
   updateSrcCount();
 };
+$('nb-sync').onclick = async () => {
+  $('nb-sync-status').textContent = 'Syncing candidates into the notebook…';
+  let res = await api(`/api/tabs/${activeTab}/notebook/sync`, { method: 'POST' });
+  while (res.full) {
+    $('nb-sync-status').textContent =
+      `Added ${res.added}; notebook is FULL, ${res.remaining} candidate(s) left.`;
+    const st = await api(`/api/tabs/${activeTab}/state`);
+    const title = (st.notebook && st.notebook.notebook_title) || 'notebook';
+    if (!confirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
+    const next = title.replace(/ \((\d+)\)$/, (m, n) => ` (${+n + 1})`);
+    const created = await api(`/api/tabs/${activeTab}/notebook/create`, {
+      method: 'POST', body: JSON.stringify({
+        title: next === title ? `${title} (2)` : next }) });
+    if (created.error) { $('nb-sync-status').textContent = created.error; return; }
+    renderNbChip(created.notebook);
+    res = await api(`/api/tabs/${activeTab}/notebook/sync`, { method: 'POST' });
+  }
+  $('nb-sync-status').textContent = res.error
+    ? `Error: ${res.error}`
+    : `Done: ${res.added} added` + (res.remaining ? `, ${res.remaining} remaining` : '')
+      + ((res.errors || []).length ? ` — errors: ${res.errors.join('; ')}` : '');
+  refreshDocs();
+};
 $('nb-cancel').onclick = () => $('nb-modal').classList.add('hidden');
 $('nb-disconnect').onclick = async () => {
   await api(`/api/tabs/${activeTab}/notebook`, {
@@ -759,6 +786,7 @@ $('nb-save').onclick = async () => {
       notebook_id: nbState.chosen.id,
       notebook_title: nbState.chosen.title,
       source_ids: [...nbState.selected],
+      auto_add: $('nb-auto-add').checked,
     }) });
   $('nb-modal').classList.add('hidden');
   renderNbChip(res.notebook);

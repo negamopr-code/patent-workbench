@@ -31,6 +31,11 @@ class NotebookConfig(BaseModel):
     notebook_id: str | None = None     # None/empty disconnects
     notebook_title: str | None = None
     source_ids: list[str] = []
+    auto_add: bool = False             # mirror new candidates into the notebook
+
+
+class NotebookCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
 
 
 class ChatRequest(BaseModel):

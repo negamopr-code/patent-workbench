@@ -113,11 +113,19 @@
       </div>
       <div id="nb-sources" class="nb-sources"></div>
     </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="nb-auto-add">
+        📤 Auto-add new candidates to this notebook</label>
+    </div>
+    <p class="muted">Mirrored candidates make the notebook a fallback brain: when the
+      Claude quota is exhausted, “Notebook only” keeps answering from the same documents.</p>
     <div class="row right">
+      <button id="nb-sync" class="btn small">📤 Sync candidates now</button>
       <button id="nb-disconnect" class="btn small danger">Disconnect</button>
       <button id="nb-save" class="btn primary">Save</button>
       <button id="nb-cancel" class="btn">Cancel</button>
     </div>
+    <div id="nb-sync-status" class="muted"></div>
   </div>
 </div>
 

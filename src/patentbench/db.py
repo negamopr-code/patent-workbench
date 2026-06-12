@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS tab_notebook_config(
   notebook_id TEXT,
   notebook_title TEXT,
   selected_source_ids TEXT,
+  auto_add INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS benchmark(
   tab_id INTEGER PRIMARY KEY REFERENCES tabs(id) ON DELETE CASCADE,
@@ -95,6 +96,11 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN score REAL")
             con.execute("ALTER TABLE documents ADD COLUMN score_note TEXT")
             con.execute("ALTER TABLE documents ADD COLUMN scored_at INTEGER")
+        if "nlm_source_notebook" not in dcols:
+            con.execute("ALTER TABLE documents ADD COLUMN nlm_source_notebook TEXT")
+        ncols = {r[1] for r in con.execute("PRAGMA table_info(tab_notebook_config)")}
+        if "auto_add" not in ncols:
+            con.execute("ALTER TABLE tab_notebook_config ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0")
         yield con
         con.commit()
     finally:
@@ -159,7 +165,7 @@ def add_documents(tab_id: int, numbers: list[str], source: str = "manual") -> di
 def list_documents(tab_id: int, full: bool = False) -> list[dict]:
     cols = ("*" if full else
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
-            "score, score_note, scored_at, "
+            "score, score_note, scored_at, nlm_source_notebook, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
             "length(description) AS description_len, length(digest) AS digest_len")
     with _conn() as c:
@@ -247,18 +253,18 @@ def get_notebook_config(tab_id: int) -> dict | None:
 
 
 def set_notebook_config(tab_id: int, notebook_id: str | None, notebook_title: str | None,
-                        source_ids: list[str] | None) -> None:
+                        source_ids: list[str] | None, auto_add: bool = False) -> None:
     with _conn() as c:
         if not notebook_id:
             c.execute("DELETE FROM tab_notebook_config WHERE tab_id=?", (tab_id,))
             return
         c.execute(
-            "INSERT INTO tab_notebook_config(tab_id, notebook_id, notebook_title, selected_source_ids, updated_at) "
-            "VALUES(?,?,?,?,?) ON CONFLICT(tab_id) DO UPDATE SET notebook_id=excluded.notebook_id, "
+            "INSERT INTO tab_notebook_config(tab_id, notebook_id, notebook_title, selected_source_ids, auto_add, updated_at) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(tab_id) DO UPDATE SET notebook_id=excluded.notebook_id, "
             "notebook_title=excluded.notebook_title, selected_source_ids=excluded.selected_source_ids, "
-            "updated_at=excluded.updated_at",
+            "auto_add=excluded.auto_add, updated_at=excluded.updated_at",
             (tab_id, notebook_id, notebook_title,
-             json.dumps(source_ids or [], ensure_ascii=False), _now()))
+             json.dumps(source_ids or [], ensure_ascii=False), int(auto_add), _now()))
 
 
 # ---------- benchmark (one reference document per tab) ----------

@@ -121,6 +121,58 @@ def list_sources(notebook_id: str, force: bool = False) -> dict:
     return {"sources": srcs}
 
 
+# NotebookLM caps sources per notebook (50 on the standard plan — the yt2nlm
+# project's auto-split at 50 confirmed this live). At the cap the workbench
+# proposes rolling over to a fresh notebook instead of failing adds.
+SOURCE_LIMIT = int(os.environ.get("NLM_SOURCE_LIMIT", "50"))
+
+
+def create_notebook(title: str) -> dict:
+    """Create a notebook: {id, title} | {error}."""
+    ok, why = available()
+    if not ok:
+        return {"error": why}
+    try:
+        proc = _run([NLM_BIN, "notebook", "create", title, "--json"], LIST_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {"error": "nlm notebook create: timeout"}
+    if proc.returncode != 0:
+        return {"error": (proc.stderr or proc.stdout).strip()[:400] or "create failed"}
+    try:
+        data = _json_after(proc.stdout, "{")
+    except Exception as exc:
+        return {"error": f"parse nlm output: {exc}"}
+    data = data.get("value", data) if isinstance(data, dict) else {}
+    nb_id = data.get("id") or data.get("notebook_id")
+    if not nb_id:
+        return {"error": "nlm notebook create returned no id"}
+    global _list_cache
+    _list_cache = None                      # the notebook list changed
+    return {"id": nb_id, "title": data.get("title") or title}
+
+
+def add_source_text(notebook_id: str, title: str, text: str) -> dict:
+    """Add a text source to a notebook: {ok} | {error, full?}. Text is clipped to
+    ~100k chars (kernel MAX_ARG_STRLEN caps a single argv entry at 128 KiB)."""
+    ok, why = available()
+    if not ok:
+        return {"error": why}
+    srcs = list_sources(notebook_id, force=True)
+    if not srcs.get("error") and len(srcs.get("sources") or []) >= SOURCE_LIMIT:
+        return {"error": f"notebook is full ({SOURCE_LIMIT} sources)", "full": True}
+    cmd = [NLM_BIN, "source", "add", notebook_id,
+           "--text", text[:100_000], "--title", title[:200]]
+    try:
+        proc = _run(cmd, QUERY_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {"error": "nlm source add: timeout"}
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout).strip()[:400] or "source add failed"
+        return {"error": err, "full": "limit" in err.lower() or "full" in err.lower()}
+    _sources_cache.pop(notebook_id, None)   # the source list changed
+    return {"ok": True}
+
+
 def query(notebook_id: str, question: str, source_ids: list[str] | None = None) -> dict:
     """Ask one notebook (optionally restricted to EXACT source files inside it).
     Returns {answer, sources_used} or {error}."""

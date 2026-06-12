@@ -258,3 +258,36 @@ def test_deep_compare_stores_scores(client, monkeypatch):
     assert docs[0]["score"] == 8.5
     assert docs[0]["score_note"] == "AGC fan-out + ESS hierarchy"
     assert docs[0]["scored_at"]
+
+
+def test_notebook_auto_add_and_sync(client, monkeypatch):
+    added, state = [], {"full_after": 2}
+    def fake_add(nb, title, text):
+        if len(added) >= state["full_after"]:
+            return {"error": "notebook is full (50 sources)", "full": True}
+        added.append((nb, title))
+        return {"ok": True}
+    monkeypatch.setattr(nlm_bridge, "add_source_text", fake_add)
+    monkeypatch.setattr(nlm_bridge, "create_notebook",
+                        lambda t: {"id": "nb-2", "title": t})
+    tab = client.post("/api/tabs", json={"name": "NbSync"}).json()
+    # auto-add on: new candidates mirror into the notebook during the pipeline
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": [],
+                     "auto_add": True})
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    assert docs[0]["nlm_source_notebook"] == "nb-1"
+    assert added[0][0] == "nb-1" and "US10395648B1" in added[0][1]
+    # sync: adds until full, reports remaining
+    client.post(f"/api/tabs/{tab['id']}/documents",
+                json={"text": "EP3667902A1 CN114547092"})
+    r = client.post(f"/api/tabs/{tab['id']}/notebook/sync").json()
+    assert r["full"] is True and r["added"] == 0  # pipeline added 2nd already? no: full_after=2 hit during pipeline
+    # create follow-up notebook and finish
+    r2 = client.post(f"/api/tabs/{tab['id']}/notebook/create",
+                     json={"title": "NB (2)"}).json()
+    assert r2["notebook"]["notebook_id"] == "nb-2" and r2["notebook"]["auto_add"] == 1
+    state["full_after"] = 99
+    r3 = client.post(f"/api/tabs/{tab['id']}/notebook/sync").json()
+    assert r3["added"] >= 1 and not r3["full"]

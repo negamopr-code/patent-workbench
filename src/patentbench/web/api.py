@@ -278,13 +278,55 @@ def _digest_doc(doc_id: int, model: str | None = None) -> None:
         db.update_document(doc_id, digest=res["digest"])
 
 
+def _doc_source_text(doc: dict) -> str:
+    """The candidate as a NotebookLM text source (abstract+claims+digest first;
+    nlm_bridge clips to ~100k chars)."""
+    return "\n\n".join(filter(None, [
+        f"{doc['number']} — {doc.get('title') or ''}",
+        ("ABSTRACT:\n" + doc["abstract"]) if doc.get("abstract") else None,
+        ("CLAIMS:\n" + doc["claims"]) if doc.get("claims") else None,
+        ("FULL-TEXT DIGEST:\n" + doc["digest"]) if doc.get("digest") else None,
+        ("DESCRIPTION:\n" + doc["description"]) if doc.get("description") else None]))
+
+
+def _add_doc_to_notebook(doc_id: int) -> dict:
+    """Mirror one fetched candidate into the tab's connected notebook.
+    {ok} | {error, full?} | {skip: reason}."""
+    doc = db.get_document(doc_id)
+    if not doc or doc["status"] != "fetched":
+        return {"skip": "not fetched"}
+    cfg = db.get_notebook_config(doc["tab_id"])
+    if not cfg or not cfg.get("notebook_id"):
+        return {"skip": "no notebook connected"}
+    if doc.get("nlm_source_notebook") == cfg["notebook_id"]:
+        return {"skip": "already added"}
+    title = f"{doc['number']} — {(doc.get('title') or '')[:120]}"
+    res = nlm_bridge.add_source_text(cfg["notebook_id"], title, _doc_source_text(doc))
+    if res.get("ok"):
+        db.update_document(doc_id, nlm_source_notebook=cfg["notebook_id"])
+    return res
+
+
 def _process_documents(doc_ids: list[int], model: str | None = None) -> None:
     """Background pipeline for a batch: fetch each (throttled by the fetcher's
-    own gap), then digest all fetched docs concurrently."""
+    own gap), digest all fetched docs concurrently, then mirror them into the
+    connected NotebookLM notebook when auto-add is on — so the notebook stays a
+    Claude-quota-independent fallback brain for the tab."""
     for doc_id in doc_ids:
         _fetch_into_db(doc_id)
     with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
         list(ex.map(lambda i: _digest_doc(i, model), doc_ids))
+    first = db.get_document(doc_ids[0]) if doc_ids else None
+    cfg = db.get_notebook_config(first["tab_id"]) if first else None
+    if cfg and cfg.get("auto_add") and cfg.get("notebook_id"):
+        for doc_id in doc_ids:                  # nlm_bridge serializes internally
+            res = _add_doc_to_notebook(doc_id)
+            if res.get("full"):
+                db.append_message(first["tab_id"], "s",
+                                  f"NotebookLM notebook «{cfg.get('notebook_title')}» is full — "
+                                  "open the Notebook dialog and create a follow-up notebook "
+                                  "to keep auto-adding candidates.")
+                break
 
 
 @app.post("/api/tabs/{tab_id}/documents")
@@ -402,7 +444,49 @@ def sources(notebook_id: str, force: bool = False):
 @app.put("/api/tabs/{tab_id}/notebook")
 def notebook_set(tab_id: int, body: schemas.NotebookConfig):
     _tab_or_404(tab_id)
-    db.set_notebook_config(tab_id, body.notebook_id, body.notebook_title, body.source_ids)
+    db.set_notebook_config(tab_id, body.notebook_id, body.notebook_title, body.source_ids,
+                           auto_add=body.auto_add)
+    return {"ok": True, "notebook": db.get_notebook_config(tab_id)}
+
+
+@app.post("/api/tabs/{tab_id}/notebook/sync")
+def notebook_sync(tab_id: int):
+    """Bulk-mirror every fetched candidate into the connected notebook. Stops at
+    the source cap and reports it so the UI can propose a follow-up notebook."""
+    _tab_or_404(tab_id)
+    cfg = db.get_notebook_config(tab_id)
+    if not cfg or not cfg.get("notebook_id"):
+        raise HTTPException(400, "no notebook connected to this tab")
+    added, errors, full = 0, [], False
+    docs = db.list_documents(tab_id)
+    pending = [d for d in docs if d["status"] == "fetched"
+               and d.get("nlm_source_notebook") != cfg["notebook_id"]]
+    for d in pending:
+        res = _add_doc_to_notebook(d["id"])
+        if res.get("ok"):
+            added += 1
+        elif res.get("full"):
+            full = True
+            break
+        elif res.get("error"):
+            errors.append(f"{d['number']}: {res['error']}")
+    remaining = len(pending) - added
+    return {"added": added, "remaining": remaining, "full": full,
+            "errors": errors[:5], "total_fetched": len([d for d in docs
+                                                        if d["status"] == "fetched"])}
+
+
+@app.post("/api/tabs/{tab_id}/notebook/create")
+def notebook_create(tab_id: int, body: schemas.NotebookCreate):
+    """Create a fresh notebook (e.g. when the current one is full) and connect
+    the tab to it, keeping auto-add on."""
+    _tab_or_404(tab_id)
+    res = nlm_bridge.create_notebook(body.title)
+    if "error" in res:
+        raise HTTPException(400, res["error"])
+    db.set_notebook_config(tab_id, res["id"], res["title"], [], auto_add=True)
+    db.append_message(tab_id, "s", f"Created notebook «{res['title']}» and connected "
+                                   "the tab to it (auto-add on).")
     return {"ok": True, "notebook": db.get_notebook_config(tab_id)}
 
 
