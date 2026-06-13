@@ -9,7 +9,12 @@ const api = async (path, opts = {}) => {
   });
   let data;
   try { data = await res.json(); } catch { data = {}; }
-  if (!res.ok && !data.error) data.error = `HTTP ${res.status}`;
+  if (!res.ok && !data.error) {
+    // surface FastAPI's validation detail instead of a bare "HTTP 422"
+    const d = data.detail;
+    data.error = Array.isArray(d) ? d.map(x => x.msg || JSON.stringify(x)).join('; ')
+               : (typeof d === 'string' ? d : `HTTP ${res.status}`);
+  }
   return data;
 };
 
