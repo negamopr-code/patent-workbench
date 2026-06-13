@@ -19,9 +19,10 @@
 
 <main id="main" class="main hidden">
   <!-- LEFT: benchmark document (the reference) -->
-  <section class="pane pane-input">
-    <h2>🎯 Benchmark document</h2>
+  <section id="pane-bm" class="pane pane-input">
+    <h2 class="pane-head"><button class="collapse-btn" data-pane="bm" title="Collapse / expand this section">▾</button><span class="pane-title">🎯 Benchmark document</span></h2>
     <p class="muted">The reference document. Candidates on the right are matched <b>against</b> it.</p>
+    <label class="model-pick read-pick" title="Model that READS / OCRs this benchmark's page photos and PDF. Cheapest by default — raise it only when reading quality disappoints.">📖 Reading / OCR model <select id="bm-read-model"></select></label>
 
     <div id="bm-card" class="bm-card hidden"></div>
 
@@ -40,10 +41,16 @@
   </section>
 
   <!-- MIDDLE: candidate documents -->
-  <section class="pane pane-docs">
-    <h2>📚 Candidates <span id="doc-count" class="chip"></span>
-      <span id="doc-sel" class="chip ok hidden" title="These candidates will be deep-analyzed instead of the whole list"></span></h2>
+  <section id="pane-docs" class="pane pane-docs">
+    <h2 class="pane-head"><button class="collapse-btn" data-pane="docs" title="Collapse / expand this section">▾</button><span class="pane-title">📚 Candidates <span id="doc-count" class="chip"></span>
+      <span id="doc-sel" class="chip ok hidden" title="These candidates will be deep-analyzed instead of the whole list"></span></span></h2>
     <p class="muted">The pool to search for the best fit to the benchmark.</p>
+    <label class="model-pick read-pick" title="Model that READS / OCRs candidate documents: photo OCR, page transcription and full-text digests. Cheapest by default — raise it only when reading quality disappoints.">📖 Reading / OCR model <select id="cand-read-model"></select></label>
+
+    <div id="deep-bar" class="deep-bar hidden">
+      <button id="deep-selected" class="btn primary small" title="Run the full-text deep analysis on ONLY the checked candidates">🏆 Deep-analyse selected</button>
+      <button id="deep-clear" class="btn small">clear selection</button>
+    </div>
     <textarea id="in-text" rows="3"
       placeholder="Paste patent numbers, Google Patents / Espacenet links, or any text containing them…"></textarea>
     <button id="in-add" class="btn primary">Add candidates</button>
@@ -72,8 +79,7 @@
   <!-- RIGHT: chat -->
   <section class="pane pane-chat">
     <div class="chat-toolbar">
-      <label class="model-pick" title="Model that ANSWERS chat questions and compiles deep-compare rankings">💬<select id="model"></select></label>
-      <label class="model-pick" title="Model that READS documents: page transcription, photo OCR, full-text digests and deep reads. Cheapest by default — raise it only when reading quality disappoints.">📖<select id="read-model"></select></label>
+      <label class="model-pick" title="Model that ANSWERS chat questions and compiles deep-compare rankings. The document-reading / OCR model lives on the 🎯 Benchmark and 📚 Candidates panes.">💬<select id="model"></select></label>
       <details class="skills-dd">
         <summary id="skills-summary">🧠 Skills</summary>
         <div id="skills" class="skills-list"></div>

@@ -22,6 +22,15 @@ let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
 let lessonDefaultText = '';
 
+/* ---------- reading / OCR model (shared by the benchmark + candidates panes) ---------- */
+const READ_SELECT_IDS = ['bm-read-model', 'cand-read-model'];
+const readSelects = () => READ_SELECT_IDS.map($).filter(Boolean);
+function readModelValue() {
+  const s = readSelects()[0];
+  return s ? s.value : (skillsMeta.default_read_model || 'claude-haiku-4-5');
+}
+function setReadModel(v) { for (const s of readSelects()) s.value = v; }
+
 /* ---------- health ---------- */
 async function loadHealth() {
   const h = await api('/api/health');
@@ -222,10 +231,10 @@ $('bm-file').onchange = e => { if (e.target.files.length) uploadBenchmark(e.targ
 async function uploadBenchmark(fileList) {
   const fd = new FormData();
   for (const f of fileList) fd.append('files', f);
-  fd.append('reading_model', $('read-model').value);
+  fd.append('reading_model', readModelValue());
   $('bm-status').textContent =
     `Uploading ${fileList.length} file(s)… (pictures transcribed by ` +
-    `${$('read-model').value.replace('claude-', '')}, 4 pages in parallel — the card shows progress)`;
+    `${readModelValue().replace('claude-', '')}, 4 pages in parallel — the card shows progress)`;
   const res = await api(`/api/tabs/${activeTab}/benchmark/upload`, { method: 'POST', body: fd });
   $('bm-file').value = '';
   if (res.error) { $('bm-status').textContent = `Error: ${res.error}`; return; }
@@ -239,7 +248,7 @@ function savePrefs() {
   if (!activeTab) return;
   localStorage.setItem(prefsKey(), JSON.stringify({
     model: $('model').value,
-    readModel: $('read-model').value,
+    readModel: readModelValue(),
     skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
     useDocs: $('use-docs').checked,
     askNb: $('ask-nb').checked,
@@ -250,7 +259,7 @@ function loadPrefs() {
   try { p = JSON.parse(localStorage.getItem(prefsKey()) || '{}'); } catch {}
   if (p.model) $('model').value = p.model;
   else $('model').value = skillsMeta.default_model;
-  $('read-model').value = p.readModel || skillsMeta.default_read_model || 'claude-haiku-4-5';
+  setReadModel(p.readModel || skillsMeta.default_read_model || 'claude-haiku-4-5');
   const want = new Set(p.skills || defaultSkills());
   document.querySelectorAll('#skills input').forEach(i => { i.checked = want.has(i.value); });
   $('use-docs').checked = p.useDocs !== false;
@@ -266,17 +275,17 @@ function defaultSkills() {
 async function loadSkills() {
   skillsMeta = await api('/api/skills');
   const sel = $('model');
-  const rsel = $('read-model');
-  sel.innerHTML = ''; rsel.innerHTML = '';
+  const modelTargets = [sel, ...readSelects()];
+  for (const target of modelTargets) target.innerHTML = '';
   for (const m of skillsMeta.models || []) {
-    for (const target of [sel, rsel]) {
+    for (const target of modelTargets) {
       const o = document.createElement('option');
       o.value = m; o.textContent = m.replace('claude-', '');
       target.appendChild(o);
     }
   }
   sel.value = skillsMeta.default_model;
-  rsel.value = skillsMeta.default_read_model || 'claude-haiku-4-5';
+  setReadModel(skillsMeta.default_read_model || 'claude-haiku-4-5');
   const wrap = $('skills');
   wrap.innerHTML = '';
   const lessonSel = $('lesson-skill');
@@ -297,7 +306,7 @@ async function loadSkills() {
     lessonSel.appendChild(o);
   }
   sel.onchange = savePrefs;
-  rsel.onchange = savePrefs;
+  for (const s of readSelects()) s.onchange = () => { setReadModel(s.value); savePrefs(); };
   $('use-docs').onchange = savePrefs;
   $('ask-nb').onchange = savePrefs;
 }
@@ -421,12 +430,20 @@ function renderDocs(docs) {
 
 function updateDocSelChip() {
   const chip = $('doc-sel');
+  const bar = $('deep-bar');
   if (docSelection.size) {
-    chip.textContent = `🏆 ${docSelection.size} selected for deep analysis · clear`;
+    chip.textContent = `🏆 ${docSelection.size} selected for deep analysis`;
     chip.classList.remove('hidden');
-    chip.style.cursor = 'pointer';
-    chip.onclick = () => { docSelection = new Set(); refreshDocs(); };
-  } else chip.classList.add('hidden');
+    chip.style.cursor = 'default';
+    chip.onclick = null;
+    if (bar) {
+      bar.classList.remove('hidden');
+      $('deep-selected').textContent = `🏆 Deep-analyse ${docSelection.size} selected`;
+    }
+  } else {
+    chip.classList.add('hidden');
+    if (bar) bar.classList.add('hidden');
+  }
 }
 
 async function refreshDocs() {
@@ -448,7 +465,7 @@ $('in-add').onclick = async () => {
   const text = $('in-text').value.trim();
   if (!text) return;
   const res = await api(`/api/tabs/${activeTab}/documents`, {
-    method: 'POST', body: JSON.stringify({ text, reading_model: $('read-model').value }) });
+    method: 'POST', body: JSON.stringify({ text, reading_model: readModelValue() }) });
   if (res.error) { $('upload-status').textContent = res.error; return; }
   $('in-text').value = '';
   $('upload-status').textContent =
@@ -470,7 +487,7 @@ async function uploadFile(file) {
   $('upload-status').textContent = `Extracting numbers from ${file.name}… (images go through Claude OCR, ~30 s)`;
   const fd = new FormData();
   fd.append('file', file);
-  fd.append('reading_model', $('read-model').value);
+  fd.append('reading_model', readModelValue());
   const res = await api(`/api/tabs/${activeTab}/upload`, { method: 'POST', body: fd });
   $('in-file').value = '';
   if (res.error) { $('upload-status').textContent = `Error: ${res.error}`; return; }
@@ -504,7 +521,7 @@ $('cand-add').onclick = async () => {
   if (!nums.length) return;
   const res = await api(`/api/tabs/${activeTab}/documents`, {
     method: 'POST', body: JSON.stringify({ numbers: nums, source: 'image',
-                                           reading_model: $('read-model').value }) });
+                                           reading_model: readModelValue() }) });
   $('candidates').classList.add('hidden');
   $('upload-status').textContent = res.error || `Added ${res.inserted.length} document(s).`;
   refreshDocs();
@@ -597,12 +614,17 @@ async function sendChat(notebookOnly) {
 
 $('ask-claude').onclick = () => sendChat(false);
 $('ask-notebook').onclick = () => sendChat(true);
-$('best-match').onclick = async () => {
+
+async function runDeepCompare(forceSelected) {
   if (!activeTab) return;
   const ids = [...docSelection];
+  if (forceSelected && !ids.length) {
+    alert('No candidates are checked. Tick the box on the candidates you want analysed.');
+    return;
+  }
   const scope = ids.length ? `the ${ids.length} SELECTED candidate(s)` : 'EVERY candidate';
-  if (!confirm(`Deep compare: a cheap model reads ${scope} in FULL against ` +
-               'the benchmark, then the selected model compiles the answer. ' +
+  if (!confirm(`Deep compare: the 📖 reading model reads ${scope} in FULL against ` +
+               `the benchmark, then the 💬 model (${$('model').value.replace('claude-', '')}) compiles the answer. ` +
                (ids.length ? '' : 'Takes a few minutes. ') + 'Start?')) return;
   const q = $('q').value.trim();          // optional custom task; default ranking otherwise
   $('q').value = '';
@@ -617,7 +639,7 @@ $('best-match').onclick = async () => {
       skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
       question: q || null,
       doc_ids: ids.length ? ids : null,
-      reading_model: $('read-model').value,
+      reading_model: readModelValue(),
     }) });
   setBusy(false);
   if (activeTab !== tabAtSend) return;
@@ -627,7 +649,11 @@ $('best-match').onclick = async () => {
     return;
   }
   for (const m of res.messages || []) appendMsg(m);
-};
+}
+
+$('best-match').onclick = () => runDeepCompare(false);
+$('deep-selected').onclick = () => runDeepCompare(true);
+$('deep-clear').onclick = () => { docSelection = new Set(); refreshDocs(); };
 $('q').onkeydown = e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat(false);
 };
@@ -791,6 +817,40 @@ $('nb-save').onclick = async () => {
   $('nb-modal').classList.add('hidden');
   renderNbChip(res.notebook);
 };
+
+/* ---------- collapsible panes (give the chat more room) ---------- */
+const PANE_OF = { bm: 'pane-bm', docs: 'pane-docs' };
+const COLLAPSE_CLASS = { bm: 'bm-collapsed', docs: 'cand-collapsed' };
+let layout = {};
+try { layout = JSON.parse(localStorage.getItem('pb-layout') || '{}'); } catch {}
+
+function applyLayout() {
+  const main = $('main');
+  for (const key of Object.keys(PANE_OF)) {
+    const collapsed = !!layout[key];
+    const pane = $(PANE_OF[key]);
+    if (pane) pane.classList.toggle('collapsed', collapsed);
+    main.classList.toggle(COLLAPSE_CLASS[key], collapsed);
+    const btn = document.querySelector(`.collapse-btn[data-pane="${key}"]`);
+    if (btn) { btn.textContent = collapsed ? '▸' : '▾'; }
+  }
+}
+function togglePane(key) {
+  layout[key] = !layout[key];
+  localStorage.setItem('pb-layout', JSON.stringify(layout));
+  applyLayout();
+}
+for (const btn of document.querySelectorAll('.collapse-btn')) {
+  btn.onclick = () => togglePane(btn.dataset.pane);
+}
+// a collapsed strip is itself clickable to expand again
+for (const key of Object.keys(PANE_OF)) {
+  const pane = $(PANE_OF[key]);
+  if (pane) pane.addEventListener('click', e => {
+    if (pane.classList.contains('collapsed') && !e.target.closest('.collapse-btn')) togglePane(key);
+  });
+}
+applyLayout();
 
 /* ---------- boot ---------- */
 (async () => {

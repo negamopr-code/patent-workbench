@@ -50,6 +50,25 @@ header {
   flex: 1; display: grid; grid-template-columns: 300px 360px 1fr;
   gap: 10px; padding: 10px; min-height: 0;
 }
+.main.bm-collapsed { grid-template-columns: 38px 360px 1fr; }
+.main.cand-collapsed { grid-template-columns: 300px 38px 1fr; }
+.main.bm-collapsed.cand-collapsed { grid-template-columns: 38px 38px 1fr; }
+
+/* collapsible panes */
+.pane-head { display: flex; align-items: center; gap: 6px; }
+.collapse-btn {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 13px; padding: 0 2px; line-height: 1; border-radius: 4px;
+}
+.collapse-btn:hover { color: var(--accent); }
+.pane.collapsed { padding: 10px 4px; overflow: hidden; cursor: pointer; align-items: center; }
+.pane.collapsed > :not(.pane-head) { display: none; }
+.pane.collapsed .pane-head { flex-direction: column; gap: 10px; margin: 0; height: 100%; }
+.pane.collapsed .pane-title {
+  writing-mode: vertical-rl; white-space: nowrap; color: var(--muted);
+  font-weight: 600; font-size: 13px;
+}
+.pane.collapsed .pane-title .chip { display: none; }
 .pane {
   background: var(--pane); border: 1px solid var(--border); border-radius: 10px;
   padding: 12px; overflow-y: auto; min-height: 0; display: flex; flex-direction: column;
@@ -94,6 +113,14 @@ textarea, select, input[type="text"] {
 .bm-card .del { margin-left: auto; }
 .bm-card a { color: var(--accent2); text-decoration: none; font-size: 12px; }
 .bm-card a:hover { text-decoration: underline; }
+
+/* reading / OCR model picker on the input panes */
+.read-pick { display: flex; align-items: center; gap: 6px; margin: 4px 0 10px;
+  font-size: 12px; color: var(--muted); }
+.read-pick select { width: auto; flex: 1; }
+
+/* deep-analyse-selected bar (candidates pane) */
+.deep-bar { display: flex; gap: 6px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
 
 /* candidates pane */
 .pane-docs #in-add { margin-top: 8px; }
