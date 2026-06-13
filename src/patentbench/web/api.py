@@ -22,6 +22,18 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 app = FastAPI(title="Patent Workbench")
 
 
+@app.middleware("http")
+async def _no_store_api(request: Request, call_next):
+    """API responses must never be cached by the browser. Otherwise a request
+    made in the seconds while the container is restarting (empty/elsewhere) can
+    be remembered — e.g. an empty /api/tabs, leaving the user without their
+    tab until they manually clear the cache."""
+    resp = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"error": f"{exc.__class__.__name__}: {exc}"})
