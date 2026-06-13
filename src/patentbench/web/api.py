@@ -682,5 +682,19 @@ def lesson_create(body: schemas.LessonCreate):
 
 # ---------- static frontend ----------
 
+class _RevalidatingStatic(StaticFiles):
+    """Serve the SPA with `Cache-Control: no-cache` so the browser ALWAYS
+    revalidates app.js/style.css/index.html against the ETag before using a
+    cached copy. Without this, a redeploy can leave a stale app.js running
+    against fresh HTML (e.g. an input it expects was moved) → blank page.
+    `no-cache` still allows 304s, so it costs a conditional request, not a
+    re-download, when nothing changed."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 _static = os.path.join(os.path.dirname(__file__), "static")
-app.mount("/", StaticFiles(directory=_static, html=True), name="static")
+app.mount("/", _RevalidatingStatic(directory=_static, html=True), name="static")
