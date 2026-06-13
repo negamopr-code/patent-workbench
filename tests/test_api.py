@@ -291,3 +291,47 @@ def test_notebook_auto_add_and_sync(client, monkeypatch):
     state["full_after"] = 99
     r3 = client.post(f"/api/tabs/{tab['id']}/notebook/sync").json()
     assert r3["added"] >= 1 and not r3["full"]
+
+
+def test_notebook_export_includes_benchmark(client, monkeypatch):
+    added = []
+    monkeypatch.setattr(nlm_bridge, "add_source_text",
+                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+    tab = client.post("/api/tabs", json={"name": "Exp"}).json()
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": [],
+                     "auto_add": True})
+    # setting the benchmark (bg fetch runs inline) mirrors it when auto-add is on
+    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
+    assert any("BENCHMARK" in t for _, t in added)
+    # a new candidate auto-mirrors during its own pipeline (not the benchmark again)
+    added.clear()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "CN114547092"})
+    assert any("CN114547092" in t for _, t in added)
+    assert not any("BENCHMARK" in t for _, t in added)
+    # a manual sync now finds everything already mirrored → nothing to add
+    r = client.post(f"/api/tabs/{tab['id']}/notebook/sync").json()
+    assert r["added"] == 0 and r["remaining"] == 0
+
+
+def test_notebook_import_patents_and_text(client, monkeypatch):
+    monkeypatch.setattr(nlm_bridge, "list_sources",
+                        lambda nb, force=False: {"sources": [
+                            {"id": "sp", "title": "US10395648B1 — a patent"},
+                            {"id": "st", "title": "Meeting notes"}]})
+    monkeypatch.setattr(nlm_bridge, "source_content",
+                        lambda sid: {"content": "raw text body of the notes"})
+    tab = client.post("/api/tabs", json={"name": "Imp"}).json()
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    r = client.post(f"/api/tabs/{tab['id']}/notebook/import").json()
+    assert r["patents_added"] == 1 and r["text_added"] == 1
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    by_num = {d["number"]: d for d in docs}
+    assert "US10395648B1" in by_num and by_num["US10395648B1"]["status"] == "fetched"
+    assert by_num["US10395648B1"]["nlm_source_notebook"] == "nb-1"  # won't be re-exported
+    txt = by_num["Meeting notes"]
+    assert txt["source"] == "notebook-text" and txt["links"] is None
+    # idempotent: re-import skips everything already present
+    r2 = client.post(f"/api/tabs/{tab['id']}/notebook/import").json()
+    assert r2["patents_added"] == 0 and r2["text_added"] == 0 and r2["skipped"] == 2

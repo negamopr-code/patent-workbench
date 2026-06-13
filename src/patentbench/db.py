@@ -98,6 +98,11 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN scored_at INTEGER")
         if "nlm_source_notebook" not in dcols:
             con.execute("ALTER TABLE documents ADD COLUMN nlm_source_notebook TEXT")
+        if "nlm_source_id" not in dcols:   # which NLM source this doc was imported from
+            con.execute("ALTER TABLE documents ADD COLUMN nlm_source_id TEXT")
+        bmcols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
+        if "nlm_source_notebook" not in bmcols:   # benchmark mirrored into which notebook
+            con.execute("ALTER TABLE benchmark ADD COLUMN nlm_source_notebook TEXT")
         ncols = {r[1] for r in con.execute("PRAGMA table_info(tab_notebook_config)")}
         if "auto_add" not in ncols:
             con.execute("ALTER TABLE tab_notebook_config ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0")
@@ -160,6 +165,35 @@ def add_documents(tab_id: int, numbers: list[str], source: str = "manual") -> di
             except sqlite3.IntegrityError:
                 skipped.append(n)
     return {"inserted": inserted, "skipped": skipped}
+
+
+def add_text_document(tab_id: int, number: str, title: str | None, content: str,
+                      nlm_source_id: str | None = None,
+                      nlm_source_notebook: str | None = None) -> int | None:
+    """Insert a non-patent, text-only document (e.g. imported raw from a NotebookLM
+    source) as an already-'fetched' row whose body lives in `description`, so it
+    participates in chat + deep-compare like any candidate. Returns the new id, or
+    None if a row with the same number already exists in the tab."""
+    with _conn() as c:
+        try:
+            cur = c.execute(
+                "INSERT INTO documents(tab_id, number, title, description, status, source, "
+                "nlm_source_id, nlm_source_notebook, added_at, fetched_at) "
+                "VALUES(?,?,?,?,'fetched','notebook-text',?,?,?,?)",
+                (tab_id, number, title, content, nlm_source_id, nlm_source_notebook,
+                 _now(), _now()))
+            return cur.lastrowid
+        except sqlite3.IntegrityError:
+            return None
+
+
+def imported_source_ids(tab_id: int) -> set[str]:
+    """NLM source ids already imported into this tab (for idempotent re-import)."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT nlm_source_id FROM documents WHERE tab_id=? AND nlm_source_id IS NOT NULL",
+            (tab_id,)).fetchall()
+    return {r[0] for r in rows}
 
 
 def list_documents(tab_id: int, full: bool = False) -> list[dict]:

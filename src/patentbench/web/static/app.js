@@ -388,10 +388,18 @@ function renderDocs(docs) {
     }
     const row2 = document.createElement('div');
     row2.className = 'doc-row';
-    for (const [label, url] of [['Google Patents', d.links.google], ['Espacenet', d.links.espacenet]]) {
-      const a = document.createElement('a');
-      a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = label;
-      row2.appendChild(a);
+    if (d.source === 'notebook-text') {
+      const badge = document.createElement('span');
+      badge.className = 'chip'; badge.textContent = '📓 imported text';
+      badge.title = 'Imported from a NotebookLM source (raw text, not a patent)';
+      row2.appendChild(badge);
+    }
+    if (d.links) {
+      for (const [label, url] of [['Google Patents', d.links.google], ['Espacenet', d.links.espacenet]]) {
+        const a = document.createElement('a');
+        a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = label;
+        row2.appendChild(a);
+      }
     }
     if (d.status === 'fetched') {
       const view = document.createElement('button');
@@ -800,6 +808,19 @@ $('nb-sync').onclick = async () => {
   $('nb-sync-status').textContent = res.error
     ? `Error: ${res.error}`
     : `Done: ${res.added} added` + (res.remaining ? `, ${res.remaining} remaining` : '')
+      + ((res.errors || []).length ? ` — errors: ${res.errors.join('; ')}` : '');
+  refreshDocs();
+};
+$('nb-import').onclick = async () => {
+  if (!confirm('Import the notebook’s sources into this tab? Patent numbers become ' +
+               'fetched candidates; other sources are imported as text documents. ' +
+               'Already-present sources are skipped.')) return;
+  $('nb-sync-status').textContent = 'Importing sources from the notebook…';
+  const res = await api(`/api/tabs/${activeTab}/notebook/import`, { method: 'POST' });
+  $('nb-sync-status').textContent = res.error
+    ? `Error: ${res.error}`
+    : `Imported: ${res.patents_added} patent(s) (fetching full text), ${res.text_added} text source(s)`
+      + (res.skipped ? `, ${res.skipped} skipped` : '')
       + ((res.errors || []).length ? ` — errors: ${res.errors.join('; ')}` : '');
   refreshDocs();
 };

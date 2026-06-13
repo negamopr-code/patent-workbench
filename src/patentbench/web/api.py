@@ -104,12 +104,17 @@ def _benchmark_view(tab_id: int) -> dict | None:
     return bm
 
 
+def _doc_links(d: dict) -> dict | None:
+    """Patent docs get Google/Espacenet links; text-only NLM imports have none."""
+    return None if d.get("source") == "notebook-text" else patents.links(d["number"])
+
+
 @app.get("/api/tabs/{tab_id}/state")
 def tab_state(tab_id: int):
     _tab_or_404(tab_id)
     docs = db.list_documents(tab_id)
     for d in docs:
-        d["links"] = patents.links(d["number"])
+        d["links"] = _doc_links(d)
     return {"benchmark": _benchmark_view(tab_id),
             "documents": docs,
             "messages": db.list_messages(tab_id),
@@ -127,6 +132,7 @@ def _fetch_benchmark(tab_id: int) -> None:
         db.update_benchmark(tab_id, status="error", error=res["error"])
     else:
         db.update_benchmark(tab_id, status="ready", error=None, **res)
+        _mirror_benchmark_if_auto(tab_id)
 
 
 TRANSCRIBE_WORKERS = int(os.environ.get("PB_TRANSCRIBE_WORKERS", "4"))
@@ -169,6 +175,7 @@ def _extract_benchmark_files(tab_id: int, model: str | None = None) -> None:
         return
     db.update_benchmark(tab_id, status="ready", text=text, progress=None,
                         error="; ".join(errors) or None)
+    _mirror_benchmark_if_auto(tab_id)
 
 
 @app.put("/api/tabs/{tab_id}/benchmark")
@@ -319,6 +326,32 @@ def _add_doc_to_notebook(doc_id: int) -> dict:
     return res
 
 
+def _add_benchmark_to_notebook(tab_id: int) -> dict:
+    """Mirror the tab's benchmark into the connected notebook as a text source.
+    {ok} | {error, full?} | {skip: reason}."""
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("status") != "ready":
+        return {"skip": "benchmark not ready"}
+    cfg = db.get_notebook_config(tab_id)
+    if not cfg or not cfg.get("notebook_id"):
+        return {"skip": "no notebook connected"}
+    if bm.get("nlm_source_notebook") == cfg["notebook_id"]:
+        return {"skip": "already added"}
+    label = bm.get("number") or f"{len(bm.get('files') or [])} file(s)"
+    title = f"🎯 BENCHMARK — {label}"
+    res = nlm_bridge.add_source_text(cfg["notebook_id"], title, _benchmark_fulltext(bm))
+    if res.get("ok"):
+        db.update_benchmark(tab_id, nlm_source_notebook=cfg["notebook_id"])
+    return res
+
+
+def _mirror_benchmark_if_auto(tab_id: int) -> None:
+    """After the benchmark becomes ready, push it to the notebook when auto-add is on."""
+    cfg = db.get_notebook_config(tab_id)
+    if cfg and cfg.get("auto_add") and cfg.get("notebook_id"):
+        _add_benchmark_to_notebook(tab_id)
+
+
 def _process_documents(doc_ids: list[int], model: str | None = None) -> None:
     """Background pipeline for a batch: fetch each (throttled by the fetcher's
     own gap), digest all fetched docs concurrently, then mirror them into the
@@ -362,7 +395,7 @@ def documents_list(tab_id: int):
     _tab_or_404(tab_id)
     docs = db.list_documents(tab_id)
     for d in docs:
-        d["links"] = patents.links(d["number"])
+        d["links"] = _doc_links(d)
     return {"documents": docs}
 
 
@@ -372,7 +405,7 @@ def document_full(tab_id: int, doc_id: int):
     doc = db.get_document(doc_id)
     if not doc or doc["tab_id"] != tab_id:
         raise HTTPException(404, "document not found")
-    doc["links"] = patents.links(doc["number"])
+    doc["links"] = _doc_links(doc)
     return doc
 
 
@@ -463,29 +496,107 @@ def notebook_set(tab_id: int, body: schemas.NotebookConfig):
 
 @app.post("/api/tabs/{tab_id}/notebook/sync")
 def notebook_sync(tab_id: int):
-    """Bulk-mirror every fetched candidate into the connected notebook. Stops at
-    the source cap and reports it so the UI can propose a follow-up notebook."""
+    """Bulk-mirror the benchmark + every fetched candidate into the connected
+    notebook. Stops at the source cap and reports it so the UI can propose a
+    follow-up notebook."""
     _tab_or_404(tab_id)
     cfg = db.get_notebook_config(tab_id)
     if not cfg or not cfg.get("notebook_id"):
         raise HTTPException(400, "no notebook connected to this tab")
     added, errors, full = 0, [], False
+    # benchmark first — it's the reference the notebook should always hold
+    bm_res = _add_benchmark_to_notebook(tab_id)
+    if bm_res.get("ok"):
+        added += 1
+    elif bm_res.get("full"):
+        full = True
+    elif bm_res.get("error"):
+        errors.append(f"benchmark: {bm_res['error']}")
     docs = db.list_documents(tab_id)
     pending = [d for d in docs if d["status"] == "fetched"
                and d.get("nlm_source_notebook") != cfg["notebook_id"]]
-    for d in pending:
-        res = _add_doc_to_notebook(d["id"])
-        if res.get("ok"):
-            added += 1
-        elif res.get("full"):
-            full = True
-            break
-        elif res.get("error"):
-            errors.append(f"{d['number']}: {res['error']}")
-    remaining = len(pending) - added
+    if not full:
+        for d in pending:
+            res = _add_doc_to_notebook(d["id"])
+            if res.get("ok"):
+                added += 1
+            elif res.get("full"):
+                full = True
+                break
+            elif res.get("error"):
+                errors.append(f"{d['number']}: {res['error']}")
+    remaining = sum(1 for d in pending
+                    if db.get_document(d["id"]).get("nlm_source_notebook") != cfg["notebook_id"])
     return {"added": added, "remaining": remaining, "full": full,
             "errors": errors[:5], "total_fetched": len([d for d in docs
                                                         if d["status"] == "fetched"])}
+
+
+@app.post("/api/tabs/{tab_id}/notebook/import")
+def notebook_import(tab_id: int, bg: BackgroundTasks):
+    """Pull the connected notebook's sources INTO the workbench (the other half of
+    the bidirectional mirror). A source whose title/content names a patent number
+    becomes a real candidate (re-fetched from Google Patents); any other source is
+    imported as a raw text-only document via `nlm source content`. Idempotent:
+    sources already imported (by id) or patents already in the tab are skipped."""
+    _tab_or_404(tab_id)
+    cfg = db.get_notebook_config(tab_id)
+    if not cfg or not cfg.get("notebook_id"):
+        raise HTTPException(400, "no notebook connected to this tab")
+    nb_id = cfg["notebook_id"]
+    listing = nlm_bridge.list_sources(nb_id, force=True)
+    if listing.get("error"):
+        raise HTTPException(400, f"could not list notebook sources: {listing['error']}")
+    sources = listing.get("sources") or []
+    already = db.imported_source_ids(tab_id)
+
+    patent_numbers: list[str] = []           # number -> add as fetched candidate
+    patent_src: dict[str, str] = {}          # canonical number -> originating source id
+    text_added, text_errors, skipped = 0, [], 0
+    for s in sources:
+        sid, title = s["id"], (s.get("title") or "").strip()
+        if sid in already:
+            skipped += 1
+            continue
+        nums = patents.extract_candidates(title)          # patent number in the title?
+        if nums:
+            n = nums[0]
+            patent_numbers.append(n)
+            patent_src.setdefault(n, sid)
+            continue
+        # non-patent source → import its raw content as a text-only document
+        content = nlm_bridge.source_content(sid)
+        if content.get("error"):
+            text_errors.append(f"{title or sid}: {content['error']}")
+            continue
+        new_id = db.add_text_document(
+            tab_id, number=(title or f"NLM source {sid}")[:120], title=title,
+            content=content["content"], nlm_source_id=sid, nlm_source_notebook=nb_id)
+        if new_id:
+            text_added += 1
+        else:
+            skipped += 1
+
+    # patents: dedupe-insert, then fetch+digest in the background. Mark them as
+    # already-in-this-notebook so the export side won't push them straight back.
+    ins = db.add_documents(tab_id, list(dict.fromkeys(patent_numbers)), source="notebook")
+    for doc_id in ins["inserted"]:
+        doc = db.get_document(doc_id)
+        sid = patent_src.get(doc["number"]) if doc else None
+        db.update_document(doc_id, nlm_source_notebook=nb_id, nlm_source_id=sid)
+    if ins["inserted"]:
+        bg.add_task(_process_documents, ins["inserted"], None)
+    patents_added, patents_skipped = len(ins["inserted"]), len(ins["skipped"])
+
+    db.append_message(
+        tab_id, "s",
+        f"📥 Imported from «{cfg.get('notebook_title') or nb_id}»: "
+        f"{patents_added} patent candidate(s) (fetching full text), {text_added} text source(s)"
+        + (f"; skipped {skipped + patents_skipped} already present" if (skipped or patents_skipped) else "")
+        + (f"; errors: {'; '.join(text_errors[:3])}" if text_errors else ""))
+    return {"patents_added": patents_added, "text_added": text_added,
+            "skipped": skipped + patents_skipped, "errors": text_errors[:5],
+            "total_sources": len(sources)}
 
 
 @app.post("/api/tabs/{tab_id}/notebook/create")

@@ -121,12 +121,18 @@
     </div>
     <div class="row">
       <label class="check"><input type="checkbox" id="nb-auto-add">
-        📤 Auto-add new candidates to this notebook</label>
+        📤 Auto-add new documents (benchmark + candidates) to this notebook</label>
     </div>
-    <p class="muted">Mirrored candidates make the notebook a fallback brain: when the
-      Claude quota is exhausted, “Notebook only” keeps answering from the same documents.</p>
+    <p class="muted">Bidirectional mirror: <b>📤 export</b> pushes this tab's benchmark and
+      candidates into the notebook (a Claude-quota-independent fallback brain — “Notebook
+      only” keeps answering when Claude is exhausted); <b>📥 import</b> pulls the notebook's
+      sources back in — patent numbers become fetched candidates, other sources become
+      text documents.</p>
+    <div class="row">
+      <button id="nb-sync" class="btn small">📤 Export now (benchmark + candidates)</button>
+      <button id="nb-import" class="btn small">📥 Import from notebook</button>
+    </div>
     <div class="row right">
-      <button id="nb-sync" class="btn small">📤 Sync candidates now</button>
       <button id="nb-disconnect" class="btn small danger">Disconnect</button>
       <button id="nb-save" class="btn primary">Save</button>
       <button id="nb-cancel" class="btn">Cancel</button>

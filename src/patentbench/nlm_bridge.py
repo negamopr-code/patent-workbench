@@ -173,6 +173,32 @@ def add_source_text(notebook_id: str, title: str, text: str) -> dict:
     return {"ok": True}
 
 
+def source_content(source_id: str) -> dict:
+    """Raw text content of ONE source inside a notebook (no AI processing):
+    {content} | {error}. Used to import a non-patent source into the workbench."""
+    ok, why = available()
+    if not ok:
+        return {"error": why}
+    try:
+        proc = _run([NLM_BIN, "source", "content", source_id, "--json"], QUERY_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {"error": "nlm source content: timeout"}
+    if proc.returncode != 0:
+        return {"error": (proc.stderr or proc.stdout).strip()[:400] or "source content failed"}
+    # newer CLIs print JSON ({content|text|value}); older ones print raw text.
+    out = proc.stdout
+    try:
+        data = _json_after(out, "{")
+        val = data.get("value", data) if isinstance(data, dict) else {}
+        content = (val.get("content") or val.get("text") or "") if isinstance(val, dict) else ""
+    except Exception:
+        content = out.strip()
+    content = (content or "").strip()
+    if not content:
+        return {"error": "empty source content"}
+    return {"content": content}
+
+
 def query(notebook_id: str, question: str, source_ids: list[str] | None = None) -> dict:
     """Ask one notebook (optionally restricted to EXACT source files inside it).
     Returns {answer, sources_used} or {error}."""
