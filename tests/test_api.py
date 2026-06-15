@@ -335,3 +335,98 @@ def test_notebook_import_patents_and_text(client, monkeypatch):
     # idempotent: re-import skips everything already present
     r2 = client.post(f"/api/tabs/{tab['id']}/notebook/import").json()
     assert r2["patents_added"] == 0 and r2["text_added"] == 0 and r2["skipped"] == 2
+
+
+# ---------- grounding / focus / concise-vs-full / paragraph markers ----------
+
+def test_paragraph_number_marker():
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup('<description-paragraph num="0035">Body text</description-paragraph>', "lxml")
+    el = soup.find("description-paragraph")
+    assert fetcher._with_para_num(el, "Body text") == "[0035] Body text"
+    # non-numeric / missing num → returned unchanged
+    p = BeautifulSoup("<p>x</p>", "lxml").find("p")
+    assert fetcher._with_para_num(p, "x") == "x"
+    # idempotent: don't double-prefix
+    assert fetcher._with_para_num(el, "[0035] Body text") == "[0035] Body text"
+
+
+def test_build_prompt_grounding_and_concise_default():
+    docs = [{"id": 1, "number": "US1", "title": "t", "abstract": "a",
+             "digest": "DIG", "claims": "1. c", "description": "[0035] body"}]
+    p = claude_bridge.build_prompt("q", documents=docs)          # full=False default
+    assert "GROUNDING" in p and "REFUSE-TO-GUESS" in p
+    assert "DERIVED summary" in p                                # digest labelled, not quotable
+    assert "KISS" in p                                           # concise, plain, readable by default
+    assert "ENGLISH ONLY" in p and "ARGUE THE DISCLOSURE" in p   # English-only + reasoned-citation rules
+    assert "CITE WITH ITS EXACT QUOTE" in p                      # every cite carries its short exact quote
+    assert "CLIPPED" in p                                        # candidate block warns it's not full text
+
+
+def test_build_prompt_focus_full_text_and_full_style():
+    docs = [{"id": 7, "number": "CN692", "title": "t", "abstract": "a",
+             "digest": "DIG", "claims": "1. c", "description": "[0057] AGC stuff"}]
+    p = claude_bridge.build_prompt("q", focus=docs, full=True)
+    assert "FOCUSED CANDIDATE" in p and "FULL primary text" in p
+    assert "[0057] AGC stuff" in p                               # full description present, uncl­ipped
+    assert "FULL analysis" in p                                  # full style instruction
+
+
+def test_chat_focus_and_full_plumbed(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: (seen.update(k), {"answer": "ok", "model": "m"})[1])
+    tab = client.post("/api/tabs", json={"name": "T"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
+    did = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"][0]["id"]
+    client.post(f"/api/tabs/{tab['id']}/chat",
+                json={"question": "q", "full": True, "focus_ids": [did]})
+    assert seen.get("full") is True
+    assert seen.get("focus") and seen["focus"][0]["id"] == did
+    # the focused doc is pulled OUT of the clipped documents list
+    assert all(d["id"] != did for d in (seen.get("documents") or []))
+
+
+def test_strip_cjk_removes_all_chinese():
+    s = ('No. It interposes a measurement and control device (测控装置) between them; '
+         'claim 5 / [0018] make the two-hop path explicit "硬接线" wiring.')
+    out = claude_bridge._strip_cjk(s)
+    assert not __import__("re").search(r"[一-鿿]", out)   # zero CJK
+    assert "[0018]" in out and "claim 5" in out            # locators preserved
+    assert "(测控装置)" not in out                          # gloss removed whole
+
+
+def test_auto_focus_matches_number_and_alias():
+    docs = [{"id": 1, "number": "CN113964850"}, {"id": 2, "number": "US11909216B2"},
+            {"id": 3, "number": "CN120638382A"}]
+    assert api._auto_focus_ids("does 850 disclose the difference node?", docs) == [1]      # short alias
+    assert api._auto_focus_ids("compare CN113964850 vs US11909216B2", docs) == [1, 2]      # full numbers
+    assert api._auto_focus_ids("what about the EMS generally?", docs) == []                # no reference
+    assert 3 in api._auto_focus_ids("benchmark 382 vs 850", docs)                          # multiple aliases
+
+
+def test_chat_auto_focuses_named_candidate(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: (seen.update(k), {"answer": "ok", "model": "m"})[1])
+    tab = client.post("/api/tabs", json={"name": "AF"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "CN113964850 US11909216B2"})
+    # ask about 850 WITHOUT selecting it → it must be auto-focused (full text)
+    client.post(f"/api/tabs/{tab['id']}/chat", json={"question": "does 850 disclose X?"})
+    foc = [d["number"] for d in (seen.get("focus") or [])]
+    assert "CN113964850" in foc and "US11909216B2" not in foc
+
+
+def test_chat_focus_is_sticky_across_turns(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: (seen.update(k), {"answer": "ok", "model": "m"})[1])
+    tab = client.post("/api/tabs", json={"name": "Sticky"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "CN113964850 US11909216B2"})
+    # turn 1 names 850 → focused
+    client.post(f"/api/tabs/{tab['id']}/chat", json={"question": "tell me about 850"})
+    assert "CN113964850" in [d["number"] for d in (seen.get("focus") or [])]
+    # turn 2 does NOT name 850 → still focused via sticky (recent-question) match
+    seen.clear()
+    client.post(f"/api/tabs/{tab['id']}/chat", json={"question": "and its description paragraphs?"})
+    assert "CN113964850" in [d["number"] for d in (seen.get("focus") or [])]
