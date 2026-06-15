@@ -43,6 +43,22 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
 
+def _with_para_num(el, text: str) -> str:
+    """Prefix a description paragraph with its Google-Patents paragraph number as
+    a groundable marker, e.g. '[0035] ...'. The number lives in the element's
+    `num` attribute — pure digits on US/EP `<description-paragraph>` (num="0035"),
+    but PREFIXED on the CN-style `<p>` fallback (num="n0001"). Strip the prefix so
+    both yield a marker. Use ONLY `num` (the real paragraph number); never the
+    `id`, which is DOM position incl. headings and would mis-number paragraphs.
+    Headings carry no `num`, so they get no marker — correct. This is what lets
+    the chat cite real paragraphs instead of inventing them."""
+    digits = re.sub(r"\D", "", (el.get("num") or "").strip())
+    if not digits:
+        return text
+    marker = f"[{int(digits):04d}]"
+    return text if text.startswith(marker) else f"{marker} {text}"
+
+
 def _pdf_url(soup: BeautifulSoup, raw_html: str) -> str | None:
     meta = soup.find("meta", attrs={"name": "citation_pdf_url"})
     if meta and (meta.get("content") or "").startswith("http"):
@@ -120,12 +136,12 @@ def fetch_document(number: str) -> dict:
     for el in soup.select("description-paragraph, .description-paragraph, div.description-line"):
         t = _clean(el.get_text())
         if t:
-            paras.append(t)
+            paras.append(_with_para_num(el, t))
     if not paras:
         for el in soup.select('section[itemprop="description"] p'):
             t = _clean(el.get_text())
             if t:
-                paras.append(t)
+                paras.append(_with_para_num(el, t))
     description = "\n\n".join(paras)
 
     if not description:
