@@ -151,9 +151,20 @@ def create_notebook(title: str) -> dict:
     return {"id": nb_id, "title": data.get("title") or title}
 
 
+def _clip_bytes(text: str, limit: int = 120_000) -> str:
+    """Clip to a UTF-8 BYTE budget (the kernel argv cap MAX_ARG_STRLEN is 128 KiB
+    of BYTES, not characters — a CJK patent is ~3 B/char, so a 100k-CHAR clip
+    overflows argv and makes `nlm source add` hang). Truncate on a char boundary."""
+    b = text.encode("utf-8")
+    if len(b) <= limit:
+        return text
+    return b[:limit].decode("utf-8", "ignore")
+
+
 def add_source_text(notebook_id: str, title: str, text: str) -> dict:
     """Add a text source to a notebook: {ok} | {error, full?}. Text is clipped to
-    ~100k chars (kernel MAX_ARG_STRLEN caps a single argv entry at 128 KiB)."""
+    a UTF-8 BYTE budget (kernel MAX_ARG_STRLEN caps a single argv entry at 128 KiB
+    — byte-clipping, not char-clipping, is what keeps CJK sources from hanging)."""
     ok, why = available()
     if not ok:
         return {"error": why}
@@ -161,7 +172,7 @@ def add_source_text(notebook_id: str, title: str, text: str) -> dict:
     if not srcs.get("error") and len(srcs.get("sources") or []) >= SOURCE_LIMIT:
         return {"error": f"notebook is full ({SOURCE_LIMIT} sources)", "full": True}
     cmd = [NLM_BIN, "source", "add", notebook_id,
-           "--text", text[:100_000], "--title", title[:200]]
+           "--text", _clip_bytes(text), "--title", title[:200]]
     try:
         proc = _run(cmd, QUERY_TIMEOUT)
     except subprocess.TimeoutExpired:
