@@ -297,15 +297,39 @@ def _digest_doc(doc_id: int, model: str | None = None) -> None:
         db.update_document(doc_id, digest=res["digest"])
 
 
+MAX_FOCUS_DOCS = 5     # cap auto+manual focused candidates so the prompt stays tight
+_DIGIT_RUN_RE = re.compile(r"\d{3,}")
+
+
+def _auto_focus_ids(question: str, docs: list[dict]) -> list[int]:
+    """Candidates the QUESTION explicitly refers to → load their FULL text without
+    the user having to select them. Matches a full publication number anywhere in
+    the text, OR a 3+ digit run that is a suffix of the number (users alias
+    'CN113964850' as '850'). Conservative on length to avoid stray-number noise."""
+    qnorm = re.sub(r"[^0-9a-z]", "", question.lower())
+    qruns = {r for r in _DIGIT_RUN_RE.findall(question) if len(r) >= 3}
+    out = []
+    for d in docs:
+        num = d.get("number") or ""
+        if not num:
+            continue
+        bare = re.sub(r"[^0-9a-z]", "", num.lower())
+        digits = re.sub(r"\D", "", num)
+        if (bare and bare in qnorm) or any(digits.endswith(r) for r in qruns):
+            out.append(d["id"])
+    return out
+
+
 def _doc_source_text(doc: dict) -> str:
-    """The candidate as a NotebookLM text source (abstract+claims+digest first;
-    nlm_bridge clips to ~100k chars)."""
+    """The candidate as a NotebookLM text source — FULL primary text (abstract +
+    claims + description with [00NN] markers) first so it's never clipped out by
+    the derived digest; nlm_bridge clips the tail to ~100k chars."""
     return "\n\n".join(filter(None, [
         f"{doc['number']} — {doc.get('title') or ''}",
         ("ABSTRACT:\n" + doc["abstract"]) if doc.get("abstract") else None,
         ("CLAIMS:\n" + doc["claims"]) if doc.get("claims") else None,
-        ("FULL-TEXT DIGEST:\n" + doc["digest"]) if doc.get("digest") else None,
-        ("DESCRIPTION:\n" + doc["description"]) if doc.get("description") else None]))
+        ("DESCRIPTION:\n" + doc["description"]) if doc.get("description") else None,
+        ("FULL-TEXT DIGEST:\n" + doc["digest"]) if doc.get("digest") else None]))
 
 
 def _add_doc_to_notebook(doc_id: int) -> dict:
@@ -665,6 +689,23 @@ def chat(tab_id: int, body: schemas.ChatRequest):
 
     documents = db.list_documents(tab_id, full=True) if body.use_documents else None
     benchmark = db.get_benchmark(tab_id) if body.use_documents else None
+    # FOCUS = candidates loaded with FULL primary text (uncl­ipped) so the model can
+    # quote real claims/[00NN] paragraphs. Sources, priority order: (1) the ones the
+    # user checked; (2) candidates the CURRENT question names (full number or alias
+    # like "850"); (3) STICKY — candidates named in the recent conversation, so a
+    # follow-up that doesn't re-type the number keeps that candidate fully loaded.
+    focus = None
+    if documents:
+        recent_q = " ".join(h.get("text", "") for h in history
+                            if h.get("role") == "q")[-2000:]
+        ordered = list(dict.fromkeys(
+            (body.focus_ids or [])
+            + _auto_focus_ids(body.question, documents)      # current turn (highest priority)
+            + _auto_focus_ids(recent_q, documents)))         # sticky from recent questions
+        if ordered:
+            keep = set(ordered[:MAX_FOCUS_DOCS])
+            focus = [d for d in documents if d["id"] in keep]
+            documents = [d for d in documents if d["id"] not in keep]
     skill_blocks = []
     for name in body.skills:
         content = claude_bridge.load_skill(name)
@@ -674,7 +715,7 @@ def chat(tab_id: int, body: schemas.ChatRequest):
 
     res = claude_bridge.chat(body.question, history=history, documents=documents,
                              sources=nlm_sources, skills=skill_blocks, model=model,
-                             benchmark=benchmark)
+                             benchmark=benchmark, focus=focus, full=body.full)
     if "error" in res:
         out_messages.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
         return {"messages": out_messages, "error": res["error"]}
@@ -684,6 +725,9 @@ def chat(tab_id: int, body: schemas.ChatRequest):
         participants.append({"kind": "benchmark",
                              "title": benchmark.get("number")
                              or f"{len(benchmark.get('files') or [])} file(s)"})
+    if focus:
+        participants.append({"kind": "documents",
+                             "title": f"{len(focus)} focused (full text)"})
     if body.use_documents and documents:
         participants.append({"kind": "documents", "title": f"{len(documents)} candidates"})
     out_messages.append(db.append_message(tab_id, "c", res["answer"], model=model,
