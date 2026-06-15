@@ -50,6 +50,8 @@ class ChatRequest(BaseModel):
     skills: list[str] = []
     use_documents: bool = True
     ask_notebook: bool = False
+    full: bool = False                 # long-form answer; default = 1-2 sentence precise mode
+    focus_ids: list[int] = []          # selected candidates loaded with FULL primary text
 
 
 class AskNotebookRequest(BaseModel):
