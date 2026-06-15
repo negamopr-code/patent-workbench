@@ -16,12 +16,10 @@ h4 { font-size: 13px; margin: 10px 0 6px; }
 .muted { color: var(--muted); font-size: 12px; }
 .hidden { display: none !important; }
 
-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--pane);
-}
-.brand { font-weight: 700; }
-.health { display: flex; gap: 6px; }
+/* health chips live in the tab bar now (the standalone header row was removed
+   to save vertical space); right-aligned and never shrinking so claude/nlm/
+   lessons status stays visible. */
+.health { display: flex; gap: 6px; margin-left: auto; flex-shrink: 0; padding-bottom: 6px; }
 .health .chip { cursor: help; }
 
 .tabbar {
@@ -154,10 +152,21 @@ textarea, select, input[type="text"] {
 .status.pending { animation: pulse 1.2s infinite; }
 
 /* chat pane */
-.pane-chat { display: flex; flex-direction: column; }
+.pane-chat { display: flex; flex-direction: column; position: relative; }
+/* always-visible folding control: hide the toolbar / question box to maximise the answer */
+.chat-fold { position: absolute; top: 4px; right: 4px; z-index: 6; display: flex; gap: 4px; }
+.fold-btn {
+  width: 26px; height: 24px; padding: 0; font-size: 13px; line-height: 1;
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+  background: var(--pane2); color: var(--muted); opacity: .55;
+}
+.fold-btn:hover { opacity: 1; color: var(--accent); }
+.fold-btn.active { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.pane-chat.bar-hidden .chat-toolbar { display: none; }
+.pane-chat.q-hidden .chat-input { display: none; }
 .chat-toolbar {
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  padding-bottom: 8px; padding-right: 60px; border-bottom: 1px solid var(--border);
 }
 .chat-toolbar select { width: auto; }
 .model-pick { display: inline-flex; align-items: center; gap: 3px; font-size: 13px; }
@@ -186,6 +195,7 @@ textarea, select, input[type="text"] {
 .thinking::after { content: "…"; animation: pulse 1s infinite; }
 
 .chat-input { border-top: 1px solid var(--border); padding-top: 8px; }
+.focus-hint { font-size: 12px; color: var(--accent); margin-bottom: 6px; }
 .chat-buttons { display: flex; gap: 8px; align-items: center; margin-top: 6px; justify-content: flex-end; }
 
 /* modal */
@@ -209,9 +219,18 @@ textarea, select, input[type="text"] {
   border-radius: 8px; padding: 8px; margin-top: 6px; }
 #lesson-modal textarea, #lesson-modal select { margin-top: 8px; }
 
+/* Small screens: the grid squeezed the chat into a short bottom row. Stack
+   everything in one scrolling column and give the chat the dominant height so
+   it stays readable; the input panes cap their height and scroll internally. */
 @media (max-width: 1100px) {
-  .main { grid-template-columns: 1fr 1fr; }
-  .pane-chat { grid-column: 1 / -1; }
+  .main {
+    display: flex; flex-direction: column; overflow-y: auto;
+  }
+  .main > .pane { flex: 0 0 auto; }
+  .pane-bm, .pane-docs { max-height: 40vh; }
+  .pane-chat { min-height: 78vh; }
+  /* a collapsed input pane shouldn't reserve the tall slot */
+  .pane.collapsed { max-height: none; }
 }
 
 .doc .score { font-size: 12px; color: var(--accent2); margin: 3px 0; font-weight: 600; }

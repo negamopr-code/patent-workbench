@@ -3,10 +3,19 @@
 
 const $ = id => document.getElementById(id);
 const api = async (path, opts = {}) => {
-  const res = await fetch(path, {
-    headers: opts.body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
-    ...opts,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      headers: opts.body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+  } catch {
+    // connection dropped — e.g. the server restarted or a long job's worker was
+    // killed. Return an error instead of throwing, so callers still clear their
+    // spinner (a stuck "running…" forever is worse than a visible failure).
+    return { error: 'connection lost — the server may have restarted or the job '
+                   + 'was interrupted. Please retry.' };
+  }
   let data;
   try { data = await res.json(); } catch { data = {}; }
   if (!res.ok && !data.error) {
@@ -257,6 +266,7 @@ function savePrefs() {
     skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
     useDocs: $('use-docs').checked,
     askNb: $('ask-nb').checked,
+    full: $('full-analysis').checked,
   }));
 }
 function loadPrefs() {
@@ -269,6 +279,7 @@ function loadPrefs() {
   document.querySelectorAll('#skills input').forEach(i => { i.checked = want.has(i.value); });
   $('use-docs').checked = p.useDocs !== false;
   $('ask-nb').checked = !!p.askNb;
+  $('full-analysis').checked = !!p.full;
   updateSkillsSummary();
 }
 function defaultSkills() {
@@ -314,6 +325,7 @@ async function loadSkills() {
   for (const s of readSelects()) s.onchange = () => { setReadModel(s.value); savePrefs(); };
   $('use-docs').onchange = savePrefs;
   $('ask-nb').onchange = savePrefs;
+  $('full-analysis').onchange = savePrefs;
 }
 function updateSkillsSummary() {
   const n = document.querySelectorAll('#skills input:checked').length;
@@ -337,7 +349,7 @@ function renderDocs(docs) {
       const sel = document.createElement('input');
       sel.type = 'checkbox';
       sel.checked = docSelection.has(d.id);
-      sel.title = 'Select for a scoped deep analysis (🏆 Best match runs only on selected; none selected = whole list)';
+      sel.title = 'Select a candidate to (a) load its FULL primary text into the chat so Claude can quote real claims/[paragraphs], and (b) scope 🏆 Deep compare to it. None selected = whole list, clipped.';
       sel.onchange = () => {
         sel.checked ? docSelection.add(d.id) : docSelection.delete(d.id);
         updateDocSelChip();
@@ -456,6 +468,19 @@ function updateDocSelChip() {
   } else {
     chip.classList.add('hidden');
     if (bar) bar.classList.add('hidden');
+  }
+  updateFocusHint();
+}
+
+function updateFocusHint() {
+  const hint = $('focus-hint');
+  if (!hint) return;
+  if (docSelection.size) {
+    hint.textContent = `🎯 Chat is focused on ${docSelection.size} selected candidate(s) — `
+      + `their full primary text is loaded, so Claude can quote real claims/[paragraphs].`;
+    hint.classList.remove('hidden');
+  } else {
+    hint.classList.add('hidden');
   }
 }
 
@@ -614,6 +639,8 @@ async function sendChat(notebookOnly) {
         skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
         use_documents: $('use-docs').checked,
         ask_notebook: $('ask-nb').checked,
+        full: $('full-analysis').checked,
+        focus_ids: [...docSelection],          // selected candidates → loaded full-text
       }) });
   }
   setBusy(false);
@@ -709,13 +736,50 @@ $('lesson-save').onclick = async () => {
 /* ---------- notebook connect ---------- */
 function renderNbChip(cfg) {
   const chip = $('nb-chip');
-  if (cfg && cfg.notebook_id) {
+  const exportBtn = $('nb-export');
+  const connected = !!(cfg && cfg.notebook_id);
+  if (connected) {
     const n = (cfg.selected_source_ids || []).length;
     chip.textContent = `📓 ${cfg.notebook_title || cfg.notebook_id}` + (n ? ` · ${n} src` : ' · all src')
       + (cfg.auto_add ? ' · 📤auto' : '');
     chip.classList.remove('hidden');
   } else chip.classList.add('hidden');
+  if (exportBtn) exportBtn.classList.toggle('hidden', !connected);
 }
+
+// Bulk-export benchmark + every fetched candidate into the connected notebook,
+// walking past the source cap by offering follow-up notebooks. setStatus(text)
+// reports progress (the modal status line or a transient chat message).
+async function runNotebookSync(setStatus) {
+  setStatus('Exporting benchmark + candidates into the notebook…');
+  let res = await api(`/api/tabs/${activeTab}/notebook/sync`, { method: 'POST' });
+  while (res.full) {
+    setStatus(`Added ${res.added}; notebook is FULL, ${res.remaining} candidate(s) left.`);
+    const st = await api(`/api/tabs/${activeTab}/state`);
+    const title = (st.notebook && st.notebook.notebook_title) || 'notebook';
+    if (!confirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
+    const next = title.replace(/ \((\d+)\)$/, (m, n) => ` (${+n + 1})`);
+    const created = await api(`/api/tabs/${activeTab}/notebook/create`, {
+      method: 'POST', body: JSON.stringify({ title: next === title ? `${title} (2)` : next }) });
+    if (created.error) { setStatus(created.error); return res; }
+    renderNbChip(created.notebook);
+    res = await api(`/api/tabs/${activeTab}/notebook/sync`, { method: 'POST' });
+  }
+  setStatus(res.error
+    ? `Error: ${res.error}`
+    : `Done: ${res.added} exported` + (res.remaining ? `, ${res.remaining} remaining` : '')
+      + ((res.errors || []).length ? ` — errors: ${res.errors.join('; ')}` : ''));
+  refreshDocs();
+  return res;
+}
+
+$('nb-export').onclick = async () => {
+  if (!activeTab) return;
+  const btn = $('nb-export');
+  btn.disabled = true;
+  await runNotebookSync(t => appendMsg({ role: 's', text: `📤 ${t}` }));
+  btn.disabled = false;
+};
 
 $('nb-btn').onclick = async () => {
   $('nb-modal').classList.remove('hidden');
@@ -727,7 +791,10 @@ $('nb-btn').onclick = async () => {
   ]);
   nbState = { notebooks: res.notebooks || [], chosen: null, sources: [], selected: new Set() };
   const current = st.notebook;
-  $('nb-auto-add').checked = !!(current && current.auto_add);
+  // auto-export defaults ON for a fresh connection (the notebook is meant to be a
+  // Claude-quota-independent mirror of the tab's candidates); preserve the user's
+  // choice when re-opening an already-configured notebook.
+  $('nb-auto-add').checked = current ? !!current.auto_add : true;
   $('nb-sync-status').textContent = '';
   const wrap = $('nb-list');
   wrap.innerHTML = '';
@@ -788,29 +855,7 @@ $('src-none').onclick = () => {
   document.querySelectorAll('#nb-sources input').forEach(i => i.checked = false);
   updateSrcCount();
 };
-$('nb-sync').onclick = async () => {
-  $('nb-sync-status').textContent = 'Syncing candidates into the notebook…';
-  let res = await api(`/api/tabs/${activeTab}/notebook/sync`, { method: 'POST' });
-  while (res.full) {
-    $('nb-sync-status').textContent =
-      `Added ${res.added}; notebook is FULL, ${res.remaining} candidate(s) left.`;
-    const st = await api(`/api/tabs/${activeTab}/state`);
-    const title = (st.notebook && st.notebook.notebook_title) || 'notebook';
-    if (!confirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
-    const next = title.replace(/ \((\d+)\)$/, (m, n) => ` (${+n + 1})`);
-    const created = await api(`/api/tabs/${activeTab}/notebook/create`, {
-      method: 'POST', body: JSON.stringify({
-        title: next === title ? `${title} (2)` : next }) });
-    if (created.error) { $('nb-sync-status').textContent = created.error; return; }
-    renderNbChip(created.notebook);
-    res = await api(`/api/tabs/${activeTab}/notebook/sync`, { method: 'POST' });
-  }
-  $('nb-sync-status').textContent = res.error
-    ? `Error: ${res.error}`
-    : `Done: ${res.added} added` + (res.remaining ? `, ${res.remaining} remaining` : '')
-      + ((res.errors || []).length ? ` — errors: ${res.errors.join('; ')}` : '');
-  refreshDocs();
-};
+$('nb-sync').onclick = () => runNotebookSync(t => { $('nb-sync-status').textContent = t; });
 $('nb-import').onclick = async () => {
   if (!confirm('Import the notebook’s sources into this tab? Patent numbers become ' +
                'fetched candidates; other sources are imported as text documents. ' +
@@ -833,15 +878,21 @@ $('nb-disconnect').onclick = async () => {
 };
 $('nb-save').onclick = async () => {
   if (!nbState.chosen) { $('nb-modal').classList.add('hidden'); return; }
+  const autoAdd = $('nb-auto-add').checked;
   const res = await api(`/api/tabs/${activeTab}/notebook`, {
     method: 'PUT', body: JSON.stringify({
       notebook_id: nbState.chosen.id,
       notebook_title: nbState.chosen.title,
       source_ids: [...nbState.selected],
-      auto_add: $('nb-auto-add').checked,
+      auto_add: autoAdd,
     }) });
   $('nb-modal').classList.add('hidden');
   renderNbChip(res.notebook);
+  // with auto-export on, immediately push the tab's existing benchmark+candidates
+  // (auto_add only mirrors FUTURE additions, so backfill the current ones now).
+  if (autoAdd && res.notebook && res.notebook.notebook_id) {
+    await runNotebookSync(t => appendMsg({ role: 's', text: `📤 ${t}` }));
+  }
 };
 
 /* ---------- collapsible panes (give the chat more room) ---------- */
@@ -850,6 +901,9 @@ const COLLAPSE_CLASS = { bm: 'bm-collapsed', docs: 'cand-collapsed' };
 let layout = {};
 try { layout = JSON.parse(localStorage.getItem('pb-layout') || '{}'); } catch {}
 
+// chat folds: hide the model/skills toolbar or the question box to maximise the answer
+const CHAT_FOLD = { bar: { cls: 'bar-hidden', btn: 'toggle-bar' },
+                    q:   { cls: 'q-hidden',   btn: 'toggle-q' } };
 function applyLayout() {
   const main = $('main');
   for (const key of Object.keys(PANE_OF)) {
@@ -860,6 +914,13 @@ function applyLayout() {
     const btn = document.querySelector(`.collapse-btn[data-pane="${key}"]`);
     if (btn) { btn.textContent = collapsed ? '▸' : '▾'; }
   }
+  const chatPane = document.querySelector('.pane-chat');
+  for (const [key, { cls, btn }] of Object.entries(CHAT_FOLD)) {
+    const hidden = !!layout[btn];
+    if (chatPane) chatPane.classList.toggle(cls, hidden);
+    const b = $(btn);
+    if (b) b.classList.toggle('active', hidden);
+  }
 }
 function togglePane(key) {
   layout[key] = !layout[key];
@@ -868,6 +929,10 @@ function togglePane(key) {
 }
 for (const btn of document.querySelectorAll('.collapse-btn')) {
   btn.onclick = () => togglePane(btn.dataset.pane);
+}
+for (const { btn } of Object.values(CHAT_FOLD)) {
+  const b = $(btn);
+  if (b) b.onclick = () => togglePane(btn);
 }
 // a collapsed strip is itself clickable to expand again
 for (const key of Object.keys(PANE_OF)) {

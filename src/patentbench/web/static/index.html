@@ -7,14 +7,10 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <div class="brand">📜 Patent Workbench</div>
-  <div id="health" class="health"></div>
-</header>
-
 <nav id="tabbar" class="tabbar">
   <div id="tabs" class="tabs"></div>
   <button id="tab-add" class="tab-add" title="New tab">＋</button>
+  <div id="health" class="health" title="📜 Patent Workbench — service status"></div>
 </nav>
 
 <main id="main" class="main hidden">
@@ -78,6 +74,10 @@
 
   <!-- RIGHT: chat -->
   <section class="pane pane-chat">
+    <div class="chat-fold">
+      <button id="toggle-bar" class="fold-btn" title="Hide/show the model & skills line (maximise the answer)">🧰</button>
+      <button id="toggle-q" class="fold-btn" title="Hide/show the question box (maximise the answer)">⌨️</button>
+    </div>
     <div class="chat-toolbar">
       <label class="model-pick" title="Model that ANSWERS chat questions and compiles deep-compare rankings. The document-reading / OCR model lives on the 🎯 Benchmark and 📚 Candidates panes.">💬<select id="model"></select></label>
       <details class="skills-dd">
@@ -85,14 +85,17 @@
         <div id="skills" class="skills-list"></div>
       </details>
       <label class="check"><input type="checkbox" id="use-docs" checked> 📄 Use documents</label>
+      <label class="check" title="OFF (default): precise 1–2 sentence answers with [paragraph]/claim citations. ON: full long-form analysis."><input type="checkbox" id="full-analysis"> 📝 Full analysis</label>
       <button id="nb-btn" class="btn small">🔗 Notebook…</button>
       <span id="nb-chip" class="chip hidden"></span>
+      <button id="nb-export" class="btn small hidden" title="Export this tab's benchmark + candidates to the connected NotebookLM notebook">📤 Export</button>
     </div>
 
     <div id="chat" class="chat"></div>
 
     <div class="chat-input">
-      <textarea id="q" rows="3" placeholder="Ask about this tab's documents…"></textarea>
+      <div id="focus-hint" class="focus-hint hidden"></div>
+      <textarea id="q" rows="3" placeholder="Ask about this tab's documents… (name a patent — e.g. 850 or CN113964850 — and its full text loads automatically)"></textarea>
       <div class="chat-buttons">
         <button id="best-match" class="btn small" title="Pre-fill a ranking question">🏆 Best match</button>
         <label class="check small"><input type="checkbox" id="ask-nb"> include NotebookLM</label>
