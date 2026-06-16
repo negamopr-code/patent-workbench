@@ -96,10 +96,16 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN score REAL")
             con.execute("ALTER TABLE documents ADD COLUMN score_note TEXT")
             con.execute("ALTER TABLE documents ADD COLUMN scored_at INTEGER")
+        if "score_model" not in dcols:      # which model did the last full-text read
+            con.execute("ALTER TABLE documents ADD COLUMN score_model TEXT")
         if "nlm_source_notebook" not in dcols:
             con.execute("ALTER TABLE documents ADD COLUMN nlm_source_notebook TEXT")
         if "nlm_source_id" not in dcols:   # which NLM source this doc was imported from
             con.execute("ALTER TABLE documents ADD COLUMN nlm_source_id TEXT")
+        if "nlm_score" not in dcols:        # NotebookLM's own match rating (vs Claude's score)
+            con.execute("ALTER TABLE documents ADD COLUMN nlm_score REAL")
+            con.execute("ALTER TABLE documents ADD COLUMN nlm_score_note TEXT")
+            con.execute("ALTER TABLE documents ADD COLUMN nlm_scored_at INTEGER")
         bmcols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "nlm_source_notebook" not in bmcols:   # benchmark mirrored into which notebook
             con.execute("ALTER TABLE benchmark ADD COLUMN nlm_source_notebook TEXT")
@@ -199,7 +205,8 @@ def imported_source_ids(tab_id: int) -> set[str]:
 def list_documents(tab_id: int, full: bool = False) -> list[dict]:
     cols = ("*" if full else
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
-            "score, score_note, scored_at, nlm_source_notebook, "
+            "score, score_note, scored_at, score_model, nlm_score, nlm_score_note, nlm_scored_at, "
+            "nlm_source_notebook, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
             "length(description) AS description_len, length(digest) AS digest_len")
     with _conn() as c:

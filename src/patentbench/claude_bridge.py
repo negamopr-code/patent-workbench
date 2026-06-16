@@ -30,8 +30,16 @@ EXTRACT_MODEL = os.environ.get("CLAUDE_EXTRACT_MODEL", "claude-haiku-4-5")
 # quality demands it. Misread-digit risk on cheap OCR is mitigated by the
 # two-pass disagreement check, which flags inconsistent numbers as uncertain.
 READ_MODEL = os.environ.get("PB_READ_MODEL", "claude-haiku-4-5")
-OCR_MODEL = os.environ.get("PB_OCR_MODEL", READ_MODEL)
+# Pulling patent NUMBERS off a photo is adversarial: one misread digit silently
+# routes to a real-but-WRONG patent, and the two-pass disagreement check is no
+# safety net when the model can't read the image at all — it just flags EVERY
+# number uncertain (seen live 2026-06-16: haiku returned 30 garbage numbers, all
+# ⚠). So number-OCR is decoupled from the cheap reading default and uses a strong
+# vision model. Bulk full-text transcription stays on READ_MODEL — there context
+# self-corrects and volume makes cost matter. Models too weak for digit OCR:
 TRANSCRIBE_MODEL = os.environ.get("PB_TRANSCRIBE_MODEL", READ_MODEL)
+OCR_MODEL = os.environ.get("PB_OCR_MODEL", "claude-fable-5")
+WEAK_OCR_MODELS = {"claude-haiku-4-5"}
 CHAT_TIMEOUT = float(os.environ.get("CLAUDE_CHAT_TIMEOUT", "240"))
 SKILLS_DIR = os.environ.get("CLAUDE_SKILLS_DIR", os.path.expanduser("~/.claude/skills"))
 
@@ -570,3 +578,33 @@ def run_extract(prompt: str, allow_read: bool = False, model: str | None = None)
     open an image/file). Returns {answer, model} | {error}."""
     extra = ["--allowedTools", "Read"] if allow_read else None
     return _run_claude(prompt, model or EXTRACT_MODEL, extra_args=extra)
+
+
+RECONCILE_PROMPT = (
+    "Two AI engines independently rated how closely each CANDIDATE patent matches "
+    "the BENCHMARK invention (0–10): 🤖 Claude read each candidate's FULL text vs "
+    "the benchmark; 📓 NotebookLM rated it grounded on its stored source. They "
+    "disagree on the candidates below. Using ONLY the benchmark and the short "
+    "rating notes given (do NOT ask for more text), explain CONCISELY where each "
+    "gap comes from — typically: NotebookLM rewards shared FIELD/application or "
+    "retrieval-surface wording, while Claude weighs the actual CLAIM-LEVEL "
+    "mechanism; or one engine saw a feature the other missed.\n\n"
+    "Output one line per candidate, then a final 1–2 sentence PATTERN:\n"
+    "<number>: <why they differ> → more credible: <Claude|NLM|middle> (~<n>/10)\n"
+    "PATTERN: <the systematic reason NLM and Claude diverge here>"
+)
+
+
+def reconcile(benchmark_summary: str, items: list[dict], model: str | None = None) -> dict:
+    """Explain — in ONE cheap call over the already-stored short notes (no full
+    texts) — why Claude and NotebookLM disagree. items=[{number,title,score,
+    score_note,nlm_score,nlm_score_note}]. Returns {answer, model} | {error}."""
+    lines = []
+    for it in items:
+        lines.append(
+            f"- {it['number']} \"{(it.get('title') or '')[:80]}\": "
+            f"🤖 Claude {it.get('score')}/10 [{it.get('score_note') or '—'}] vs "
+            f"📓 NLM {it.get('nlm_score')}/10 [{it.get('nlm_score_note') or '—'}]")
+    prompt = (RECONCILE_PROMPT + "\n\nBENCHMARK:\n" + (benchmark_summary or "")[:4000]
+              + "\n\nDISAGREEMENTS:\n" + "\n".join(lines))
+    return _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)

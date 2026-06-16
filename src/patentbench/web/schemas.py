@@ -64,6 +64,17 @@ class DeepCompareRequest(BaseModel):
     question: str | None = Field(default=None, max_length=MAX_QUESTION)
     doc_ids: list[int] | None = None   # subset to analyze; None/empty = all candidates
     reading_model: str | None = None   # model that reads full texts; None = cheapest
+    skip_scored: bool = False          # CONTINUE mode: only read candidates not yet full-read
+
+
+class NlmRateRequest(BaseModel):
+    force: bool = False                 # re-rate candidates that already have an NLM score
+    doc_ids: list[int] | None = None   # subset to rate; None/empty = every fetched candidate
+
+
+class ReconcileRequest(BaseModel):
+    model: str | None = None           # cheap model by default — this is one small call
+    min_delta: float = 2.0             # only candidates whose two scores differ by >= this
 
 
 class LessonCreate(BaseModel):

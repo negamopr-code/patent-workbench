@@ -8,6 +8,15 @@ def test_extract_bare_numbers():
     assert patents.extract_candidates(text) == ["US10395648B1", "EP3667902A1", "CN114853847"]
 
 
+def test_extract_lowercase_numbers_accepted():
+    # hand-typed lowercase must work the same as uppercase
+    assert patents.extract_candidates("cn120200454") == ["CN120200454"]
+    assert patents.extract_candidates("us10395648b1") == ["US10395648B1"]
+    assert patents.extract_candidates("Cn 120200454 a") == ["CN120200454"]
+    # but lowercase prose must still NOT be mistaken for a number
+    assert patents.extract_candidates("in 2023 the 2024 report") == []
+
+
 def test_extract_from_google_patents_url():
     url = "https://patents.google.com/patent/CN120638382A/en?oq=cn202510591293"
     nums = patents.extract_candidates(url)

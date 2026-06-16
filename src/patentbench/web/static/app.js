@@ -31,6 +31,9 @@ let tabs = [];
 let activeTab = null;
 let docsPoll = null;
 let bmPoll = null;
+let ratePoll = null;
+let readPoll = null;
+let readWasRunning = false;
 let docSelection = new Set();   // candidate ids picked for a scoped deep compare
 let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
@@ -112,13 +115,36 @@ $('tab-add').onclick = async () => {
   const name = prompt('Tab name (project name):', `Project ${tabs.length + 1}`);
   if (name === null) return;
   const t = await api('/api/tabs', { method: 'POST', body: JSON.stringify({ name: name || 'Untitled' }) });
+  // Point the hash at the new tab BEFORE reloading so loadTabs() selects it directly.
+  // (Calling loadTabs() — which auto-selects — and selectTab() together raced two
+  //  concurrent /state fetches, letting the old tab's content paint into the new one.)
+  activeTab = null;
+  if (t.id) location.hash = t.id;
   await loadTabs();
-  if (t.id) selectTab(t.id);
 };
 
 function showEmpty() {
   $('main').classList.add('hidden');
   $('empty').classList.remove('hidden');
+}
+
+// Clear the transient, non-persisted UI that belongs to the tab we are leaving
+// (open OCR candidate list, status lines, draft inputs) so a freshly-selected
+// project never shows leftovers from the previous one.
+function resetTransientUI() {
+  clearTimeout(bmPoll);
+  clearTimeout(docsPoll);
+  clearTimeout(ratePoll);
+  clearTimeout(readPoll);
+  readWasRunning = false;
+  $('candidates').classList.add('hidden');
+  $('cand-list').innerHTML = '';
+  $('upload-status').textContent = '';
+  $('bm-status').textContent = '';
+  $('rate-status').textContent = '';
+  $('read-status').textContent = '';
+  for (const id of ['q', 'in-text', 'bm-text']) { const el = $(id); if (el) el.value = ''; }
+  updateDocSelChip();   // docSelection was reset by selectTab → hides chip/hint/deep-bar
 }
 
 async function selectTab(id) {
@@ -129,13 +155,17 @@ async function selectTab(id) {
   $('empty').classList.add('hidden');
   renderTabs();
   loadPrefs();
+  resetTransientUI();
   const st = await api(`/api/tabs/${id}/state`);
+  if (activeTab !== id) return;   // a newer selectTab() won the race — don't clobber its render
   if (st.error) { alert(st.error); return; }
   renderBenchmark(st.benchmark);
   renderDocs(st.documents || []);
   renderChat(st.messages || []);
   renderNbChip(st.notebook);
   scheduleDocsPoll(st.documents || []);
+  pollRate();                     // resume showing progress if an NLM rating job is in flight
+  pollRead();                     // resume showing progress if a Claude deep-read is in flight
 }
 
 /* ---------- benchmark (reference document) ---------- */
@@ -333,13 +363,75 @@ function updateSkillsSummary() {
 }
 
 /* ---------- documents ---------- */
-function renderDocs(docs) {
+let docsFilter = 'all';      // 'all' | 'unfetched' — quick view of pending/error only
+let docsSort = 'combined';   // 'combined' | 'claude' | 'nlm' | 'delta' — palmares ranking key
+// Combined ("common") score: average of the two engines when both rated, else the
+// single available score. Ranking by this puts documents BOTH engines like on top.
+function combinedScore(d) {
+  if (d.score != null && d.nlm_score != null) return (d.score + d.nlm_score) / 2;
+  return d.score ?? d.nlm_score ?? null;
+}
+function scoreSortValue(d, key) {
+  if (key === 'nlm') return d.nlm_score ?? -1;
+  if (key === 'delta') return (d.score != null && d.nlm_score != null) ? Math.abs(d.score - d.nlm_score) : -1;
+  if (key === 'claude') return d.score ?? -1;
+  return combinedScore(d) ?? -1;   // 'combined' (default)
+}
+let lastDocs = [];
+function renderDocs(allDocs) {
+  lastDocs = allDocs;
   const wrap = $('docs');
   wrap.innerHTML = '';
-  $('doc-count').textContent = docs.length || '';
-  // deep-compare scores define the order: best fit first, unscored after (by insertion)
-  docs = [...docs].sort((a, b) =>
-    (b.score ?? -1) - (a.score ?? -1) || a.id - b.id);
+  $('doc-count').textContent = allDocs.length || '';
+
+  // "Nutshell" summary: counts by status + a one-click filter to see ONLY the
+  // not-fetched ones (pending/error) without scrolling the whole list.
+  const counts = { fetched: 0, pending: 0, error: 0 };
+  for (const d of allDocs) counts[d.status] = (counts[d.status] || 0) + 1;
+  const unfetched = (counts.pending || 0) + (counts.error || 0);
+  // surface the "Why the gap?" explainer only when there ARE disagreements (≥2)
+  const disagree = allDocs.filter(d => d.score != null && d.nlm_score != null && Math.abs(d.score - d.nlm_score) >= 2).length;
+  const rcl = $('reconcile');
+  if (rcl) { rcl.classList.toggle('hidden', !disagree); rcl.textContent = `🔍 Why the gap? (${disagree})`; }
+  // surface "Continue deep-read" only when some fetched candidates are NOT yet full-read
+  const unread = allDocs.filter(d => d.status === 'fetched' && d.score == null).length;
+  const cont = $('claude-continue');
+  if (cont) { cont.classList.toggle('hidden', !unread); cont.textContent = `▶️ Continue deep-read (${unread} left)`; }
+  if (!unfetched && docsFilter === 'unfetched') docsFilter = 'all';
+  if (allDocs.length) {
+    const bar = document.createElement('div');
+    bar.className = 'docs-summary';
+    bar.innerHTML =
+      `<span class="chip ok" title="fetched & ready">✓ ${counts.fetched || 0}</span>`
+      + (counts.pending ? `<span class="chip warn" title="still fetching">⏳ ${counts.pending}</span>` : '')
+      + (counts.error ? `<span class="chip err" title="failed to fetch — check the number/kind code">⚠ ${counts.error}</span>` : '');
+    if (unfetched) {
+      const t = document.createElement('button');
+      t.className = 'btn small';
+      t.textContent = docsFilter === 'unfetched' ? '↩ show all' : `🔎 show ${unfetched} not-fetched`;
+      t.onclick = () => { docsFilter = docsFilter === 'unfetched' ? 'all' : 'unfetched'; renderDocs(allDocs); };
+      bar.appendChild(t);
+    }
+    // sort the palmares by Claude, NotebookLM, or biggest disagreement
+    if (allDocs.some(d => d.nlm_score != null)) {
+      const sortSel = document.createElement('select');
+      sortSel.className = 'sort-sel';
+      sortSel.title = 'Rank candidates by';
+      for (const [v, label] of [['combined', '🥇 by combined'], ['claude', '🤖 by Claude'], ['nlm', '📓 by NLM'], ['delta', 'Δ by disagreement']]) {
+        const o = document.createElement('option'); o.value = v; o.textContent = label;
+        if (v === docsSort) o.selected = true;
+        sortSel.appendChild(o);
+      }
+      sortSel.onchange = () => { docsSort = sortSel.value; renderDocs(allDocs); };
+      bar.appendChild(sortSel);
+    }
+    wrap.appendChild(bar);
+  }
+
+  // ranking ("palmares"): chosen score first, ties/unscored after (by insertion)
+  let docs = [...allDocs].sort((a, b) =>
+    scoreSortValue(b, docsSort) - scoreSortValue(a, docsSort) || a.id - b.id);
+  if (docsFilter === 'unfetched') docs = docs.filter(d => d.status !== 'fetched');
   for (const d of docs) {
     const el = document.createElement('div');
     el.className = 'doc';
@@ -378,13 +470,40 @@ function renderDocs(docs) {
       t.className = 'title'; t.textContent = d.title;
       el.appendChild(t);
     }
-    if (d.score != null) {
+    if (d.score != null || d.nlm_score != null) {
       const sc = document.createElement('div');
       sc.className = 'score';
-      sc.textContent = `🏆 ${d.score}/10` + (d.score_note ? ` — ${d.score_note}` : '');
-      sc.title = 'Match score vs the benchmark from the last full-text deep compare'
-        + (d.scored_at ? ` (${new Date(d.scored_at * 1000).toLocaleString()})` : '');
+      const parts = [];
+      // combined ("common") score leads when both engines rated it
+      if (d.score != null && d.nlm_score != null) parts.push(`<span class="combined">🥇 ${combinedScore(d).toFixed(1)}</span>`);
+      if (d.score != null) parts.push(`🤖 ${d.score}/10`);
+      if (d.nlm_score != null) parts.push(`📓 ${d.nlm_score}/10`);
+      // Δ flags where the two engines disagree (≥2 points apart)
+      if (d.score != null && d.nlm_score != null) {
+        const delta = Math.abs(d.score - d.nlm_score);
+        parts.push(`<span class="delta ${delta >= 2 ? 'big' : ''}">Δ ${delta.toFixed(1)}</span>`);
+      }
+      sc.innerHTML = parts.join(' · ');
+      const note = d.score_note || d.nlm_score_note;
+      if (note) { const n = document.createElement('span'); n.className = 'score-note'; n.textContent = ` — ${note}`; sc.appendChild(n); }
+      sc.title = '🤖 Claude (deep compare) vs 📓 NotebookLM rating, both 0–10 vs the benchmark.'
+        + (d.scored_at ? `\nClaude scored ${new Date(d.scored_at * 1000).toLocaleString()}` : '')
+        + (d.nlm_scored_at ? `\nNLM scored ${new Date(d.nlm_scored_at * 1000).toLocaleString()}` : '');
       el.appendChild(sc);
+      // when + which model did the last full read (so you know what's stale)
+      if (d.scored_at || d.score_model) {
+        const r = document.createElement('div');
+        r.className = 'read-meta';
+        const when = d.scored_at ? new Date(d.scored_at * 1000).toLocaleString() : '—';
+        r.textContent = `🤖 full-read ${when}` + (d.score_model ? ` · ${d.score_model.replace('claude-', '')}` : '');
+        el.appendChild(r);
+      }
+    } else if (d.status === 'fetched') {
+      // fetched but never full-read — make that visible so it's clearly pending a read
+      const r = document.createElement('div');
+      r.className = 'read-meta muted';
+      r.textContent = '🤖 not yet full-read';
+      el.appendChild(r);
     }
     if (d.status === 'fetched') {
       const sz = document.createElement('div');
@@ -464,6 +583,8 @@ function updateDocSelChip() {
     if (bar) {
       bar.classList.remove('hidden');
       $('deep-selected').textContent = `🏆 Deep-analyse ${docSelection.size} selected`;
+      const nr = $('nlm-rate-selected');
+      if (nr) nr.textContent = `📓 NLM-rate ${docSelection.size} selected`;
     }
   } else {
     chip.classList.add('hidden');
@@ -517,22 +638,36 @@ dz.ondragover = e => { e.preventDefault(); dz.classList.add('drag'); };
 dz.ondragleave = () => dz.classList.remove('drag');
 dz.ondrop = e => {
   e.preventDefault(); dz.classList.remove('drag');
-  if (e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
 };
-$('in-file').onchange = e => { if (e.target.files[0]) uploadFile(e.target.files[0]); };
+$('in-file').onchange = e => { if (e.target.files.length) uploadFiles(e.target.files); };
 
-async function uploadFile(file) {
-  $('upload-status').textContent = `Extracting numbers from ${file.name}… (images go through Claude OCR, ~30 s)`;
+async function uploadFiles(fileList) {
+  const files = [...fileList];
+  const label = files.length === 1 ? files[0].name : `${files.length} files`;
+  $('upload-status').textContent =
+    `Reading numbers from ${label}… (each photo gets two parallel Claude OCR passes, ` +
+    `files are read concurrently — the rest of the app stays usable while it works)`;
   const fd = new FormData();
-  fd.append('file', file);
+  for (const f of files) fd.append('files', f);
   fd.append('reading_model', readModelValue());
   const res = await api(`/api/tabs/${activeTab}/upload`, { method: 'POST', body: fd });
   $('in-file').value = '';
   if (res.error) { $('upload-status').textContent = `Error: ${res.error}`; return; }
-  if (!res.numbers.length) { $('upload-status').textContent = 'No patent numbers found in the file.'; return; }
+  if (!res.numbers.length) { $('upload-status').textContent = `No patent numbers found in ${label}.`; return; }
   const unc = (res.uncertain || []).length;
-  $('upload-status').textContent = `Found ${res.numbers.length} number(s) in ${file.name}` +
-    (unc ? ` — ⚠ ${unc} read inconsistently between two OCR passes, verify them against the photo:` : ':');
+  const via = res.model ? ` via ${res.model.replace('claude-', '')}` : '';
+  const fileNote = files.length > 1 ? ` across ${files.length} files` : '';
+  let msg = `Found ${res.numbers.length} number(s)${fileNote}${via}` +
+    (unc ? ` — ⚠ ${unc} read inconsistently between the two OCR passes, verify them against the photo:` : ':');
+  // When MOST numbers disagree between passes the model can't actually read these
+  // images — escalating to a stronger reading model (📖, e.g. opus) and re-uploading
+  // beats hand-fixing dozens of wrong numbers.
+  if (unc >= Math.max(3, res.numbers.length * 0.5)) {
+    msg += ` Many numbers are uncertain — these photos are hard to read. Pick a stronger 📖 reading model (e.g. opus) and re-upload, or crop/zoom the images.`;
+  }
+  if ((res.errors || []).length) msg += ` (couldn't read: ${res.errors.join('; ')})`;
+  $('upload-status').textContent = msg;
   showCandidates(res.numbers, res.uncertain || []);
 }
 
@@ -655,24 +790,24 @@ async function sendChat(notebookOnly) {
 $('ask-claude').onclick = () => sendChat(false);
 $('ask-notebook').onclick = () => sendChat(true);
 
-async function runDeepCompare(forceSelected) {
+async function runDeepCompare(idsArg, skipScored) {
+  // idsArg: array of doc ids → those candidates; null/[] → EVERY candidate
+  // skipScored: CONTINUE mode — read only candidates not yet full-read this batch
   if (!activeTab) return;
-  const ids = [...docSelection];
-  if (forceSelected && !ids.length) {
-    alert('No candidates are checked. Tick the box on the candidates you want analysed.');
-    return;
+  const ids = idsArg || [];
+  let scope = ids.length ? `the ${ids.length} SELECTED candidate(s)` : 'EVERY candidate';
+  if (skipScored) {
+    const todo = lastDocs.filter(d => d.status === 'fetched' && d.score == null).length;
+    if (!todo) { alert('All candidates have already been full-read by Claude. Use 🤖 Claude deep-read all to re-read.'); return; }
+    scope = `the ${todo} candidate(s) NOT yet full-read (most promising first)`;
   }
-  const scope = ids.length ? `the ${ids.length} SELECTED candidate(s)` : 'EVERY candidate';
-  if (!confirm(`Deep compare: the 📖 reading model reads ${scope} in FULL against ` +
-               `the benchmark, then the 💬 model (${$('model').value.replace('claude-', '')}) compiles the answer. ` +
+  if (!confirm(`Deep read: the 📖 reading model reads ${scope} in FULL against ` +
+               `the benchmark (most-promising first)` +
+               (skipScored ? ', skipping the ones already read' : '') + '. ' +
                (ids.length ? '' : 'Takes a few minutes. ') + 'Start?')) return;
   const q = $('q').value.trim();          // optional custom task; default ranking otherwise
   $('q').value = '';
   const tabAtSend = activeTab;
-  appendMsg({ role: 'q', text: `[Deep compare — full text, ${ids.length || 'all'} candidate(s)]${q ? '\n' + q : ''}` });
-  setBusy(true, ids.length
-    ? `Deep comparing ${ids.length} selected candidate(s) at full text`
-    : 'Deep comparing — reading every candidate in full');
   const res = await api(`/api/tabs/${tabAtSend}/deep-compare`, {
     method: 'POST', body: JSON.stringify({
       model: $('model').value,
@@ -680,20 +815,120 @@ async function runDeepCompare(forceSelected) {
       question: q || null,
       doc_ids: ids.length ? ids : null,
       reading_model: readModelValue(),
+      skip_scored: !!skipScored,
     }) });
-  setBusy(false);
   if (activeTab !== tabAtSend) return;
-  refreshDocs();                       // new scores re-order the candidates column
-  if (res.error && !(res.messages || []).length) {
-    appendMsg({ role: 's', text: `Error: ${res.error}` });
-    return;
+  if (res.error && !res.started) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  for (const m of res.messages || []) appendMsg(m);     // "nothing to continue" case
+  if (res.started || res.running) {
+    await reloadChat();                  // show the [Deep …] line the job logged
+    pollRead();                          // live progress + reload-safe (re-attaches on page load)
   }
-  for (const m of res.messages || []) appendMsg(m);
 }
 
-$('best-match').onclick = () => runDeepCompare(false);
-$('deep-selected').onclick = () => runDeepCompare(true);
+// Reload-safe background deep-read: poll status, fill scores live, post the ranking
+// to chat when done. Re-attaches on page load via selectTab, so a reload never
+// interrupts it (the job runs server-side regardless).
+async function pollRead() {
+  clearTimeout(readPoll);
+  if (!activeTab) return;
+  const tabAt = activeTab;
+  const s = await api(`/api/tabs/${activeTab}/deep-compare/status`);
+  if (activeTab !== tabAt) return;
+  const el = $('read-status'); el.classList.remove('muted');
+  if (s.running) {
+    readWasRunning = true;
+    el.textContent = `🤖 deep-reading ${s.done}/${s.total}… (scores land below; safe to reload)`;
+    refreshDocs();
+    readPoll = setTimeout(pollRead, 5000);
+  } else if (readWasRunning) {
+    readWasRunning = false;
+    el.textContent = `✓ deep-read finished — ranking posted to chat`;
+    refreshDocs();
+    reloadChat();
+  } else {
+    el.classList.add('muted'); el.textContent = '';
+  }
+}
+async function reloadChat() {
+  if (!activeTab) return;
+  const tabAt = activeTab;
+  const st = await api(`/api/tabs/${activeTab}/state`);
+  if (activeTab === tabAt && !st.error) renderChat(st.messages || []);
+}
+
+$('best-match').onclick = () => runDeepCompare(docSelection.size ? [...docSelection] : null);
+$('claude-rate-all').onclick = () => runDeepCompare(null);            // re-read EVERY candidate
+$('claude-continue').onclick = () => runDeepCompare(null, true);      // only the not-yet-read ones
+$('deep-selected').onclick = () => {
+  if (!docSelection.size) { alert('No candidates are checked. Tick the box on the candidates you want analysed.'); return; }
+  runDeepCompare([...docSelection]);
+};
 $('deep-clear').onclick = () => { docSelection = new Set(); refreshDocs(); };
+
+/* ---------- NotebookLM rating (palmares: 📓 NLM vs 🤖 Claude) ---------- */
+async function startNlmRate(ids, force) {
+  if (!activeTab) return;
+  let scope;
+  if (ids && ids.length) {
+    scope = `the ${ids.length} selected candidate(s) (re-rating them)`;
+  } else {
+    // "all" skips candidates already rated by NLM — only the rest are queried
+    const fetched = lastDocs.filter(d => d.status === 'fetched');
+    const already = fetched.filter(d => d.nlm_score != null).length;
+    const todo = fetched.length - already;
+    if (!todo) { alert(`All ${fetched.length} candidates are already NLM-rated. Use “📓 NLM-rate selected” to re-rate specific ones.`); return; }
+    scope = `${todo} not-yet-rated candidate(s) (skipping ${already} already rated)`;
+  }
+  if (!confirm(`Ask NotebookLM to rate ${scope} against the benchmark? One query per candidate `
+    + '— runs in the background; scores fill in live and you can keep working.')) return;
+  const res = await api(`/api/tabs/${activeTab}/nlm-rate`, {
+    method: 'POST', body: JSON.stringify({ doc_ids: ids && ids.length ? ids : null, force }) });
+  if (res.error) { $('rate-status').textContent = `Error: ${res.error}`; return; }
+  pollRate();
+}
+$('nlm-rate').onclick = () => startNlmRate(null, false);          // all (incremental)
+$('nlm-rate-selected').onclick = () => {
+  if (!docSelection.size) { alert('No candidates are checked. Tick the box on the candidates you want NLM to rate.'); return; }
+  startNlmRate([...docSelection], true);                          // re-rate the chosen ones now
+};
+$('reconcile').onclick = async () => {
+  if (!activeTab) return;
+  const btn = $('reconcile'); btn.disabled = true;
+  appendMsg({ role: 'q', text: 'Why do 📓 NotebookLM and 🤖 Claude disagree on some candidates?' });
+  setBusy(true, 'Explaining the score gaps (one cheap call over the stored notes)');
+  const res = await api(`/api/tabs/${activeTab}/reconcile`, {
+    method: 'POST', body: JSON.stringify({ min_delta: 2 }) });
+  setBusy(false); btn.disabled = false;
+  if (res.error && !(res.messages || []).length) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  for (const m of res.messages || []) appendMsg(m);
+};
+async function pollRate() {
+  clearTimeout(ratePoll);
+  const tabAt = activeTab;
+  const s = await api(`/api/tabs/${activeTab}/nlm-rate/status`);
+  if (activeTab !== tabAt) return;
+  const el = $('rate-status');
+  el.classList.remove('muted', 'err');
+  if (s.running) {
+    const left = Math.max(0, (s.total || 0) - s.done);
+    el.textContent = `📓 rating ${s.done}/${s.total || '…'}… (NotebookLM is slow — ~${Math.max(1, Math.round(left * 0.4))} min left; scores appear below as they land)`;
+    refreshDocs();                       // scores fill in live as the palmares updates
+    ratePoll = setTimeout(pollRate, 5000);
+  } else if (s.total) {
+    const unscored = (s.total || 0) - (s.rated || 0);
+    if (s.rated) {
+      el.textContent = `📓 done — rated ${s.rated}/${s.total}` + (unscored ? `, ${unscored} unscored (click again to retry those)` : ' ✓');
+    } else {
+      el.classList.add('err');
+      el.textContent = `📓 NotebookLM returned no scores (0/${s.total}) — it may have rejected the queries or be rate-limited. Try again, or check 📓 connectivity.`;
+    }
+    refreshDocs();
+  } else {
+    el.classList.add('muted');
+    el.textContent = '';
+  }
+}
 $('q').onkeydown = e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat(false);
 };

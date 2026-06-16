@@ -30,7 +30,19 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(nlm_bridge, "list_sources",
                         lambda nb, force=False: {"sources": [{"id": "s1", "title": "doc1"},
                                                              {"id": "s2", "title": "doc2"}]})
+    # auto-create-notebook is exercised by its own tests with stubs; keep it off by
+    # default so the other tests stay notebook-less unless they opt in.
+    monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", False)
     return TestClient(api.app)
+
+
+def _wait_read(client, tid, tries=100):
+    """Block until the background deep-read job for a tab has finished."""
+    import time
+    for _ in range(tries):
+        if not client.get(f"/api/tabs/{tid}/deep-compare/status").json()["running"]:
+            return
+        time.sleep(0.05)
 
 
 def test_health(client):
@@ -84,12 +96,249 @@ def test_tab_rename_delete(client):
 def test_upload_txt(client, tmp_path):
     tab = client.post("/api/tabs", json={"name": "Up"}).json()
     r = client.post(f"/api/tabs/{tab['id']}/upload",
-                    files={"file": ("list.txt", b"US10395648B1\nEP3667902A1", "text/plain")}).json()
+                    files=[("files", ("list.txt", b"US10395648B1\nEP3667902A1", "text/plain"))]).json()
     assert r["numbers"] == ["US10395648B1", "EP3667902A1"]
     # confirm-add the extracted numbers
     r2 = client.post(f"/api/tabs/{tab['id']}/documents",
                      json={"numbers": r["numbers"], "source": "image"}).json()
     assert len(r2["inserted"]) == 2
+
+
+def test_upload_many_files_aggregates_and_dedupes(client):
+    tab = client.post("/api/tabs", json={"name": "Bulk"}).json()
+    r = client.post(f"/api/tabs/{tab['id']}/upload", files=[
+        ("files", ("a.txt", b"US10395648B1\nEP3667902A1", "text/plain")),
+        ("files", ("b.txt", ("EP3667902A1\nCN114853847B"), "text/plain")),  # 1 dup, 1 new
+    ]).json()
+    # union across files, first-seen order, deduped (CN…B canonicalizes to CN…)
+    assert r["numbers"] == ["US10395648B1", "EP3667902A1", "CN114853847"]
+    assert len(r["files"]) == 2
+    assert {f["name"] for f in r["files"]} == {"a.txt", "b.txt"}
+
+
+def test_ocr_model_floors_weak_to_strong():
+    # cheap reading dropdown (haiku) must NOT be used for digit OCR — floored to
+    # the strong OCR_MODEL; an explicitly stronger choice is honoured; None too.
+    assert api._ocr_model("claude-haiku-4-5") == claude_bridge.OCR_MODEL
+    assert api._ocr_model(None) == claude_bridge.OCR_MODEL
+    assert api._ocr_model("bogus") == claude_bridge.OCR_MODEL
+    assert api._ocr_model("claude-opus-4-8") == "claude-opus-4-8"
+    assert claude_bridge.OCR_MODEL not in claude_bridge.WEAK_OCR_MODELS
+
+
+def test_image_upload_uses_strong_ocr_model(client, monkeypatch):
+    from patentbench import extract
+    seen = {}
+
+    def fake(path, model=None):
+        seen["model"] = model
+        return {"numbers": ["US10395648B1"], "uncertain": []}
+
+    monkeypatch.setattr(extract, "numbers_from_image", fake)
+    tab = client.post("/api/tabs", json={"name": "Img"}).json()
+    r = client.post(f"/api/tabs/{tab['id']}/upload",
+                    files=[("files", ("photo.jpg", b"\xff\xd8\xff\xe0fake", "image/jpeg"))],
+                    data={"reading_model": "claude-haiku-4-5"}).json()
+    assert seen["model"] == claude_bridge.OCR_MODEL    # haiku floored to strong
+    assert r["model"] == claude_bridge.OCR_MODEL
+    assert r["numbers"] == ["US10395648B1"]
+
+
+def test_auto_create_notebook_on_first_candidate(client, monkeypatch):
+    added = []
+    monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", True)
+    monkeypatch.setattr(nlm_bridge, "create_notebook",
+                        lambda title: {"id": "nb-auto", "title": title})
+    monkeypatch.setattr(nlm_bridge, "add_source_text",
+                        lambda nb, title, text: (added.append((nb, title)), {"ok": True})[1])
+    tab = client.post("/api/tabs", json={"name": "Proj-X"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
+    cfg = client.get(f"/api/tabs/{tab['id']}/state").json()["notebook"]
+    assert cfg and cfg["notebook_id"] == "nb-auto"
+    assert cfg["auto_add"]
+    assert cfg["notebook_title"] == "Patent candidates — Proj-X"
+    assert any(nb == "nb-auto" for nb, _ in added)          # candidate was exported
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    assert docs[0]["nlm_source_notebook"] == "nb-auto"
+
+
+def test_auto_export_rolls_over_when_full(client, monkeypatch):
+    monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", True)
+    nb_seq = iter(["nb-1", "nb-2"])
+    monkeypatch.setattr(nlm_bridge, "create_notebook",
+                        lambda title: {"id": next(nb_seq), "title": title})
+    calls = []
+
+    def fake_add(nb, title, text):
+        calls.append(nb)
+        return {"error": "full", "full": True} if nb == "nb-1" else {"ok": True}
+
+    monkeypatch.setattr(nlm_bridge, "add_source_text", fake_add)
+    tab = client.post("/api/tabs", json={"name": "Roll"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents",
+                json={"numbers": ["US10395648B1"], "source": "image"})
+    assert "nb-1" in calls and "nb-2" in calls               # full on nb-1 → rolled to nb-2
+    cfg = client.get(f"/api/tabs/{tab['id']}/state").json()["notebook"]
+    assert cfg["notebook_id"] == "nb-2"
+
+
+def test_no_auto_create_when_disabled(client, monkeypatch):
+    monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", False)
+    monkeypatch.setattr(nlm_bridge, "create_notebook",
+                        lambda title: (_ for _ in ()).throw(AssertionError("should not create")))
+    tab = client.post("/api/tabs", json={"name": "NoAuto"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
+    assert client.get(f"/api/tabs/{tab['id']}/state").json()["notebook"] is None
+
+
+def test_nlm_rate_scores_candidates(client, monkeypatch):
+    import time
+    from patentbench import patents
+    # connect a notebook + benchmark so the rating run has a target
+    tab = client.post("/api/tabs", json={"name": "Rate"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.put(f"/api/tabs/{tid}/benchmark",
+               json={"text": "https://patents.google.com/patent/US10395648B1/en"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP3667902A1", "CN114853847B"], "source": "image"})
+    # mark both candidates as living in nb-1 (export step normally does this)
+    for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
+        db.update_document(d["id"], nlm_source_notebook="nb-1")
+    # the notebook reports its sources (titles start with the patent number)
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": [
+        {"id": "s-ep", "title": "EP3667902A1 — x"}, {"id": "s-cn", "title": "CN114853847 — y"}]})
+    monkeypatch.setattr(nlm_bridge, "query",
+                        lambda nb, q, source_ids=None: {"answer": "MATCH SCORE: 6\nKEY FEATURES: widget",
+                                                        "sources_used": []})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    assert client.post(f"/api/tabs/{tid}/nlm-rate", json={}).json()["started"] is True
+    # the rating runs in a daemon thread — wait briefly for it to finish
+    for _ in range(50):
+        if not client.get(f"/api/tabs/{tid}/nlm-rate/status").json()["running"]:
+            break
+        time.sleep(0.1)
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    assert all(d["nlm_score"] == 6 for d in docs)
+    assert all(d["nlm_score_note"] == "widget" for d in docs)
+
+
+def test_nlm_rate_only_selected(client, monkeypatch):
+    import time
+    tab = client.post("/api/tabs", json={"name": "Sel"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.put(f"/api/tabs/{tid}/benchmark",
+               json={"text": "https://patents.google.com/patent/US10395648B1/en"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP3667902A1", "CN114853847B"], "source": "image"})
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    for d in docs:
+        db.update_document(d["id"], nlm_source_notebook="nb-1")
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": [
+        {"id": "s-ep", "title": "EP3667902A1 — x"}, {"id": "s-cn", "title": "CN114853847 — y"}]})
+    monkeypatch.setattr(nlm_bridge, "query",
+                        lambda nb, q, source_ids=None: {"answer": "MATCH SCORE: 8\nKEY FEATURES: gear"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    target = next(d for d in docs if d["number"] == "EP3667902A1")
+    other = next(d for d in docs if d["number"] != "EP3667902A1")
+    assert client.post(f"/api/tabs/{tid}/nlm-rate",
+                       json={"doc_ids": [target["id"]]}).json()["started"] is True
+    for _ in range(50):
+        if not client.get(f"/api/tabs/{tid}/nlm-rate/status").json()["running"]:
+            break
+        time.sleep(0.1)
+    after = {d["id"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert after[target["id"]]["nlm_score"] == 8        # selected one rated
+    assert after[other["id"]]["nlm_score"] is None       # the other left untouched
+
+
+def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "Cont"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark",
+               json={"text": "https://patents.google.com/patent/US10395648B1/en"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP3667902A1", "CN114853847B"], "source": "image"})
+    docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    # pretend one was already full-read in a prior (interrupted) batch
+    db.update_document(docs["EP3667902A1"]["id"], score=7, score_note="old", scored_at=1, score_model="claude-opus-4-8")
+    read = []
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None: (read.append(d["number"]), {"verdict": f"MATCH SCORE: 5 for {d['number']}"})[1])
+    monkeypatch.setattr(claude_bridge, "deep_reduce", lambda *a, **k: {"answer": "ranking"})
+    client.post(f"/api/tabs/{tid}/deep-compare",
+                json={"skip_scored": True, "reading_model": "claude-sonnet-4-6"})
+    _wait_read(client, tid)
+    assert read == ["CN114853847"]                      # only the unread one was read
+    after = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert after["EP3667902A1"]["score"] == 7           # already-read one untouched
+    assert after["CN114853847"]["score"] == 5           # newly read
+    assert after["CN114853847"]["score_model"] == "claude-sonnet-4-6"   # records which model read it
+
+
+def test_nlm_rate_all_skips_already_rated(client, monkeypatch):
+    import time
+    tab = client.post("/api/tabs", json={"name": "Skip"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.put(f"/api/tabs/{tid}/benchmark",
+               json={"text": "https://patents.google.com/patent/US10395648B1/en"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP3667902A1", "CN114853847B"], "source": "image"})
+    docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    for d in docs.values():
+        db.update_document(d["id"], nlm_source_notebook="nb-1")
+    db.update_document(docs["EP3667902A1"]["id"], nlm_score=9)   # already rated → must be skipped
+    queried = []
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": [
+        {"id": "s-ep", "title": "EP3667902A1 — x"}, {"id": "s-cn", "title": "CN114853847 — y"}]})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+
+    def fake_query(nb, q, source_ids=None):
+        queried.append(source_ids)
+        return {"answer": "MATCH SCORE: 4\nKEY FEATURES: x"}
+
+    monkeypatch.setattr(nlm_bridge, "query", fake_query)
+    client.post(f"/api/tabs/{tid}/nlm-rate", json={})            # all, force=false
+    for _ in range(50):
+        if not client.get(f"/api/tabs/{tid}/nlm-rate/status").json()["running"]:
+            break
+        time.sleep(0.1)
+    after = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert after["EP3667902A1"]["nlm_score"] == 9     # untouched (skipped)
+    assert after["CN114853847"]["nlm_score"] == 4     # newly rated
+    assert len(queried) == 1                          # only ONE query — the unrated one
+
+
+def test_reconcile_explains_only_big_gaps(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "reconcile",
+                        lambda bm, items, model=None: (seen.update(items=items), {"answer": "PATTERN: NLM scores on field"})[1])
+    tab = client.post("/api/tabs", json={"name": "Rec"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark",
+               json={"text": "https://patents.google.com/patent/US10395648B1/en"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP3667902A1", "CN114853847B"], "source": "image"})
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    by_num = {d["number"]: d for d in docs}
+    # one big gap (Δ5), one agreement (Δ0)
+    db.update_document(by_num["EP3667902A1"]["id"], score=8, nlm_score=3)
+    db.update_document(by_num["CN114853847"]["id"], score=6, nlm_score=6)
+    r = client.post(f"/api/tabs/{tid}/reconcile", json={"min_delta": 2}).json()
+    assert "messages" in r
+    # only the disagreeing candidate is sent to the (cheap) reconcile call
+    assert [it["number"] for it in seen["items"]] == ["EP3667902A1"]
+
+
+def test_reconcile_when_no_disagreement(client):
+    tab = client.post("/api/tabs", json={"name": "Agree"}).json()
+    r = client.post(f"/api/tabs/{tab['id']}/reconcile", json={"min_delta": 2}).json()
+    assert "agree" in r["messages"][0]["text"].lower()
 
 
 def test_benchmark_by_number(client):
@@ -189,36 +438,38 @@ def test_digest_stored_at_fetch_time(client):
 
 def test_deep_compare(client):
     tab = client.post("/api/tabs", json={"name": "Deep"}).json()
-    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
-    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "EP3667902A1 CN114547092"})
-    r = client.post(f"/api/tabs/{tab['id']}/deep-compare", json={}).json()
-    roles = [m["role"] for m in r["messages"]]
-    assert roles == ["s", "c"]
-    assert "2/2 candidates at FULL text" in r["messages"][0]["text"]
-    assert r["messages"][1]["text"] == "ranking: best is X"
-    parts = r["messages"][1]["participants"]
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114547092"})
+    assert client.post(f"/api/tabs/{tid}/deep-compare", json={}).json()["started"] is True
+    _wait_read(client, tid)
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert msgs[-1]["role"] == "c" and msgs[-1]["text"] == "ranking: best is X"
+    assert any(m["role"] == "s" and "2/2 candidates at FULL text" in m["text"] for m in msgs)
+    parts = msgs[-1]["participants"]
     assert any(p["title"].endswith("full text") for p in parts if p["kind"] == "documents")
-    # no benchmark -> 400
+    # no benchmark -> 400 (validated before the job starts)
     tab2 = client.post("/api/tabs", json={"name": "NoBM"}).json()
     assert client.post(f"/api/tabs/{tab2['id']}/deep-compare", json={}).status_code == 400
 
 
 def test_deep_compare_subset(client):
     tab = client.post("/api/tabs", json={"name": "DeepSel"}).json()
-    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
-    client.post(f"/api/tabs/{tab['id']}/documents",
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tid}/documents",
                 json={"text": "EP3667902A1 CN114547092 CN119134413"})
-    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
     pick = [d["id"] for d in docs[:2]]
-    r = client.post(f"/api/tabs/{tab['id']}/deep-compare", json={"doc_ids": pick}).json()
-    assert "2/2 candidates at FULL text" in r["messages"][0]["text"]
-    parts = r["messages"][1]["participants"]
-    assert any(p["title"] == "2 of 3 candidates · full text" for p in parts)
-    state = client.get(f"/api/tabs/{tab['id']}/state").json()
-    q = [m for m in state["messages"] if m["role"] == "q"][-1]
+    assert client.post(f"/api/tabs/{tid}/deep-compare", json={"doc_ids": pick}).json()["started"]
+    _wait_read(client, tid)
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any(m["role"] == "s" and "2/2 candidates at FULL text" in m["text"] for m in msgs)
+    assert any(p["title"] == "2 of 3 candidates · full text" for p in msgs[-1]["participants"])
+    q = [m for m in msgs if m["role"] == "q"][-1]
     assert "2 of 3 candidates" in q["text"]
     # unknown ids only -> 400
-    assert client.post(f"/api/tabs/{tab['id']}/deep-compare",
+    assert client.post(f"/api/tabs/{tid}/deep-compare",
                        json={"doc_ids": [99999]}).status_code == 400
 
 
@@ -237,6 +488,7 @@ def test_reading_model_plumbed(client, monkeypatch):
     client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP3667902A1"})
     client.post(f"/api/tabs/{tab['id']}/deep-compare",
                 json={"reading_model": "claude-sonnet-4-6"})
+    _wait_read(client, tab["id"])
     assert seen["map"] == "claude-sonnet-4-6"
     # invalid model name falls back to the cheap default (None -> DIGEST_MODEL)
     seen.clear()
@@ -254,6 +506,7 @@ def test_deep_compare_stores_scores(client, monkeypatch):
     client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
     client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "EP3667902A1"})
     client.post(f"/api/tabs/{tab['id']}/deep-compare", json={})
+    _wait_read(client, tab["id"])
     docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
     assert docs[0]["score"] == 8.5
     assert docs[0]["score_note"] == "AGC fan-out + ESS hierarchy"

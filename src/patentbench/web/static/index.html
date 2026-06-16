@@ -45,6 +45,7 @@
 
     <div id="deep-bar" class="deep-bar hidden">
       <button id="deep-selected" class="btn primary small" title="Run the full-text deep analysis on ONLY the checked candidates">🏆 Deep-analyse selected</button>
+      <button id="nlm-rate-selected" class="btn small" title="Ask NotebookLM to rate ONLY the checked candidates against the benchmark">📓 NLM-rate selected</button>
       <button id="deep-clear" class="btn small">clear selection</button>
     </div>
     <textarea id="in-text" rows="3"
@@ -52,8 +53,8 @@
     <button id="in-add" class="btn primary">Add candidates</button>
 
     <div id="dropzone" class="dropzone slim">
-      <p>📷 Drop a <b>photo of a document list</b>, a PDF or a .txt
-        <label class="btn small">Choose file<input id="in-file" type="file" hidden
+      <p>📷 Drop <b>one or many photos of a document list</b>, a PDF or a .txt
+        <label class="btn small">Choose files<input id="in-file" type="file" hidden multiple
           accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.pdf,.txt"></label></p>
     </div>
     <div id="upload-status" class="muted"></div>
@@ -69,6 +70,14 @@
       </div>
     </div>
 
+    <div id="rate-bar" class="rate-bar">
+      <button id="claude-rate-all" class="btn small" title="Claude reads EVERY candidate in FULL against the benchmark and (re)scores them, most-promising first. Re-reads everything — use Continue to only read what's left.">🤖 Claude deep-read all</button>
+      <button id="claude-continue" class="btn small hidden" title="Continue after a token-limit interruption: Claude full-reads ONLY the candidates not yet read this batch, most-promising first. Skips everything already read.">▶️ Continue deep-read</button>
+      <span id="read-status" class="muted"></span>
+      <button id="nlm-rate" class="btn small" title="Ask NotebookLM to rate candidates not yet rated (already-rated ones are skipped) against the benchmark, to compare 📓 NLM vs 🤖 Claude">📓 NLM-rate all candidates</button>
+      <button id="reconcile" class="btn small hidden" title="Explain — in one cheap call over the stored rating notes — why 📓 NLM and 🤖 Claude disagree on the candidates where they diverge most">🔍 Why the gap?</button>
+      <span id="rate-status" class="muted"></span>
+    </div>
     <div id="docs" class="docs"></div>
   </section>
 

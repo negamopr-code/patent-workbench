@@ -45,10 +45,10 @@ h4 { font-size: 13px; margin: 10px 0 6px; }
 .tab-add:hover { color: var(--accent); border-color: var(--accent); }
 
 .main {
-  flex: 1; display: grid; grid-template-columns: 300px 360px 1fr;
+  flex: 1; display: grid; grid-template-columns: 300px 440px 1fr;
   gap: 10px; padding: 10px; min-height: 0;
 }
-.main.bm-collapsed { grid-template-columns: 38px 360px 1fr; }
+.main.bm-collapsed { grid-template-columns: 38px 440px 1fr; }
 .main.cand-collapsed { grid-template-columns: 300px 38px 1fr; }
 .main.bm-collapsed.cand-collapsed { grid-template-columns: 38px 38px 1fr; }
 
@@ -121,6 +121,7 @@ textarea, select, input[type="text"] {
 .deep-bar { display: flex; gap: 6px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
 
 /* candidates pane */
+.pane-docs #in-text { min-height: 74px; font-family: ui-monospace, monospace; }
 .pane-docs #in-add { margin-top: 8px; }
 .pane-docs .docs { margin-top: 12px; }
 .dropzone.slim { padding: 8px; margin-top: 10px; font-size: 12px; }
@@ -135,6 +136,22 @@ textarea, select, input[type="text"] {
 
 /* documents pane */
 .docs { display: flex; flex-direction: column; gap: 8px; }
+.docs-summary {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  padding: 4px 0 8px; position: sticky; top: 0; background: var(--pane); z-index: 1;
+  border-bottom: 1px solid var(--border); margin-bottom: 4px;
+}
+.docs-summary .chip.warn { color: var(--warn); border: 1px solid var(--warn); }
+.docs-summary .btn.small { margin-left: auto; }
+.docs-summary .sort-sel { width: auto; padding: 2px 6px; font-size: 12px; }
+.rate-bar { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.rate-bar #rate-status { font-size: 12px; }
+.rate-bar #rate-status.err { color: var(--err); }
+.rate-bar #rate-status:not(.muted) { color: var(--text); }
+.doc .score .combined { color: var(--accent); font-weight: 700; }
+.doc .score .delta { color: var(--muted); font-weight: 600; }
+.doc .score .delta.big { color: var(--warn); }
+.doc .score .score-note { color: var(--muted); font-weight: 400; }
 .doc {
   background: var(--pane2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
 }
@@ -214,6 +231,7 @@ textarea, select, input[type="text"] {
   word-break: break-word; font-size: 12px;
 }
 .doc .sizes { font-size: 11px; color: var(--muted); }
+.doc .read-meta { font-size: 11px; color: var(--muted); margin: 2px 0; }
 .nb-list label, .nb-sources label { display: block; padding: 4px 2px; font-size: 13px; }
 .nb-sources { max-height: 240px; overflow-y: auto; background: var(--pane2);
   border-radius: 8px; padding: 8px; margin-top: 6px; }

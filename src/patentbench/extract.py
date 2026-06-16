@@ -8,6 +8,7 @@ Claude-over-text fallback only when the regex finds nothing.
 from __future__ import annotations
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 from . import claude_bridge, patents
 
@@ -71,13 +72,19 @@ def numbers_from_image(path: str, model: str | None = None) -> dict:
     prompt = (f"First read the image at {path} with the Read tool. Read carefully, "
               "digit by digit — photos of screens have moiré noise.\n"
               f"Then do the following based on its content.\n\n{OCR_PROMPT}")
-    passes = []
-    for _ in range(2):
-        res = claude_bridge.run_extract(prompt, allow_read=True,
-                                        model=model or claude_bridge.OCR_MODEL)
+
+    def one_pass(_: int) -> dict:
+        return claude_bridge.run_extract(prompt, allow_read=True,
+                                         model=model or claude_bridge.OCR_MODEL)
+
+    # The two independent passes are run CONCURRENTLY — each is a slow `claude -p`
+    # subprocess, so running them in parallel roughly halves the wait the user sees.
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        results = list(ex.map(one_pass, range(2)))
+    for res in results:
         if "error" in res:
             return res
-        passes.append(patents.extract_candidates(res["answer"]))
+    passes = [patents.extract_candidates(res["answer"]) for res in results]
     first, second = set(passes[0]), set(passes[1])
     ordered = list(dict.fromkeys(passes[0] + passes[1]))
     return {"numbers": ordered, "uncertain": sorted(first ^ second)}

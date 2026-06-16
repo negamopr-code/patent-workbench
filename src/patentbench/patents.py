@@ -12,7 +12,9 @@ from urllib.parse import unquote
 # Separators inside a number are space/slash/dot/dash but NEVER a newline:
 # with \s the match absorbs the next line's list index ("…AU 2020/192686\n3." →
 # AU20201926863, one digit too long → 404 on Google Patents). Seen live 2026-06-12.
-NUMBER_RE = re.compile(r"\b([A-Z]{2}[ ]?\d[\d /.-]*[A-Z]?\d*)\b")
+# Case-insensitive so a hand-typed lowercase "cn120200454" is accepted just like
+# "CN120200454" — canonicalize() uppercases the match anyway.
+NUMBER_RE = re.compile(r"\b([A-Za-z]{2}[ ]?\d[\d /.-]*[A-Za-z]?\d*)\b")
 
 # Patent numbers embedded in URLs (Google Patents path, Espacenet publication path
 # or pn= query) — matched case-insensitively because query strings are often
@@ -71,7 +73,9 @@ def extract_candidates(text: str) -> list[str]:
     def add(raw: str) -> None:
         # A space between country code and digits is only credible for long
         # serials ("US 2023/0278430"); "IN 2023"-style prose matches are noise.
-        if re.match(r"^[A-Z]{2}\s", raw) and len(re.sub(r"\D", "", raw)) < 6:
+        # Case-insensitive to also filter lowercase prose ("in 2023") now that the
+        # number regex matches either case.
+        if re.match(r"^[A-Za-z]{2}\s", raw) and len(re.sub(r"\D", "", raw)) < 6:
             return
         n = canonicalize(raw)
         if is_plausible(n) and n not in seen:
