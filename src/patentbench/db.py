@@ -293,6 +293,30 @@ def get_notebook_config(tab_id: int) -> dict | None:
     return d
 
 
+def tab_notebook_ids(tab_id: int) -> list[str]:
+    """Every NotebookLM notebook this tab's content is spread across — the
+    connected notebook FIRST (most-recent candidates), then any sibling notebooks
+    the auto-rollover exported earlier documents/benchmark into. Querying must hit
+    ALL of them: candidates beyond the per-notebook source cap live in the
+    siblings and are otherwise unreachable. De-duplicated, order preserved."""
+    ids: list[str] = []
+    cfg = get_notebook_config(tab_id)
+    if cfg and cfg.get("notebook_id"):
+        ids.append(cfg["notebook_id"])
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT nlm_source_notebook FROM documents "
+            "WHERE tab_id=? AND nlm_source_notebook IS NOT NULL "
+            "UNION SELECT nlm_source_notebook FROM benchmark "
+            "WHERE tab_id=? AND nlm_source_notebook IS NOT NULL",
+            (tab_id, tab_id)).fetchall()
+    for r in rows:
+        nb = r[0]
+        if nb and nb not in ids:
+            ids.append(nb)
+    return ids
+
+
 def set_notebook_config(tab_id: int, notebook_id: str | None, notebook_title: str | None,
                         source_ids: list[str] | None, auto_add: bool = False) -> None:
     with _conn() as c:

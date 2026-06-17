@@ -84,6 +84,59 @@ def test_ask_notebook_only(client):
     assert r["messages"][0]["role"] == "a"
 
 
+def test_ask_notebook_fans_out_across_rollover_siblings(client, monkeypatch):
+    """Candidates beyond the source cap live in sibling notebooks (auto-rollover).
+    A query must hit ALL of them, not just the connected one — otherwise patents in
+    the siblings are unreachable (the EP3087655 bug)."""
+    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {"notebooks": [
+        {"id": "nb-3", "title": "Cands (3)"}, {"id": "nb-2", "title": "Cands (2)"}]})
+    tab = client.post("/api/tabs", json={"name": "Roll"}).json()
+    # connected notebook = the latest; an earlier candidate was exported to a sibling
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-3", "notebook_title": "Cands (3)", "source_ids": []})
+    db.add_text_document(tab["id"], "EP3087655", "Old candidate", "body",
+                         nlm_source_notebook="nb-2")
+    r = client.post(f"/api/tabs/{tab['id']}/ask-notebook", json={"question": "ports?"}).json()
+    text = r["messages"][0]["text"]
+    assert "nlm[nb-3]" in text and "nlm[nb-2]" in text          # both notebooks queried
+    titles = [p["title"] for p in r["messages"][0]["participants"]]
+    assert titles == ["Cands (3)", "Cands (2)"]                 # connected first
+
+
+def test_chat_ask_notebook_fans_out_to_claude(client, monkeypatch):
+    """The /chat path feeds EVERY sibling notebook's answer to Claude for synthesis."""
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: seen.update(sources=k.get("sources")) or
+                        {"answer": "synthesized", "model": "claude-fable-5"})
+    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {"notebooks": [
+        {"id": "nb-3", "title": "Cands (3)"}, {"id": "nb-2", "title": "Cands (2)"}]})
+    tab = client.post("/api/tabs", json={"name": "Roll2"}).json()
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-3", "notebook_title": "Cands (3)", "source_ids": []})
+    db.add_text_document(tab["id"], "EP3087655", "Old", "body", nlm_source_notebook="nb-2")
+    client.post(f"/api/tabs/{tab['id']}/chat",
+                json={"question": "ports?", "ask_notebook": True}).json()
+    assert {s["title"] for s in seen["sources"]} == {"Cands (3)", "Cands (2)"}
+
+
+def test_chat_corrects_citation_for_non_focused_candidate(client, monkeypatch):
+    """The model cites a candidate that ISN'T in focus (number pulled from the
+    conversation) with a wrong [00NN]. The API-layer verifier loads that candidate's
+    full text from the DB and corrects the locator. Regression for EP3087655 [0029]."""
+    tab = client.post("/api/tabs", json={"name": "Cite"}).json()
+    db.add_text_document(tab["id"], "EP3087655", "Power supply system",
+                         "[0024] wattmeter 72 connected.\n\n"
+                         "[0025] By control of the switches 62 and 63, outputs of the PVPCSs 6 and 16 "
+                         "can be stopped.\n\n[0029] the BATPCS 81 and the PVPCSs 6 and 16 are started.")
+    monkeypatch.setattr(claude_bridge, "chat", lambda *a, **k: {
+        "answer": 'In EP3087655 [0029]: "outputs of the PVPCSs 6 and 16 can be stopped".',
+        "model": "claude-sonnet-4-6"})
+    r = client.post(f"/api/tabs/{tab['id']}/chat", json={"question": "ports?"}).json()
+    c_msg = next(m for m in r["messages"] if m["role"] == "c")
+    assert "[0025]" in c_msg["text"] and "[0029]" not in c_msg["text"]
+
+
 def test_tab_rename_delete(client):
     tab = client.post("/api/tabs", json={"name": "Old"}).json()
     client.patch(f"/api/tabs/{tab['id']}", json={"name": "New"})

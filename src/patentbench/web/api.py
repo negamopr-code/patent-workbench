@@ -15,7 +15,7 @@ from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import claude_bridge, db, extract, fetcher, lessons, nlm_bridge, patents
+from .. import citations, claude_bridge, db, extract, fetcher, lessons, nlm_bridge, patents
 from . import schemas
 
 UPLOADS = os.environ.get("PB_UPLOADS", "/data/uploads")
@@ -343,6 +343,34 @@ def _doc_source_text(doc: dict) -> str:
         ("CLAIMS:\n" + doc["claims"]) if doc.get("claims") else None,
         ("DESCRIPTION:\n" + doc["description"]) if doc.get("description") else None,
         ("FULL-TEXT DIGEST:\n" + doc["digest"]) if doc.get("digest") else None]))
+
+
+def _verify_citations(tab_id: int, answer: str) -> str:
+    """Correct [00NN] paragraph locators in a model answer to the paragraph their
+    quoted text actually occupies. Runs at the API layer (not in claude_bridge) so
+    it can load the FULL text of ANY candidate the answer names — the model often
+    cites candidates that weren't in the prompt's focus panel, pulling a stale
+    number from the running conversation (seen live: EP3087655 [0029] for a [0025]
+    quote, with EP3087655 not in focus). Only candidates actually mentioned are
+    loaded, so the cost is bounded."""
+    if not answer or "[" not in answer:
+        return answer
+    named = set(patents.extract_candidates(answer))
+    if not named:
+        return answer
+    sources = [{"number": d["number"],
+                "text": "\n\n".join(filter(None, [d.get("abstract"), d.get("claims"),
+                                                  d.get("description")]))}
+               for d in db.list_documents(tab_id, full=True)
+               if d["number"] in named and d["status"] == "fetched"]
+    bm = db.get_benchmark(tab_id)
+    if bm:
+        sources.append({"number": bm.get("number"),
+                        "text": bm.get("text") or "\n\n".join(filter(
+                            None, [bm.get("abstract"), bm.get("claims"), bm.get("description")]))})
+    if not sources:
+        return answer
+    return citations.verify(answer, sources)["answer"]
 
 
 def _add_doc_to_notebook(doc_id: int) -> dict:
@@ -802,22 +830,55 @@ def notebook_create(tab_id: int, body: schemas.NotebookCreate):
     return {"ok": True, "notebook": db.get_notebook_config(tab_id)}
 
 
+def _query_tab_series(tab_id: int, question: str) -> list[dict]:
+    """Fan a question across EVERY notebook the tab's candidates are spread over.
+    Auto-rollover splits candidates across several notebooks at the per-notebook
+    source cap, so querying only the connected notebook misses every candidate in
+    the siblings. Returns one entry per notebook, connected one FIRST:
+    {notebook_id, title, answer} | {notebook_id, title, error}. The connected
+    notebook honours its selected_source_ids; siblings are queried over all their
+    sources. NLM serialises calls internally, so these run back-to-back."""
+    cfg = db.get_notebook_config(tab_id) or {}
+    connected = cfg.get("notebook_id")
+    titles = {n["id"]: n["title"]
+              for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+    out: list[dict] = []
+    for nb in db.tab_notebook_ids(tab_id):
+        sids = (cfg.get("selected_source_ids") or None) if nb == connected else None
+        res = nlm_bridge.query(nb, question, source_ids=sids)
+        entry = {"notebook_id": nb, "title": titles.get(nb, nb)}
+        entry["error" if "error" in res else "answer"] = res.get("error") or res["answer"]
+        out.append(entry)
+    return out
+
+
+def _series_answer_text(answers: list[dict]) -> str:
+    """One assistant message from the fan-out: a single notebook's answer bare,
+    several answers stitched under per-notebook headers."""
+    if len(answers) == 1:
+        return answers[0]["answer"]
+    return "\n\n".join(f"**📓 {e['title']}**\n{e['answer']}" for e in answers)
+
+
 @app.post("/api/tabs/{tab_id}/ask-notebook")
 def ask_notebook(tab_id: int, body: schemas.AskNotebookRequest):
     _tab_or_404(tab_id)
-    cfg = db.get_notebook_config(tab_id)
-    if not cfg or not cfg.get("notebook_id"):
+    series = _query_tab_series(tab_id, body.question)
+    if not series:
         raise HTTPException(400, "no notebook connected to this tab")
     db.append_message(tab_id, "q", body.question)
-    res = nlm_bridge.query(cfg["notebook_id"], body.question,
-                           source_ids=cfg.get("selected_source_ids") or None)
-    if "error" in res:
-        msg = db.append_message(tab_id, "s", f"NotebookLM error: {res['error']}")
-        return {"messages": [msg], "error": res["error"]}
+    answers = [e for e in series if "answer" in e]
+    if not answers:
+        err = "; ".join(f"{e['title']}: {e['error']}" for e in series)
+        msg = db.append_message(tab_id, "s", f"NotebookLM error: {err}")
+        return {"messages": [msg], "error": err}
+    cfg = db.get_notebook_config(tab_id) or {}
     msg = db.append_message(
-        tab_id, "a", res["answer"],
-        participants=[{"kind": "notebook", "title": cfg.get("notebook_title") or cfg["notebook_id"],
-                       "sources_restricted": bool(cfg.get("selected_source_ids"))}])
+        tab_id, "a", _series_answer_text(answers),
+        participants=[{"kind": "notebook", "title": e["title"],
+                       "sources_restricted": bool(e["notebook_id"] == cfg.get("notebook_id")
+                                                  and cfg.get("selected_source_ids"))}
+                      for e in answers])
     return {"messages": [msg]}
 
 
@@ -834,23 +895,24 @@ def chat(tab_id: int, body: schemas.ChatRequest):
 
     nlm_sources = None
     if body.ask_notebook:
-        cfg = db.get_notebook_config(tab_id)
-        if cfg and cfg.get("notebook_id"):
-            res = nlm_bridge.query(cfg["notebook_id"], body.question,
-                                   source_ids=cfg.get("selected_source_ids") or None)
-            title = cfg.get("notebook_title") or cfg["notebook_id"]
-            if "error" in res:
-                out_messages.append(db.append_message(tab_id, "s",
-                                                      f"NotebookLM error: {res['error']}"))
-            else:
-                nlm_sources = [{"title": title, "answer": res["answer"]}]
-                participants.append({"kind": "notebook", "title": title})
-                out_messages.append(db.append_message(
-                    tab_id, "a", res["answer"],
-                    participants=[{"kind": "notebook", "title": title}]))
-        else:
+        series = _query_tab_series(tab_id, body.question)
+        if not series:
             out_messages.append(db.append_message(
                 tab_id, "s", "Ask-notebook was on, but no notebook is connected to this tab."))
+        else:
+            answers = [e for e in series if "answer" in e]
+            errors = [e for e in series if "error" in e]
+            if errors:
+                out_messages.append(db.append_message(
+                    tab_id, "s", "NotebookLM error: "
+                    + "; ".join(f"{e['title']}: {e['error']}" for e in errors)))
+            if answers:
+                nlm_sources = [{"title": e["title"], "answer": e["answer"]} for e in answers]
+                for e in answers:
+                    participants.append({"kind": "notebook", "title": e["title"]})
+                out_messages.append(db.append_message(
+                    tab_id, "a", _series_answer_text(answers),
+                    participants=[{"kind": "notebook", "title": e["title"]} for e in answers]))
 
     documents = db.list_documents(tab_id, full=True) if body.use_documents else None
     benchmark = db.get_benchmark(tab_id) if body.use_documents else None
@@ -895,8 +957,8 @@ def chat(tab_id: int, body: schemas.ChatRequest):
                              "title": f"{len(focus)} focused (full text)"})
     if body.use_documents and documents:
         participants.append({"kind": "documents", "title": f"{len(documents)} candidates"})
-    out_messages.append(db.append_message(tab_id, "c", res["answer"], model=model,
-                                          participants=participants))
+    out_messages.append(db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
+                                          model=model, participants=participants))
 
     for les in res.get("lessons", []):
         saved = lessons.append_lesson(les["skill"], les["lesson"])
@@ -1233,7 +1295,8 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
         if "error" in res:
             db.append_message(tab_id, "s", f"Claude error compiling the ranking: {res['error']}")
         else:
-            db.append_message(tab_id, "c", res["answer"], model=model, participants=participants)
+            db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
+                              model=model, participants=participants)
             for les in res.get("lessons", []):
                 saved = lessons.append_lesson(les["skill"], les["lesson"])
                 db.append_message(tab_id, "s",

@@ -16,6 +16,8 @@ import re
 import shutil
 import subprocess
 
+from . import citations
+
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 # Latest first — Fable 5 is the default; the UI offers the rest as a dropdown.
 MODELS = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
@@ -438,6 +440,10 @@ def chat(question: str, history: list[dict] | None = None,
     if "error" in res:
         return res
     res["answer"] = _strip_cjk(res["answer"])
+    # NOTE: [00NN] locator correction happens at the API layer (api._verify_citations),
+    # not here — the model often cites candidates that are NOT in `focus` (pulling a
+    # number from the running conversation), and only the API has DB access to load
+    # ANY mentioned candidate's full text to check the quote against.
     lessons = LESSON_RE.findall(res["answer"])
     if lessons:
         res["answer"] = LESSON_RE.sub("", res["answer"]).strip()
@@ -511,7 +517,13 @@ def deep_map(benchmark_text: str, doc: dict, model: str | None = None) -> dict:
     res = _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
     if "error" in res:
         return res
-    return {"verdict": res["answer"]}
+    # Locators originate here and are trusted verbatim by deep_reduce — correct them
+    # against the candidate's full text at the source. The whole text is present, so
+    # a quote found nowhere is genuinely suspect → flag it.
+    verdict = citations.verify(res["answer"],
+                               [{"number": doc.get("number"), "text": fulltext}],
+                               flag_unfound=True)["answer"]
+    return {"verdict": verdict}
 
 
 _SCORE_RE = re.compile(r"MATCH SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)

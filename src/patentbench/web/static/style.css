@@ -187,6 +187,11 @@ textarea, select, input[type="text"] {
 }
 .chat-toolbar select { width: auto; }
 .model-pick { display: inline-flex; align-items: center; gap: 3px; font-size: 13px; }
+/* The chat answer-model picker: labelled + visibly interactive so it's not mistaken
+   for static text (the bare 💬 dropdown was easy to miss). */
+.answer-pick { gap: 5px; font-weight: 600; padding: 3px 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--pane2); }
+.answer-pick select { font-weight: 600; cursor: pointer; }
 .check { display: inline-flex; gap: 5px; align-items: center; font-size: 13px; white-space: nowrap; }
 .check.small { font-size: 12px; color: var(--muted); }
 .skills-dd { position: relative; }

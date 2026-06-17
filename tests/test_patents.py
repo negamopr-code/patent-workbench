@@ -1,4 +1,17 @@
 from patentbench import patents
+from patentbench.fetcher import _publication_variants
+
+
+def test_publication_variants_prefer_grant_for_same_number_offices():
+    # kind-less EP/GB/CN → try the granted B1 first, fall back to the application
+    assert _publication_variants("EP3087655") == ["EP3087655B1", "EP3087655"]
+    assert _publication_variants("CN114853847") == ["CN114853847B1", "CN114853847"]
+    # already kind-coded → use verbatim (caller asked for that exact publication)
+    assert _publication_variants("EP3087655B1") == ["EP3087655B1"]
+    assert _publication_variants("CN203205735U") == ["CN203205735U"]
+    # different-number-grant / no-grant offices → never kind-substitute
+    assert _publication_variants("US20160156193") == ["US20160156193"]
+    assert _publication_variants("WO2022243179") == ["WO2022243179"]
 
 
 def test_extract_bare_numbers():

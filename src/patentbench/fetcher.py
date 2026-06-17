@@ -92,8 +92,46 @@ def _description_from_pdf(url: str) -> str:
         return ""
 
 
+# Offices whose GRANT shares the application's number, differing only by kind code
+# (EP A1→B1, GB A→B, CN A→B, …). For these a kind-less number must resolve to the
+# GRANT — otherwise Google Patents serves the earlier A-publication, whose CLAIMS
+# and [00NN] paragraph numbering differ from the granted B-document (the EP3087655
+# bug: app stored the application claims + a paragraph numbering offset vs the B1).
+# US/JP grants get a DIFFERENT number and WO/PCT has no grant, so we never
+# kind-substitute those — a B-variant would 404 and waste a Google-Patents request.
+_GRANT_SAME_NUMBER = re.compile(r"^(EP|GB|DE|CN|KR|FR|AT|CH|ES|IT|NL|SE|BE|DK|FI|PT)\d")
+_HAS_KIND_CODE = re.compile(r"\d[A-Z]\d?$")
+
+
+def _publication_variants(number: str) -> list[str]:
+    """Publications to try, in order: prefer the grant (B1) for a kind-less number
+    from a same-number-grant office, then fall back to the bare number (the
+    application). A number that already carries a kind code is used verbatim — the
+    caller asked for a specific publication. Note: B2/C grants (post-opposition,
+    rare) aren't auto-tried; pass the explicit kind code for those."""
+    if _HAS_KIND_CODE.search(number) or not _GRANT_SAME_NUMBER.match(number):
+        return [number]
+    return [f"{number}B1", number]
+
+
 def fetch_document(number: str) -> dict:
-    """Scrape one patent. Returns {title, abstract, claims, description} | {error}."""
+    """Scrape one patent, preferring the granted publication. Returns
+    {title, abstract, claims, description} | {error}."""
+    last_err = {"error": "no publication yielded content"}
+    for variant in _publication_variants(number):
+        res = _fetch_publication(variant)
+        if "error" not in res:
+            return res
+        last_err = res
+        if res.get("status") != 404:        # 403/timeout/parse — stop, don't hammer Google
+            break
+    return {k: v for k, v in last_err.items() if k != "status"}
+
+
+def _fetch_publication(number: str) -> dict:
+    """Scrape ONE exact publication. {title, abstract, claims, description} |
+    {error, status}. `status` lets fetch_document fall through to the next variant
+    only on a 404 (publication doesn't exist)."""
     url = f"https://patents.google.com/patent/{number}/en"
     with _lock:
         _gap_wait()
@@ -101,14 +139,15 @@ def fetch_document(number: str) -> dict:
             with httpx.Client(timeout=TIMEOUT, headers=HEADERS, follow_redirects=True) as cl:
                 resp = cl.get(url)
         except httpx.HTTPError as exc:
-            return {"error": f"fetch failed: {exc.__class__.__name__}: {exc}"}
+            return {"error": f"fetch failed: {exc.__class__.__name__}: {exc}", "status": None}
     if resp.status_code == 404:
-        return {"error": "not found on Google Patents (404) — check the number/kind code"}
+        return {"error": "not found on Google Patents (404) — check the number/kind code",
+                "status": 404}
     if resp.status_code == 403:
         return {"error": "Google Patents 403 (TLS fingerprint block?) — needs the "
-                         "curl_cffi impersonate fallback (see scraper-pro)"}
+                         "curl_cffi impersonate fallback (see scraper-pro)", "status": 403}
     if resp.status_code != 200:
-        return {"error": f"Google Patents HTTP {resp.status_code}"}
+        return {"error": f"Google Patents HTTP {resp.status_code}", "status": resp.status_code}
 
     raw = resp.text
     soup = BeautifulSoup(raw, "lxml")
