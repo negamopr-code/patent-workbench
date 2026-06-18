@@ -149,6 +149,99 @@ _GROUNDING_INSTRUCTION = (
 )
 
 
+# ---------------------------------------------------------------------------
+# ANSWER-FORMAT PRESETS — selectable answer shapes for the chat. The "" preset
+# keeps the default behaviour (concise, or 📝 Full when the toggle is on); any
+# other preset's `instruction` REPLACES the style line and dictates structure
+# (it still rides on top of GROUNDING — every locator carries its exact quote).
+# To add a new option later: append one {key, label, instruction} entry here —
+# the API and the chat dropdown pick it up automatically.
+# ---------------------------------------------------------------------------
+_FMT_CLAIM_MAP = (
+    "ANSWER FORMAT — ONE-LINE CLAIM MAP (terse). Output ONE SENTENCE PER CLAIM "
+    "GROUP and NOTHING else: no 'GROUNDING:' line, no bullets, no quotes, no "
+    "intro, no 'Net:'/summary paragraph, no explanations. Group the claims "
+    "under analysis (by default the BENCHMARK's claims; if the user names a "
+    "different document's claims, use those) so claims sharing ONE technical "
+    "focus sit together (an independent claim with its dependents, or a "
+    "consecutive range). Each line MUST follow this template EXACTLY, in this "
+    "order and wording:\n"
+    "  Claims <range> are directed to <focus in 2-5 words>; <REFERENCE-NUMBER> "
+    "discloses <the function in a few words> <expressly|implicitly> as per "
+    "<bare locators>.\n"
+    "BARE LOCATORS ONLY — paragraph markers like [0018], [0028]; claim numbers "
+    "like 'claim 2'; figures like 'Fig.1' — comma-separated. DO NOT add a "
+    "supporting quote, DO NOT paraphrase the wording, DO NOT justify WHY. Just "
+    "the locators. (This format OVERRIDES the GROUNDING rule that normally asks "
+    "for an exact quote after each locator — here locators stand alone.) Use "
+    "'expressly' when the reference names it literally, 'implicitly' when only "
+    "inferable. If more than one reference is relevant to a group, add a second "
+    "clause in the SAME sentence: '..., while <REF2> discloses it expressly as "
+    "per <locators>.'\n"
+    "LITERAL TEMPLATE TO MATCH: 'Claims 2-3 are directed to grid measurement; "
+    "EP3087655 discloses the metering function expressly as per [0018], [0028], "
+    "claim 71, Fig.1.'\n"
+    "Real locators only — never invent a paragraph/claim/figure absent from the "
+    "provided text. If a group's focus is NOT disclosed, say so in the same "
+    "one-line style, e.g. 'Claims 4-5 are directed to X; EP3087655 does not "
+    "disclose this (no such teaching in the text).' NO tables, NO reference "
+    "numerals like 'element 12', NO original-language text."
+)
+
+_FMT_FEATURE_MAP = (
+    "ANSWER FORMAT — INTERLINEAR FEATURE MAP. The user pasted a CLAIM (preamble "
+    "+ a list of elements). Reproduce the claim text faithfully and IN ORDER, "
+    "and after EACH element insert — right where it occurs — how the reference "
+    "document under analysis discloses it. Map every meaningful phrase (each "
+    "branch, port, connection and 'wherein' clause); do NOT summarise, reorder "
+    "or drop wording. The pasted claim is the backbone; the parentheticals are "
+    "the only thing you add.\n"
+    "TYPOGRAPHY (markdown, REQUIRED): put the CLAIM's own text in **bold** and "
+    "every disclosure parenthetical in *italic*, so the reader instantly tells "
+    "claim-language from your mapping. Shape:\n"
+    "  **A first branch … electrically connected to a first port** *(storage→"
+    "inverter 84 path via switch 59 — [0021], Fig.1)*\n"
+    "BE CONCISE — this is the main thing the user wants: each parenthetical is "
+    "ONE short, fact-based clause that conveys the LOGIC of the match — name the "
+    "part, give its reference numeral(s) and locators ([00NN], Fig.N), and a few "
+    "words or a brief \"quote\" ONLY if they carry the argument. No "
+    "multi-sentence parentheticals, no restating the claim inside them, no "
+    "padding. Reference numerals (e.g. '59', 'inverter 84') are REQUIRED and "
+    "this format OVERRIDES the GROUNDING ban on them (they tie each element to "
+    "the drawings).\n"
+    "WHICH DOCUMENT: map against the FOCUSED candidate (the one whose full text "
+    "is loaded); if the user names a specific document, use that. Open with one "
+    "short line, e.g. 'Mapping against EP3087655:'. State a partial match in a "
+    "few words inside the parenthetical, e.g. *(partial: grid feed enters on a "
+    "separate path, not as one of these branches)*; write *(not disclosed)* when "
+    "a feature is absent. Real locators/numerals only — never invent one. NO "
+    "tables, NO original-language text, NO separate 'GROUNDING:' line, NO "
+    "trailing summary."
+)
+
+_FMT_ONE_SENTENCE = (
+    "ANSWER FORMAT — ONE SENTENCE. Answer in EXACTLY ONE sentence and nothing "
+    "else: no 'GROUNDING:' line, no bullets, no preamble, no follow-up line. "
+    "Lead with the direct answer; if a locator carries it, fold ONE short "
+    "citation ([00NN]/claim N) into the sentence — no quote needed. If the "
+    "answer genuinely cannot fit one sentence honestly, give the single most "
+    "important sentence and stop. Never invent a locator."
+)
+
+# Ordered; first entry ("") is the default. `instruction=None` → fall back to
+# the concise/Full style line. Exposed (key+label only) via /api/skills.
+ANSWER_FORMATS = [
+    {"key": "", "label": "Default answer", "instruction": None},
+    {"key": "one-sentence", "label": "Concise — 1 sentence answer",
+     "instruction": _FMT_ONE_SENTENCE},
+    {"key": "claim-map", "label": "Claims grouped → 1-line disclosure",
+     "instruction": _FMT_CLAIM_MAP},
+    {"key": "feature-map", "label": "Paste a claim → interlinear feature map",
+     "instruction": _FMT_FEATURE_MAP},
+]
+_FORMAT_BY_KEY = {f["key"]: f for f in ANSWER_FORMATS}
+
+
 def _style_instruction(full: bool) -> str:
     if full:
         return ("ANSWER STYLE: FULL analysis — still KISS. Cover the few decisive "
@@ -325,7 +418,7 @@ def build_prompt(question: str, history: list[dict] | None = None,
                  skills: list[dict] | None = None,
                  benchmark: dict | None = None,
                  focus: list[dict] | None = None,
-                 full: bool = False) -> str:
+                 full: bool = False, answer_format: str = "") -> str:
     parts = [_PREAMBLE]
     if documents or focus or benchmark:
         parts.append(_GROUNDING_INSTRUCTION)
@@ -401,7 +494,11 @@ def build_prompt(question: str, history: list[dict] | None = None,
             + "\n\nCompile these with the stored documents into one full picture; "
             "merge what agrees, flag contradictions and gaps, attribute key claims "
             "to their notebook. Do not invent anything beyond the provided material.")
-    parts.append(_style_instruction(full))
+    fmt = _FORMAT_BY_KEY.get(answer_format or "")
+    if fmt and fmt.get("instruction"):
+        parts.append(fmt["instruction"])
+    else:
+        parts.append(_style_instruction(full))
     parts.append("USER QUESTION:\n" + question)
     return "\n\n---\n\n".join(parts)
 
@@ -429,13 +526,15 @@ def chat(question: str, history: list[dict] | None = None,
          documents: list[dict] | None = None, sources: list[dict] | None = None,
          skills: list[dict] | None = None, model: str | None = None,
          benchmark: dict | None = None, focus: list[dict] | None = None,
-         full: bool = False) -> dict:
+         full: bool = False, answer_format: str = "") -> dict:
     """One stateless turn. Returns {answer, model, lessons:[(skill, text)]} | {error}.
     No tools — pure text; benchmark + documents arrive pre-fetched from the local DB.
     `focus` = user-selected candidates loaded with FULL primary text; `full` =
-    long-form answer (otherwise 1-2 sentence precise mode)."""
+    long-form answer (otherwise 1-2 sentence precise mode); `answer_format` = an
+    ANSWER_FORMATS key that, when set, dictates the answer's structure."""
     prompt = build_prompt(question, history, documents, sources, skills,
-                          benchmark=benchmark, focus=focus, full=full)
+                          benchmark=benchmark, focus=focus, full=full,
+                          answer_format=answer_format)
     res = _run_claude(prompt, model or CHAT_MODEL)
     if "error" in res:
         return res

@@ -50,6 +50,38 @@ def test_health(client):
     assert r["ok"] is True
 
 
+def test_skills_exposes_answer_formats(client):
+    r = client.get("/api/skills").json()
+    keys = [f["key"] for f in r["answer_formats"]]
+    assert {"", "one-sentence", "claim-map", "feature-map"} <= set(keys)   # default + presets
+    assert all("label" in f for f in r["answer_formats"])
+
+
+def test_chat_passes_answer_format_through(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: seen.update(k) or {"answer": "ok", "model": "m"})
+    tab = client.post("/api/tabs", json={"name": "T"}).json()
+    client.post(f"/api/tabs/{tab['id']}/chat",
+                json={"question": "map the claims", "answer_format": "claim-map"})
+    assert seen["answer_format"] == "claim-map"
+
+
+def test_build_prompt_claim_map_replaces_style_line():
+    p = claude_bridge.build_prompt("q", answer_format="claim-map")
+    assert "ONE-LINE CLAIM MAP" in p
+    assert "ANSWER STYLE" not in p                      # format replaces the style line
+    # unknown / empty key falls back to the normal style instruction
+    assert "ANSWER STYLE" in claude_bridge.build_prompt("q", answer_format="")
+    assert "ANSWER STYLE" in claude_bridge.build_prompt("q", answer_format="bogus")
+
+
+def test_build_prompt_feature_map():
+    p = claude_bridge.build_prompt("A power supply circuit…", answer_format="feature-map")
+    assert "INTERLINEAR FEATURE MAP" in p
+    assert "ANSWER STYLE" not in p                      # preset replaces the style line
+
+
 def test_tab_documents_flow(client):
     tab = client.post("/api/tabs", json={"name": "Test"}).json()
     r = client.post(f"/api/tabs/{tab['id']}/documents",

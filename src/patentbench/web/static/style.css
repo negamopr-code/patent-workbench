@@ -218,7 +218,11 @@ textarea, select, input[type="text"] {
 
 .chat-input { border-top: 1px solid var(--border); padding-top: 8px; }
 .focus-hint { font-size: 12px; color: var(--accent); margin-bottom: 6px; }
-.chat-buttons { display: flex; gap: 8px; align-items: center; margin-top: 6px; justify-content: flex-end; }
+.chat-buttons { display: flex; gap: 8px; align-items: center; margin-top: 6px;
+  justify-content: flex-end; flex-wrap: wrap; }
+/* The answer-model + format pickers live right next to the ask buttons (where the
+   question is composed) — kept left while the buttons stay right. */
+.ask-pickers { display: flex; gap: 8px; align-items: center; margin-right: auto; flex-wrap: wrap; }
 
 /* modal */
 .modal {

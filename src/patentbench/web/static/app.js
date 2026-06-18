@@ -297,6 +297,7 @@ function savePrefs() {
     useDocs: $('use-docs').checked,
     askNb: $('ask-nb').checked,
     full: $('full-analysis').checked,
+    answerFormat: $('answer-format').value,
   }));
 }
 function loadPrefs() {
@@ -310,6 +311,7 @@ function loadPrefs() {
   $('use-docs').checked = p.useDocs !== false;
   $('ask-nb').checked = !!p.askNb;
   $('full-analysis').checked = !!p.full;
+  $('answer-format').value = p.answerFormat || '';
   updateSkillsSummary();
 }
 function defaultSkills() {
@@ -332,6 +334,13 @@ async function loadSkills() {
   }
   sel.value = skillsMeta.default_model;
   setReadModel(skillsMeta.default_read_model || 'claude-haiku-4-5');
+  const fmt = $('answer-format');
+  fmt.innerHTML = '';
+  for (const f of skillsMeta.answer_formats || [{ key: '', label: 'Default answer' }]) {
+    const o = document.createElement('option');
+    o.value = f.key; o.textContent = f.label;
+    fmt.appendChild(o);
+  }
   const wrap = $('skills');
   wrap.innerHTML = '';
   const lessonSel = $('lesson-skill');
@@ -356,6 +365,7 @@ async function loadSkills() {
   $('use-docs').onchange = savePrefs;
   $('ask-nb').onchange = savePrefs;
   $('full-analysis').onchange = savePrefs;
+  fmt.onchange = savePrefs;
 }
 function updateSkillsSummary() {
   const n = document.querySelectorAll('#skills input:checked').length;
@@ -708,6 +718,16 @@ function renderChat(messages) {
   wrap.scrollTop = wrap.scrollHeight;
 }
 
+// Minimal, XSS-safe markdown: escape HTML first, then render **bold** and
+// *italic* only. Newlines stay literal (the .msg has white-space: pre-wrap).
+// Used so the feature-map preset can show CLAIM text in bold and the disclosure
+// parentheticals in italic — claim-language vs mapping at a glance.
+function renderMarkdown(text) {
+  const esc = (text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return esc.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
+}
+
 function appendMsg(m) {
   const wrap = $('chat');
   const el = document.createElement('div');
@@ -727,7 +747,7 @@ function appendMsg(m) {
     el.appendChild(meta);
   }
   const body = document.createElement('div');
-  body.textContent = m.text;
+  body.innerHTML = renderMarkdown(m.text);     // **bold** + *italic*, rest escaped
   el.appendChild(body);
   if (m.role === 'c') {
     const btn = document.createElement('button');
@@ -775,6 +795,7 @@ async function sendChat(notebookOnly) {
         use_documents: $('use-docs').checked,
         ask_notebook: $('ask-nb').checked,
         full: $('full-analysis').checked,
+        answer_format: $('answer-format').value,
         focus_ids: [...docSelection],          // selected candidates → loaded full-text
       }) });
   }

@@ -80,7 +80,9 @@ def skills():
     return {"skills": claude_bridge.list_skills(),
             "models": claude_bridge.MODELS,
             "default_model": claude_bridge.CHAT_MODEL,
-            "default_read_model": claude_bridge.READ_MODEL}
+            "default_read_model": claude_bridge.READ_MODEL,
+            "answer_formats": [{"key": f["key"], "label": f["label"]}
+                               for f in claude_bridge.ANSWER_FORMATS]}
 
 
 # ---------- tabs ----------
@@ -942,7 +944,8 @@ def chat(tab_id: int, body: schemas.ChatRequest):
 
     res = claude_bridge.chat(body.question, history=history, documents=documents,
                              sources=nlm_sources, skills=skill_blocks, model=model,
-                             benchmark=benchmark, focus=focus, full=body.full)
+                             benchmark=benchmark, focus=focus, full=body.full,
+                             answer_format=body.answer_format)
     if "error" in res:
         out_messages.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
         return {"messages": out_messages, "error": res["error"]}

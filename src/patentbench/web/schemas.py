@@ -51,6 +51,7 @@ class ChatRequest(BaseModel):
     use_documents: bool = True
     ask_notebook: bool = False
     full: bool = False                 # long-form answer; default = 1-2 sentence precise mode
+    answer_format: str = ""            # ANSWER_FORMATS key; "" = default style
     focus_ids: list[int] = []          # selected candidates loaded with FULL primary text
 
 
