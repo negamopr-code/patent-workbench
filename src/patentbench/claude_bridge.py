@@ -188,6 +188,47 @@ _FMT_CLAIM_MAP = (
     "numerals like 'element 12', NO original-language text."
 )
 
+_FMT_CLAIM_MAP_PRAGMATIC = (
+    "ANSWER FORMAT — PRAGMATIC CLAIM MAP (examiner-style, terse). Like the "
+    "one-line claim map, but for EACH claim group you decide disclosure "
+    "feature-by-feature and, for any feature the reference does NOT disclose, "
+    "give the pragmatic obviousness verdict in the SAME breath instead of just "
+    "flagging the gap. Output one short block PER CLAIM GROUP and NOTHING else: "
+    "no 'GROUNDING:' line, no bullets, no intro, no 'Net:'/summary paragraph. "
+    "Group the claims under analysis (by default the BENCHMARK's claims; if the "
+    "user names a different document's claims, use those) so claims sharing a "
+    "technical focus sit together (an independent claim with its dependents, or "
+    "a consecutive range).\n"
+    "Each block follows this shape EXACTLY, in this order and wording:\n"
+    "  Claims <range> are directed to <the features in a few words>. "
+    "<REFERENCE-NUMBER> discloses <the disclosed feature(s)> as per <bare "
+    "locators>. <For each NOT-disclosed feature:> <feature> is not disclosed in "
+    "<REFERENCE-NUMBER>; however, it would constitute a standard design practice "
+    "to use one without appeal to inventive step.\n"
+    "LITERAL TEMPLATE TO MATCH: 'Claims 2-3 are directed to metering function "
+    "and usage of a transformer. EP3087655 discloses the metering function as "
+    "per [0018], [0028], claim 71, Fig.1. The transformer is not disclosed in "
+    "EP3087655; however, it would constitute a standard design practice to use "
+    "one without appeal to inventive step.'\n"
+    "BARE LOCATORS ONLY for what IS disclosed — paragraph markers like [0018], "
+    "[0028]; claim numbers like 'claim 2'; figures like 'Fig.1' — comma-"
+    "separated; no quote, no paraphrase, no WHY (this OVERRIDES the GROUNDING "
+    "quote rule — locators stand alone). Real locators only — never invent a "
+    "paragraph/claim/figure absent from the provided text.\n"
+    "OBVIOUSNESS WORDING: only call a missing feature obvious when it genuinely "
+    "is a routine/notorious measure (a standard component, a well-known "
+    "expedient, a trivial workshop choice). Default phrasing: '<feature> is not "
+    "disclosed in <REF>; however, it would constitute a standard design practice "
+    "to use one without appeal to inventive step.' Vary 'standard design "
+    "practice' with 'a notorious/well-known measure' or 'a routine workshop "
+    "modification' where it reads more naturally. If a missing feature is NOT "
+    "plainly routine — it could carry an inventive contribution — do NOT pretend "
+    "it is obvious; instead write: '<feature> is not disclosed in <REF> and is "
+    "not a mere routine measure (may support inventive step).' Be honest, not "
+    "automatically dismissive. NO tables, NO reference numerals like 'element "
+    "12', NO original-language text."
+)
+
 _FMT_FEATURE_MAP = (
     "ANSWER FORMAT — INTERLINEAR FEATURE MAP. The user pasted a CLAIM (preamble "
     "+ a list of elements). Reproduce the claim text faithfully and IN ORDER, "
@@ -236,6 +277,9 @@ ANSWER_FORMATS = [
      "instruction": _FMT_ONE_SENTENCE},
     {"key": "claim-map", "label": "Claims grouped → 1-line disclosure",
      "instruction": _FMT_CLAIM_MAP},
+    {"key": "claim-map-pragmatic",
+     "label": "Claims grouped → disclosure + obviousness verdict",
+     "instruction": _FMT_CLAIM_MAP_PRAGMATIC},
     {"key": "feature-map", "label": "Paste a claim → interlinear feature map",
      "instruction": _FMT_FEATURE_MAP},
 ]

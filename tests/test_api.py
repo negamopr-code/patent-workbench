@@ -53,7 +53,8 @@ def test_health(client):
 def test_skills_exposes_answer_formats(client):
     r = client.get("/api/skills").json()
     keys = [f["key"] for f in r["answer_formats"]]
-    assert {"", "one-sentence", "claim-map", "feature-map"} <= set(keys)   # default + presets
+    assert {"", "one-sentence", "claim-map", "claim-map-pragmatic",
+            "feature-map"} <= set(keys)                    # default + presets
     assert all("label" in f for f in r["answer_formats"])
 
 
@@ -74,6 +75,13 @@ def test_build_prompt_claim_map_replaces_style_line():
     # unknown / empty key falls back to the normal style instruction
     assert "ANSWER STYLE" in claude_bridge.build_prompt("q", answer_format="")
     assert "ANSWER STYLE" in claude_bridge.build_prompt("q", answer_format="bogus")
+
+
+def test_build_prompt_claim_map_pragmatic():
+    p = claude_bridge.build_prompt("q", answer_format="claim-map-pragmatic")
+    assert "PRAGMATIC CLAIM MAP" in p
+    assert "standard design practice" in p                 # the obviousness verdict
+    assert "ANSWER STYLE" not in p                         # preset replaces the style line
 
 
 def test_build_prompt_feature_map():
