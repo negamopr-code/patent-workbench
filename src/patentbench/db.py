@@ -359,6 +359,17 @@ def set_benchmark(tab_id: int, source: str, number: str | None = None,
              "pending", source, _now()))
 
 
+def set_benchmark_features(tab_id: int, spec: str, title: str) -> None:
+    """Set the benchmark from a TARGET FEATURE COMBINATION spec (no document to
+    fetch/transcribe). The spec IS the benchmark text, so it is ready at once."""
+    with _conn() as c:
+        c.execute("DELETE FROM benchmark WHERE tab_id=?", (tab_id,))
+        c.execute(
+            "INSERT INTO benchmark(tab_id, title, text, files, status, source, updated_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (tab_id, title, spec, json.dumps([]), "ready", "features", _now()))
+
+
 def update_benchmark(tab_id: int, **fields) -> None:
     if not fields:
         return

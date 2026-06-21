@@ -36,6 +36,8 @@ h4 { font-size: 13px; margin: 10px 0 6px; }
 .tab.active { background: var(--bg); border-color: var(--accent); }
 .tab .x { color: var(--muted); padding: 0 2px; border-radius: 4px; }
 .tab .x:hover { color: var(--err); }
+.tab .ren { color: var(--muted); padding: 0 2px; border-radius: 4px; font-size: 12px; }
+.tab .ren:hover { color: var(--accent); }
 .tab input { background: var(--bg); color: var(--text); border: 1px solid var(--accent);
   border-radius: 4px; font: inherit; width: 120px; }
 .tab-add {
@@ -120,6 +122,16 @@ textarea, select, input[type="text"] {
 /* deep-analyse-selected bar (candidates pane) */
 .deep-bar { display: flex; gap: 6px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
 
+/* benchmark "by feature combination" block */
+.bm-features { margin-top: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.bm-features summary { cursor: pointer; font-size: 13px; }
+.bm-features > p { margin: 8px 0; }
+.bm-features input { margin-bottom: 6px; }
+.bm-features textarea { width: 100%; min-height: 150px; font-family: ui-monospace, monospace;
+  font-size: 12px; box-sizing: border-box; resize: vertical; }
+.bm-feat-actions { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.bm-feat-actions .primary { margin-left: auto; }
+
 /* candidates pane */
 .pane-docs #in-text { min-height: 74px; font-family: ui-monospace, monospace; }
 .pane-docs #in-add { margin-top: 8px; }
@@ -148,6 +160,12 @@ textarea, select, input[type="text"] {
 .rate-bar #rate-status { font-size: 12px; }
 .rate-bar #rate-status.err { color: var(--err); }
 .rate-bar #rate-status:not(.muted) { color: var(--text); }
+.funnel-bar { margin-top: 12px; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: 8px; background: rgba(127,127,127,.06); }
+.funnel-bar .funnel-label { font-size: 12px; font-weight: 600; }
+.funnel-bar .funnel-arrow { color: var(--muted); }
+.funnel-bar #funnel-status { font-size: 12px; }
+#claude-pause { color: var(--err); }
 .doc .score .combined { color: var(--accent); font-weight: 700; }
 .doc .score .delta { color: var(--muted); font-weight: 600; }
 .doc .score .delta.big { color: var(--warn); }

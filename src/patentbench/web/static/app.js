@@ -78,9 +78,15 @@ function renderTabs() {
   for (const t of tabs) {
     const el = document.createElement('div');
     el.className = 'tab' + (activeTab === t.id ? ' active' : '');
+    el.dataset.tabId = t.id;
+    el.title = 'Click to open · ✎ or double-click to rename';
     const name = document.createElement('span');
-    name.textContent = t.name;
+    name.className = 'tab-name'; name.textContent = t.name;
     el.appendChild(name);
+    const ren = document.createElement('span');
+    ren.className = 'ren'; ren.textContent = '✎'; ren.title = 'Rename tab';
+    ren.onclick = e => { e.stopPropagation(); startRename(t); };
+    el.appendChild(ren);
     const x = document.createElement('span');
     x.className = 'x'; x.textContent = '×'; x.title = 'Delete tab';
     x.onclick = async e => {
@@ -92,23 +98,36 @@ function renderTabs() {
     };
     el.appendChild(x);
     el.onclick = () => selectTab(t.id);
-    el.ondblclick = () => startRename(el, name, t);
+    el.ondblclick = e => { e.preventDefault(); startRename(t); };
     wrap.appendChild(el);
   }
 }
 
-function startRename(tabEl, nameEl, t) {
+// Re-query the LIVE tab element by id: selectTab()→renderTabs() may have rebuilt the
+// DOM between the click that fired this and now, so a captured node would be stale.
+function startRename(t) {
+  const tabEl = $('tabs').querySelector(`.tab[data-tab-id="${t.id}"]`);
+  if (!tabEl) return;
+  const nameEl = tabEl.querySelector('.tab-name');
+  if (!nameEl) return;                       // already editing this tab
   const input = document.createElement('input');
-  input.value = t.name;
+  input.className = 'tab-rename'; input.value = t.name;
   tabEl.replaceChild(input, nameEl);
+  input.onclick = e => e.stopPropagation();  // clicking the field shouldn't re-select the tab
   input.focus(); input.select();
+  let done = false;
   const commit = async () => {
+    if (done) return;
+    done = true;
     const name = input.value.trim();
     if (name && name !== t.name) await api(`/api/tabs/${t.id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
     loadTabs();
   };
   input.onblur = commit;
-  input.onkeydown = e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') loadTabs(); };
+  input.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { done = true; loadTabs(); }
+  };
 }
 
 $('tab-add').onclick = async () => {
@@ -187,7 +206,9 @@ function renderBenchmark(bm) {
   row.className = 'doc-row';
   const name = document.createElement('span');
   name.className = 'num';
-  name.textContent = bm.number || `📷 ${(bm.files || []).length} uploaded file(s)`;
+  name.textContent = bm.source === 'features'
+    ? `🧩 ${bm.title || 'Feature combination'}`
+    : (bm.number || `📷 ${(bm.files || []).length} uploaded file(s)`);
   row.appendChild(name);
   const st = document.createElement('span');
   st.className = 'status ' + (bm.status === 'ready' ? 'fetched' : bm.status);
@@ -201,7 +222,7 @@ function renderBenchmark(bm) {
     view.title = 'Show the stored content of the benchmark';
     view.onclick = async () => {
       const full = await api(`/api/tabs/${activeTab}/benchmark/full`);
-      openViewer(full.number || 'Benchmark (uploaded files)', full);
+      openViewer(full.number || full.title || 'Benchmark', full);
     };
     row.appendChild(view);
   }
@@ -259,6 +280,43 @@ $('bm-set').onclick = async () => {
     method: 'PUT', body: JSON.stringify({ text }) });
   if (res.error) { $('bm-status').textContent = res.error; return; }
   $('bm-text').value = '';
+  $('bm-status').textContent = '';
+  renderBenchmark(res.benchmark);
+};
+
+const BM_FEATURE_TEMPLATE =
+`TARGET FEATURE COMBINATION (a document must disclose ALL of A–C):
+
+A) <feature A — what it is>.
+   Surface forms to treat as the same component: "<synonym>", "<synonym>".
+B) <feature B>.
+   Surface forms: "<synonym>", "<synonym>".
+C) <feature C>.
+   Surface forms: "<synonym>", "<synonym>".
+
+IMPLICIT MATCHES COUNT: if a document physically realizes an element above
+without using the literal word, treat it as a match for that element.
+
+SEED / SIMILAR DOCUMENTS already known to be near this space (use to anchor the
+search and to pull their families and citing/cited art — do NOT just return these):
+<WO…, CN…, EP…>`;
+
+$('bm-feat-tpl').onclick = () => {
+  const ta = $('bm-feat-spec');
+  if (ta.value.trim() && !confirm('Replace the current feature spec with the template?')) return;
+  ta.value = BM_FEATURE_TEMPLATE;
+  ta.focus();
+};
+
+$('bm-feat-set').onclick = async () => {
+  const spec = $('bm-feat-spec').value.trim();
+  if (spec.length < 10) { $('bm-status').textContent = 'Describe the feature combination first.'; return; }
+  const title = $('bm-feat-title').value.trim();
+  const res = await api(`/api/tabs/${activeTab}/benchmark/features`, {
+    method: 'POST', body: JSON.stringify({ spec, title: title || null }) });
+  if (res.error) { $('bm-status').textContent = res.error; return; }
+  $('bm-feat-spec').value = '';
+  $('bm-feat-title').value = '';
   $('bm-status').textContent = '';
   renderBenchmark(res.benchmark);
 };
@@ -811,31 +869,37 @@ async function sendChat(notebookOnly) {
 $('ask-claude').onclick = () => sendChat(false);
 $('ask-notebook').onclick = () => sendChat(true);
 
-async function runDeepCompare(idsArg, skipScored) {
+async function runDeepCompare(idsArg, skipScored, readModelOverride) {
   // idsArg: array of doc ids → those candidates; null/[] → EVERY candidate
   // skipScored: CONTINUE mode — read only candidates not yet full-read this batch
+  // readModelOverride: use this reading model for THIS run only (never mutates the
+  //   tab's 📖 dropdown). Default = the tab's chosen reading model.
   if (!activeTab) return;
   const ids = idsArg || [];
+  const readModel = readModelOverride || readModelValue();   // the model that ASSESSES each candidate
+  const answerModel = $('model').value;                      // the model that COMPILES the ranking
+  const short = m => m.replace('claude-', '');
   let scope = ids.length ? `the ${ids.length} SELECTED candidate(s)` : 'EVERY candidate';
   if (skipScored) {
     const todo = lastDocs.filter(d => d.status === 'fetched' && d.score == null).length;
     if (!todo) { alert('All candidates have already been full-read by Claude. Use 🤖 Claude deep-read all to re-read.'); return; }
     scope = `the ${todo} candidate(s) NOT yet full-read (most promising first)`;
   }
-  if (!confirm(`Deep read: the 📖 reading model reads ${scope} in FULL against ` +
-               `the benchmark (most-promising first)` +
-               (skipScored ? ', skipping the ones already read' : '') + '. ' +
-               (ids.length ? '' : 'Takes a few minutes. ') + 'Start?')) return;
+  if (!confirm(`Assess ${scope} in FULL against the benchmark, most-promising first`
+               + (skipScored ? ', skipping the ones already read' : '') + '.\n\n'
+               + `📖 reads/matches each candidate with: ${short(readModel)}\n`
+               + `💬 compiles the ranking with: ${short(answerModel)}\n\n`
+               + (ids.length ? '' : 'Takes a few minutes. ') + 'Start?')) return;
   const q = $('q').value.trim();          // optional custom task; default ranking otherwise
   $('q').value = '';
   const tabAtSend = activeTab;
   const res = await api(`/api/tabs/${tabAtSend}/deep-compare`, {
     method: 'POST', body: JSON.stringify({
-      model: $('model').value,
+      model: answerModel,
       skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
       question: q || null,
       doc_ids: ids.length ? ids : null,
-      reading_model: readModelValue(),
+      reading_model: readModel,
       skip_scored: !!skipScored,
     }) });
   if (activeTab !== tabAtSend) return;
@@ -857,20 +921,34 @@ async function pollRead() {
   const s = await api(`/api/tabs/${activeTab}/deep-compare/status`);
   if (activeTab !== tabAt) return;
   const el = $('read-status'); el.classList.remove('muted');
+  const pauseBtn = $('claude-pause');
   if (s.running) {
     readWasRunning = true;
-    el.textContent = `🤖 deep-reading ${s.done}/${s.total}… (scores land below; safe to reload)`;
+    const pending = Math.max(0, s.total - s.done);
+    const mdl = s.read_model ? ` with ${s.read_model.replace('claude-', '')}` : '';
+    el.textContent = s.paused
+      ? `⏸ pausing… assessed ${s.done}/${s.total}${mdl} (finishing in-flight; scores saved)`
+      : `🤖 assessing ${s.done}/${s.total}${mdl} vs benchmark… ${pending} to go (scores land below; safe to reload)`;
+    if (pauseBtn) pauseBtn.classList.toggle('hidden', s.paused);   // hide once a pause is requested
     refreshDocs();
-    readPoll = setTimeout(pollRead, 5000);
+    readPoll = setTimeout(pollRead, s.paused ? 2000 : 5000);
   } else if (readWasRunning) {
     readWasRunning = false;
-    el.textContent = `✓ deep-read finished — ranking posted to chat`;
+    if (pauseBtn) pauseBtn.classList.add('hidden');
+    el.textContent = `✓ assessment stopped — see chat (▶️ Continue assesses any left)`;
     refreshDocs();
     reloadChat();
   } else {
+    if (pauseBtn) pauseBtn.classList.add('hidden');
     el.classList.add('muted'); el.textContent = '';
   }
 }
+$('claude-pause').onclick = async () => {
+  if (!activeTab) return;
+  $('claude-pause').classList.add('hidden');
+  await api(`/api/tabs/${activeTab}/deep-compare/pause`, { method: 'POST' });
+  pollRead();
+};
 async function reloadChat() {
   if (!activeTab) return;
   const tabAt = activeTab;
@@ -886,6 +964,40 @@ $('deep-selected').onclick = () => {
   runDeepCompare([...docSelection]);
 };
 $('deep-clear').onclick = () => { docSelection = new Set(); refreshDocs(); };
+
+/* ---------- funnel: 📓 NLM shortlist (free, broad) → 🤖 opus verify (precise, narrow) ---------- */
+const VERIFY_MODEL = 'claude-opus-4-8';   // shortlist is tiny, so default the precise read to opus
+$('nlm-shortlist').onclick = async () => {
+  if (!activeTab) return;
+  const fetched = lastDocs.filter(d => d.status === 'fetched').length;
+  if (!fetched) { alert('No fetched candidates yet. Add and let some candidates fetch first.'); return; }
+  if (!confirm(`Ask NotebookLM (free) — in one fan-out question — which of the ${fetched} candidate(s) `
+    + 'disclose the benchmark\'s FULL feature combination? It auto-checks the ones it names so you '
+    + 'can then 🤖 Verify shortlist with opus on just those.')) return;
+  const fs = $('funnel-status'); fs.textContent = '📓 asking NotebookLM across the notebook(s)…';
+  const tabAt = activeTab;
+  const res = await api(`/api/tabs/${activeTab}/nlm-shortlist`, {
+    method: 'POST', body: JSON.stringify({}) });
+  if (activeTab !== tabAt) return;
+  if (res.error && !(res.messages || []).length) { fs.textContent = `Error: ${res.error}`; return; }
+  await reloadChat();
+  const ids = res.shortlist_ids || [];
+  if (ids.length) {
+    docSelection = new Set(ids);          // auto-check the shortlist for stage 2
+    fs.textContent = `✓ shortlisted ${ids.length}/${res.total} — checked them; now 🤖 Verify shortlist`;
+  } else {
+    fs.textContent = 'NotebookLM named none of your candidates — see chat.';
+  }
+  refreshDocs();
+};
+$('verify-shortlist').onclick = () => {
+  if (!docSelection.size) {
+    alert('No shortlist is checked. Run 📓 NLM shortlist first, or tick the candidates you want opus to verify.');
+    return;
+  }
+  // one-shot opus for THIS verify only — do NOT mutate the tab's 📖 model choice
+  runDeepCompare([...docSelection], false, VERIFY_MODEL);
+};
 
 /* ---------- NotebookLM rating (palmares: 📓 NLM vs 🤖 Claude) ---------- */
 async function startNlmRate(ids, force) {

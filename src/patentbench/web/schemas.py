@@ -27,6 +27,14 @@ class BenchmarkSet(BaseModel):
     text: str = Field(min_length=1, max_length=2000)   # a number or a link containing one
 
 
+class BenchmarkFeatures(BaseModel):
+    # The benchmark defined as a TARGET FEATURE COMBINATION spec (free-form, but
+    # usually a structured A/B/C… list with surface-forms + seed docs). Stored
+    # verbatim as the benchmark text and read as-is by the matching/chat models.
+    spec: str = Field(min_length=10, max_length=40000)
+    title: str | None = Field(default=None, max_length=200)
+
+
 class NotebookConfig(BaseModel):
     notebook_id: str | None = None     # None/empty disconnects
     notebook_title: str | None = None
@@ -71,6 +79,14 @@ class DeepCompareRequest(BaseModel):
 class NlmRateRequest(BaseModel):
     force: bool = False                 # re-rate candidates that already have an NLM score
     doc_ids: list[int] | None = None   # subset to rate; None/empty = every fetched candidate
+
+
+class NlmShortlistRequest(BaseModel):
+    # Free, broad pre-filter: ONE NotebookLM fan-out question (grounded on the
+    # sources, no token cost to us) returns which documents disclose the benchmark's
+    # feature combination → narrows 100s of candidates to a handful before the
+    # expensive opus verification. None question = build it from the benchmark.
+    question: str | None = Field(default=None, max_length=MAX_QUESTION)
 
 
 class ReconcileRequest(BaseModel):

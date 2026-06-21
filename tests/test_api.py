@@ -372,6 +372,107 @@ def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch)
     assert after["CN114853847"]["score_model"] == "claude-sonnet-4-6"   # records which model read it
 
 
+def test_nlm_shortlist_matches_candidates(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "Short"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    # benchmark as a feature combination (the spec is the question to NLM)
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"spec": "A) a fuel-gauge IC.\nB) a thermistor via voltage divider.",
+                      "title": "gauge + thermistor"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689", "US10395648B1"], "source": "image"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    # NLM names two of the three candidates (one with a different kind code) + a stranger
+    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None: {
+        "answer": "These disclose A-B: EP4340163 (kind-insensitive), CN117241689, "
+                  "and also WO2022239372 which is not in the pool."})
+    r = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={}).json()
+    assert r["ok"] is True
+    assert set(r["matched"]) == {"EP4340163A1", "CN117241689"}    # kind-code-insensitive match
+    assert "US10395648B1" not in r["matched"]
+    assert "WO2022239372" in r["unmatched"]                       # named but not a candidate
+    assert len(r["shortlist_ids"]) == 2
+    # NLM's reasoning is posted to chat for the user to review
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any(m["role"] == "c" and "EP4340163" in m["text"] for m in msgs)
+
+
+def test_nlm_shortlist_requires_benchmark(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "ShortNoBm"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1"], "source": "image"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    assert client.post(f"/api/tabs/{tid}/nlm-shortlist", json={}).status_code == 400
+
+
+def test_deep_compare_pause_stops_and_continue_finishes(client, monkeypatch):
+    import threading, time
+    tab = client.post("/api/tabs", json={"name": "Pause"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark",
+               json={"text": "https://patents.google.com/patent/US10395648B1/en"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP3667902A1", "CN114853847B", "EP4340163A1"], "source": "image"})
+    # gate deep_map so the job is mid-flight when we ask it to pause
+    gate = threading.Event()
+    seen = []
+
+    def slow_map(bm, d, model=None):
+        seen.append(d["number"])
+        gate.wait(2)
+        return {"verdict": f"MATCH SCORE: 5 for {d['number']}"}
+    monkeypatch.setattr(claude_bridge, "deep_map", slow_map)
+    monkeypatch.setattr(claude_bridge, "deep_reduce", lambda *a, **k: {"answer": "ranking"})
+    monkeypatch.setattr(api, "DIGEST_WORKERS", 1)        # one at a time → pause leaves some un-assessed
+    assert client.post(f"/api/tabs/{tid}/deep-compare", json={}).json()["started"] is True
+    for _ in range(50):                                   # wait until the first map call is in flight
+        if seen:
+            break
+        time.sleep(0.02)
+    p = client.post(f"/api/tabs/{tid}/deep-compare/pause").json()
+    assert p["paused"] is True
+    gate.set()                                            # let in-flight finish; job pauses after
+    _wait_read(client, tid)
+    after = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assessed = [n for n, d in after.items() if d["score"] is not None]
+    assert 0 < len(assessed) < 3                          # paused mid-way: some done, some not
+    # a paused run posts a ⏸ status and compiles NO ranking
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any(m["role"] == "s" and "Paused" in m["text"] for m in msgs)
+    assert not any(m["role"] == "c" and "ranking" in m["text"] for m in msgs)
+    # Continue assesses the rest
+    gate.set()
+    client.post(f"/api/tabs/{tid}/deep-compare", json={"skip_scored": True})
+    _wait_read(client, tid)
+    final = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert all(d["score"] is not None for d in final.values())   # all assessed now
+
+
+def test_deep_compare_honors_chosen_reading_model(client, monkeypatch):
+    """The model picked for 'best match' must be the one that assesses each
+    candidate AND gets recorded as score_model — and status reports it live."""
+    tab = client.post("/api/tabs", json={"name": "Mdl"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark",
+               json={"text": "https://patents.google.com/patent/US10395648B1/en"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP3667902A1", "CN114853847B"], "source": "image"})
+    used = []
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None: (used.append(model),
+                                                   {"verdict": f"MATCH SCORE: 6 for {d['number']}"})[1])
+    monkeypatch.setattr(claude_bridge, "deep_reduce", lambda *a, **k: {"answer": "ranking"})
+    client.post(f"/api/tabs/{tid}/deep-compare", json={"reading_model": "claude-haiku-4-5"})
+    _wait_read(client, tid)
+    assert used and all(m == "claude-haiku-4-5" for m in used)     # haiku assessed every candidate
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    assert all(d["score_model"] == "claude-haiku-4-5" for d in docs)  # recorded per row
+
+
 def test_nlm_rate_all_skips_already_rated(client, monkeypatch):
     import time
     tab = client.post("/api/tabs", json={"name": "Skip"}).json()
@@ -476,6 +577,39 @@ def test_chat_includes_benchmark_participant(client):
     r = client.post(f"/api/tabs/{tab['id']}/chat", json={"question": "best fit?"}).json()
     parts = r["messages"][-1]["participants"]
     assert any(p["kind"] == "benchmark" and p["title"] == "US10395648B1" for p in parts)
+
+
+def test_benchmark_by_features(client):
+    tab = client.post("/api/tabs", json={"name": "BMfeat"}).json()
+    spec = ("TARGET FEATURE COMBINATION (ALL of A-B):\n"
+            "A) a rechargeable battery.\nB) a fuel-gauge IC.")
+    r = client.post(f"/api/tabs/{tab['id']}/benchmark/features",
+                    json={"spec": spec, "title": "battery + gauge"}).json()
+    assert r["ok"]
+    st = client.get(f"/api/tabs/{tab['id']}/state").json()
+    bm = st["benchmark"]
+    assert bm["source"] == "features" and bm["status"] == "ready"
+    assert bm["title"] == "battery + gauge"
+    assert bm["number"] is None and bm["text"] is True   # slim view: presence flag
+    assert "links" not in bm or bm.get("links") is None
+    # full view returns the spec verbatim
+    full = client.get(f"/api/tabs/{tab['id']}/benchmark/full").json()
+    assert full["text"] == spec
+    # chat participant carries the feature title (not "0 file(s)")
+    parts = client.post(f"/api/tabs/{tab['id']}/chat",
+                        json={"question": "best fit?"}).json()["messages"][-1]["participants"]
+    assert any(p["kind"] == "benchmark" and p["title"] == "battery + gauge" for p in parts)
+    # too-short spec is rejected by validation
+    assert client.post(f"/api/tabs/{tab['id']}/benchmark/features",
+                       json={"spec": "tiny"}).status_code == 422
+
+
+def test_benchmark_features_default_title(client):
+    tab = client.post("/api/tabs", json={"name": "BMfeat2"}).json()
+    r = client.post(f"/api/tabs/{tab['id']}/benchmark/features",
+                    json={"spec": "A) something disclosed.\nB) something else."}).json()
+    assert r["ok"]
+    assert r["benchmark"]["title"] == "🧩 Feature combination"
 
 
 def test_benchmark_clear(client):

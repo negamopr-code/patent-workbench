@@ -7,7 +7,7 @@ import re
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -210,6 +210,27 @@ def benchmark_set_number(tab_id: int, body: schemas.BenchmarkSet, bg: Background
     return {"ok": True, "benchmark": _benchmark_view(tab_id)}
 
 
+@app.post("/api/tabs/{tab_id}/benchmark/features")
+def benchmark_set_features(tab_id: int, body: schemas.BenchmarkFeatures):
+    """Set the benchmark as a TARGET FEATURE COMBINATION spec instead of a
+    document. The spec text becomes the benchmark verbatim — every downstream
+    comparison (chat focus, deep-compare map-reduce, NLM rating, mirror) reads it
+    through the same _benchmark_fulltext path, so no fetch/transcription runs."""
+    _tab_or_404(tab_id)
+    spec = body.spec.strip()
+    if not spec:
+        raise HTTPException(400, "empty feature combination")
+    for f in db.clear_benchmark(tab_id):       # replacing: drop previous uploads
+        try:
+            os.unlink(f["path"])
+        except OSError:
+            pass
+    title = (body.title or "").strip() or "🧩 Feature combination"
+    db.set_benchmark_features(tab_id, spec, title)
+    _mirror_benchmark_if_auto(tab_id)
+    return {"ok": True, "benchmark": _benchmark_view(tab_id)}
+
+
 @app.post("/api/tabs/{tab_id}/benchmark/upload")
 async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
                            files: list[UploadFile] = File(...),
@@ -404,7 +425,8 @@ def _add_benchmark_to_notebook(tab_id: int) -> dict:
         return {"skip": "no notebook connected"}
     if bm.get("nlm_source_notebook") == cfg["notebook_id"]:
         return {"skip": "already added"}
-    label = bm.get("number") or f"{len(bm.get('files') or [])} file(s)"
+    label = (bm.get("number") or bm.get("title")
+             or f"{len(bm.get('files') or [])} file(s)")
     title = f"🎯 BENCHMARK — {label}"
     res = nlm_bridge.add_source_text(cfg["notebook_id"], title, _benchmark_fulltext(bm))
     if res.get("ok"):
@@ -953,8 +975,7 @@ def chat(tab_id: int, body: schemas.ChatRequest):
     participants.insert(0, {"kind": "model", "title": model})
     if benchmark:
         participants.append({"kind": "benchmark",
-                             "title": benchmark.get("number")
-                             or f"{len(benchmark.get('files') or [])} file(s)"})
+                             "title": _benchmark_label(benchmark)})
     if focus:
         participants.append({"kind": "documents",
                              "title": f"{len(focus)} focused (full text)"})
@@ -1152,6 +1173,100 @@ def nlm_rate_status(tab_id: int):
     return {"running": _nlm_rate_running(tab_id), "done": counts["rated"], **counts}
 
 
+# ---------- funnel stage 1: NotebookLM shortlist (free, broad) ----------
+
+NLM_SHORTLIST_PROMPT = (
+    "Across ALL the source documents provided, which ones disclose the COMPLETE "
+    "TARGET FEATURE COMBINATION below? Treat the listed surface-form synonyms and "
+    "any IMPLICIT realisation (a document that physically does the step without the "
+    "literal word) as a match. List EVERY document that discloses ALL of the "
+    "elements, each by its publication number (e.g. EP4340163A1, CN117241689). If "
+    "none disclose every element, list the closest few and say which element each "
+    "is missing.\n\n=== TARGET FEATURE COMBINATION ===\n{benchmark}"
+)
+
+NLM_SHORTLIST_QUERY_CAP = 6000   # NotebookLM rejects very long questions (~5-7k char ceiling)
+
+
+def _shortlist_key(number: str) -> str:
+    """Join key that ignores the kind-code suffix so an NLM-named 'EP4340163A1'
+    matches a stored 'EP4340163' (or vice-versa) — same publication for shortlisting."""
+    m = re.match(r"^([A-Z]{2}\d+)", number or "")
+    return m.group(1) if m else (number or "")
+
+
+@app.post("/api/tabs/{tab_id}/nlm-shortlist")
+def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
+    """FUNNEL STAGE 1 (free, broad). Ask NotebookLM — in ONE fan-out question across
+    every notebook the candidates live in — which documents disclose the benchmark's
+    full feature combination. Parse the publication numbers it names, match them
+    against this tab's candidates, and return that shortlist so the user can then run
+    the expensive 🤖 opus verification on just those few (stage 2)."""
+    _tab_or_404(tab_id)
+    ok, why = nlm_bridge.available()
+    if not ok:
+        raise HTTPException(400, f"NotebookLM unavailable: {why}")
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("status") != "ready":
+        raise HTTPException(400, "benchmark is not ready — set it first")
+    cands = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    if not cands:
+        raise HTTPException(400, "no fetched candidate documents to shortlist")
+    spec = (bm.get("text") if bm.get("source") == "features"
+            else _benchmark_summary_for_nlm(bm, limit=NLM_SHORTLIST_QUERY_CAP))
+    question = (body.question or "").strip() or NLM_SHORTLIST_PROMPT.format(
+        benchmark=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
+    series = _query_tab_series(tab_id, question)
+    if not series:
+        raise HTTPException(400, "no notebook connected — connect/export to a notebook first")
+    answers = [e for e in series if e.get("answer")]
+    if not answers:
+        errs = "; ".join(e.get("error", "?") for e in series)
+        msg = db.append_message(tab_id, "s", f"NotebookLM shortlist failed: {errs}")
+        return {"ok": False, "shortlist_ids": [], "messages": [msg], "error": errs}
+
+    # union of every publication number NotebookLM named, matched to our candidates
+    named: list[str] = []
+    for e in answers:
+        named += patents.extract_candidates(e["answer"])
+    by_key: dict[str, dict] = {}
+    for d in cands:                                  # first candidate per key wins
+        by_key.setdefault(_shortlist_key(d["number"]), d)
+    matched, seen_ids, unmatched = [], set(), []
+    for n in named:
+        d = by_key.get(_shortlist_key(n))
+        if d and d["id"] not in seen_ids:
+            seen_ids.add(d["id"])
+            matched.append(d)
+        elif not d and n not in unmatched:
+            unmatched.append(n)
+
+    participants = [{"kind": "benchmark", "title": _benchmark_label(bm)}]
+    for e in answers:
+        participants.append({"kind": "notebook", "title": e.get("title") or e["notebook_id"]})
+    out = [db.append_message(tab_id, "q",
+                             f"[📓 NLM shortlist — which of {len(cands)} candidates disclose the "
+                             f"benchmark's full feature combination?]")]
+    out.append(db.append_message(tab_id, "c", _series_answer_text(answers),
+                                 model="notebooklm", participants=participants))
+    summary = (f"📓 NotebookLM shortlisted {len(matched)} of {len(cands)} candidate(s)"
+               + (f": {', '.join(d['number'] for d in matched)}" if matched else "")
+               + ". Review them (auto-checked on the right), then 🤖 Verify shortlist to run "
+               "the precise opus read on just these.")
+    if unmatched:
+        summary += (f"\n\n({len(unmatched)} number(s) NotebookLM named are NOT in your candidate "
+                    f"pool — add them as candidates if you want them assessed: {', '.join(unmatched[:20])}"
+                    + (" …" if len(unmatched) > 20 else "") + ")")
+    if not matched:
+        summary = ("📓 NotebookLM named no document already in your candidate pool. See its answer "
+                   "above" + (f"; numbers it mentioned: {', '.join(unmatched[:20])}" if unmatched else "")
+                   + ".")
+    out.append(db.append_message(tab_id, "s", summary))
+    return {"ok": True, "shortlist_ids": [d["id"] for d in matched],
+            "matched": [d["number"] for d in matched], "unmatched": unmatched,
+            "total": len(cands), "messages": out}
+
+
 RECONCILE_MAX_DOCS = 30      # cap the disagreement set so the single call stays cheap
 
 
@@ -1200,6 +1315,13 @@ DEEP_DEFAULT_QUESTION = (
 )
 
 
+def _benchmark_label(bm: dict) -> str:
+    """Short human label for a benchmark: its number, else a feature-spec title,
+    else the uploaded-file count."""
+    return (bm.get("number") or bm.get("title")
+            or f"{len(bm.get('files') or [])} file(s)")
+
+
 def _benchmark_fulltext(bm: dict) -> str:
     if bm.get("text"):
         return bm["text"]
@@ -1215,6 +1337,14 @@ def _benchmark_fulltext(bm: dict) -> str:
 # job's start time, which works for both fresh re-reads and Continue.
 def _claude_read_lock_path(tab_id: int) -> str:
     return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".claude_read_{tab_id}.lock")
+
+
+def _claude_read_pause_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".claude_read_{tab_id}.pause")
+
+
+def _claude_read_paused(tab_id: int) -> bool:
+    return os.path.exists(_claude_read_pause_path(tab_id))
 
 
 def _claude_read_running(tab_id: int) -> bool:
@@ -1276,17 +1406,53 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
             os.utime(lock, None)               # heartbeat so the lock isn't seen as stale
             return {"number": d["number"], "title": d.get("title"), "verdict": verdict}
 
+        # Pausable sliding window: keep ≤ DIGEST_WORKERS in flight and check the
+        # pause flag between completions. Scores land per-candidate live (in `one`),
+        # so pausing loses nothing — the unassessed ones keep score=None and ▶️
+        # Continue (skip_scored) picks them up, possibly with a different model.
+        pause_path = _claude_read_pause_path(tab_id)
+        verdicts, paused = [], False
         with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
-            verdicts = list(ex.map(one, docs))
-        failed = sum(1 for v in verdicts if v["verdict"].startswith("(read failed"))
+            pending, nxt = {}, iter(docs)
+            for _ in range(DIGEST_WORKERS):           # prime the window
+                d = next(nxt, None)
+                if d is None:
+                    break
+                pending[ex.submit(one, d)] = d
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    pending.pop(fut)
+                    verdicts.append(fut.result())
+                if os.path.exists(pause_path):        # stop launching new work; drain in-flight
+                    paused = True
+                    for fut in pending:
+                        verdicts.append(fut.result())
+                    pending.clear()
+                    break
+                for _ in range(DIGEST_WORKERS - len(pending)):   # refill
+                    d = next(nxt, None)
+                    if d is None:
+                        break
+                    pending[ex.submit(one, d)] = d
+        read = sum(1 for v in verdicts if not v["verdict"].startswith("(read failed"))
+        failed = len(verdicts) - read
+        if paused:
+            remaining = len(docs) - len(verdicts)
+            db.append_message(
+                tab_id, "s",
+                f"⏸ Paused — assessed {read}/{len(docs)} against the benchmark ({read_model})"
+                + (f", {failed} failed" if failed else "")
+                + f"; {remaining + failed} still to assess. Change the 📖 reading model if "
+                "this one is wrong, then ▶️ Continue deep-read (only the un-assessed ones run).")
+            return                                    # no partial ranking on pause — resume to finish
         db.append_message(
-            tab_id, "s", f"Read {len(docs) - failed}/{len(docs)} candidates at FULL text ({read_model})"
+            tab_id, "s", f"Read {read}/{len(docs)} candidates at FULL text ({read_model})"
             + (f"; {failed} failed (likely token limit) — ▶️ Continue deep-read once renewed" if failed else ""))
 
         skill_blocks = []
         participants = [{"kind": "model", "title": model},
-                        {"kind": "benchmark",
-                         "title": bm.get("number") or f"{len(bm.get('files') or [])} file(s)"},
+                        {"kind": "benchmark", "title": _benchmark_label(bm)},
                         {"kind": "documents", "title": f"{scope_label} candidates · full text"}]
         for name in skills:
             content = claude_bridge.load_skill(name)
@@ -1307,10 +1473,11 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                                   if saved.get("ok") else
                                   f"Lesson for /{les['skill']} NOT saved: {saved.get('error')}\n\n{les['lesson']}")
     finally:
-        try:
-            os.unlink(lock)
-        except OSError:
-            pass
+        for p in (lock, _claude_read_pause_path(tab_id)):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
 
 @app.post("/api/tabs/{tab_id}/deep-compare")
@@ -1352,10 +1519,15 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
     lock = _claude_read_lock_path(tab_id)
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, json.dumps({"ids": target_ids, "started": db._now()}).encode())
+        os.write(fd, json.dumps({"ids": target_ids, "started": db._now(),
+                                 "read_model": read_model}).encode())
         os.close(fd)
     except FileExistsError:
         return {"started": False, "running": True, **_claude_read_counts(tab_id)}
+    try:                                       # drop any stale pause flag from a crashed run
+        os.unlink(_claude_read_pause_path(tab_id))
+    except OSError:
+        pass
     threading.Thread(target=_run_claude_read,
                      args=(tab_id, target_ids, model, read_model, list(body.skills), question, scope),
                      daemon=True).start()
@@ -1366,7 +1538,23 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
 def deep_compare_status(tab_id: int):
     """DB-derived progress for the background deep-read — correct from any worker."""
     _tab_or_404(tab_id)
-    return {"running": _claude_read_running(tab_id), **_claude_read_counts(tab_id)}
+    running = _claude_read_running(tab_id)
+    return {"running": running, "paused": running and _claude_read_paused(tab_id),
+            "read_model": _claude_read_meta(tab_id).get("read_model") if running else None,
+            **_claude_read_counts(tab_id)}
+
+
+@app.post("/api/tabs/{tab_id}/deep-compare/pause")
+def deep_compare_pause(tab_id: int):
+    """Ask a running assessment to pause: it stops launching new candidates, lets
+    the in-flight ones finish (their scores are saved), and waits. Already-assessed
+    candidates keep their scores; ▶️ Continue re-runs only the un-assessed ones, so
+    you can switch the 📖 reading model between pause and continue."""
+    _tab_or_404(tab_id)
+    if not _claude_read_running(tab_id):
+        return {"paused": False, "running": False, **_claude_read_counts(tab_id)}
+    open(_claude_read_pause_path(tab_id), "w").close()
+    return {"paused": True, "running": True, **_claude_read_counts(tab_id)}
 
 
 # ---------- lessons (manual save) ----------
