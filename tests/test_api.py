@@ -939,6 +939,22 @@ def test_deep_map_prompt_carries_target_features(monkeypatch):
     assert "uniquefeatureZ" in captured["p"]
 
 
+def test_deep_reduce_uses_long_timeout_and_bounds_prompt(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, timeout=None: captured.update(p=prompt, t=timeout)
+                        or {"answer": "ranking"})
+    # a large roster: each verdict is long, so the per-verdict slice must shrink
+    verdicts = [{"number": f"US{i}", "title": "t", "verdict": "X" * 8000}
+                for i in range(200)]
+    claude_bridge.deep_reduce("rank them", {"text": "BENCH"}, verdicts)
+    # the reduce gets the dedicated long timeout, not the 240s chat default
+    assert captured["t"] == claude_bridge.REDUCE_TIMEOUT
+    assert captured["t"] >= 600
+    # the assembled prompt stays bounded despite 200 long verdicts
+    assert len(captured["p"]) < claude_bridge.REDUCE_PROMPT_BUDGET * 1.2
+
+
 def test_benchmark_by_weighted_features(client):
     tab = client.post("/api/tabs", json={"name": "WF"}).json()
     feats = [{"name": "a rechargeable battery", "weight": 5},

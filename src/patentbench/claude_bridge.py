@@ -49,6 +49,11 @@ SKILLS_DIR = os.environ.get("CLAUDE_SKILLS_DIR", os.path.expanduser("~/.claude/s
 # stored digest, and in deep-compare it judges one candidate vs the benchmark.
 DIGEST_MODEL = os.environ.get("PB_DIGEST_MODEL", "claude-haiku-4-5")
 DIGEST_TIMEOUT = float(os.environ.get("PB_DIGEST_TIMEOUT", "300"))
+# The reduce phase compiles EVERY candidate's verdict in one call — far heavier
+# than a normal chat turn — so it gets its own, much longer timeout. Its prompt
+# is also kept bounded (per-verdict slice shrinks as the roster grows).
+REDUCE_TIMEOUT = float(os.environ.get("PB_REDUCE_TIMEOUT", "900"))
+REDUCE_PROMPT_BUDGET = int(os.environ.get("PB_REDUCE_PROMPT_BUDGET", "600000"))
 
 MAX_HISTORY = 24            # turns kept in the prompt
 MAX_TURN_CHARS = 4000       # each history turn clipped
@@ -733,8 +738,14 @@ def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
                 history: list[dict] | None = None) -> dict:
     """Reduce phase: the chat model compiles per-candidate FULL-TEXT verdicts into
     a final ranking/answer. Same return contract as chat()."""
+    # Per-verdict slice: 8000 chars normally, but shrink it for a large roster so
+    # the whole reduce prompt stays under REDUCE_PROMPT_BUDGET (prevents both the
+    # timeout and blowing the model's context). Floor at 1500 so cards stay useful.
+    per_cap = 8000
+    if verdicts:
+        per_cap = max(1500, min(8000, REDUCE_PROMPT_BUDGET // len(verdicts)))
     blocks = "\n\n".join(
-        f"[{v['number']} — {v.get('title') or ''}]\n{v['verdict'][:8000]}"
+        f"[{v['number']} — {v.get('title') or ''}]\n{v['verdict'][:per_cap]}"
         for v in verdicts)
     parts = [_PREAMBLE, _GROUNDING_INSTRUCTION]
     if skills:
@@ -760,7 +771,8 @@ def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
         parts.append("CONVERSATION HISTORY:\n" + "\n\n".join(lines))
     parts.append(_style_instruction(True))
     parts.append("TASK:\n" + question)
-    res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL)
+    res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL,
+                      timeout=REDUCE_TIMEOUT)
     if "error" in res:
         return res
     res["answer"] = _strip_cjk(res["answer"])
