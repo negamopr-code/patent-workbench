@@ -27,11 +27,23 @@ class BenchmarkSet(BaseModel):
     text: str = Field(min_length=1, max_length=2000)   # a number or a link containing one
 
 
+class FeatureItem(BaseModel):
+    # One target feature added "one by one" with its own importance weight (1–5,
+    # default 1). The weight feeds the candidate ranking: the primary rank key is
+    # the sum of the weights a candidate discloses, broken by how many it matches.
+    name: str = Field(min_length=1, max_length=500)
+    weight: int = Field(default=1, ge=1, le=5)
+
+
 class BenchmarkFeatures(BaseModel):
-    # The benchmark defined as a TARGET FEATURE COMBINATION spec (free-form, but
-    # usually a structured A/B/C… list with surface-forms + seed docs). Stored
-    # verbatim as the benchmark text and read as-is by the matching/chat models.
-    spec: str = Field(min_length=10, max_length=40000)
+    # The benchmark defined as a TARGET FEATURE COMBINATION. Two equivalent inputs:
+    #   • spec     — one free-form window (everything together), no per-feature weights
+    #   • features — a list of individually weighted features (added one by one)
+    # When `features` is given it wins: the benchmark text is composed from the
+    # weighted list and the weights drive scoring. Stored as the benchmark text and
+    # read as-is by the matching/chat models; weights are kept separately.
+    spec: str | None = Field(default=None, min_length=10, max_length=40000)
+    features: list[FeatureItem] = []
     title: str | None = Field(default=None, max_length=200)
 
 

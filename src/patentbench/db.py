@@ -89,9 +89,13 @@ def _conn():
         cols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "progress" not in cols:
             con.execute("ALTER TABLE benchmark ADD COLUMN progress TEXT")
+        if "features_json" not in cols:    # weighted target features [{name,weight}]
+            con.execute("ALTER TABLE benchmark ADD COLUMN features_json TEXT")
         dcols = {r[1] for r in con.execute("PRAGMA table_info(documents)")}
         if "digest" not in dcols:
             con.execute("ALTER TABLE documents ADD COLUMN digest TEXT")
+        if "feature_scores" not in dcols:  # per-target-feature verdict [{name,status}]
+            con.execute("ALTER TABLE documents ADD COLUMN feature_scores TEXT")
         if "score" not in dcols:
             con.execute("ALTER TABLE documents ADD COLUMN score REAL")
             con.execute("ALTER TABLE documents ADD COLUMN score_note TEXT")
@@ -205,14 +209,20 @@ def imported_source_ids(tab_id: int) -> set[str]:
 def list_documents(tab_id: int, full: bool = False) -> list[dict]:
     cols = ("*" if full else
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
-            "score, score_note, scored_at, score_model, nlm_score, nlm_score_note, nlm_scored_at, "
+            "score, score_note, scored_at, score_model, feature_scores, "
+            "nlm_score, nlm_score_note, nlm_scored_at, "
             "nlm_source_notebook, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
             "length(description) AS description_len, length(digest) AS digest_len")
     with _conn() as c:
         rows = c.execute(f"SELECT {cols} FROM documents WHERE tab_id=? ORDER BY id",
                          (tab_id,)).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["feature_scores"] = json.loads(d["feature_scores"]) if d.get("feature_scores") else None
+            out.append(d)
+        return out
 
 
 def get_document(doc_id: int) -> dict | None:
@@ -237,7 +247,7 @@ def set_document_number(tab_id: int, doc_id: int, number: str) -> dict:
             cur = c.execute(
                 "UPDATE documents SET number=?, status='pending', error=NULL, title=NULL, "
                 "abstract=NULL, claims=NULL, description=NULL, digest=NULL, fetched_at=NULL, "
-                "score=NULL, score_note=NULL, scored_at=NULL "
+                "score=NULL, score_note=NULL, scored_at=NULL, feature_scores=NULL "
                 "WHERE id=? AND tab_id=?", (number, doc_id, tab_id))
         except sqlite3.IntegrityError:
             return {"error": f"{number} is already in this tab"}
@@ -341,6 +351,8 @@ def get_benchmark(tab_id: int, full: bool = True) -> dict | None:
         return None
     d = dict(r)
     d["files"] = json.loads(d["files"]) if d["files"] else []
+    d["features"] = json.loads(d["features_json"]) if d.get("features_json") else []
+    d.pop("features_json", None)
     if not full:
         for k in ("abstract", "claims", "description", "text"):
             d[k] = bool(d[k])      # presence flags only — keep state payload small
@@ -359,15 +371,19 @@ def set_benchmark(tab_id: int, source: str, number: str | None = None,
              "pending", source, _now()))
 
 
-def set_benchmark_features(tab_id: int, spec: str, title: str) -> None:
-    """Set the benchmark from a TARGET FEATURE COMBINATION spec (no document to
-    fetch/transcribe). The spec IS the benchmark text, so it is ready at once."""
+def set_benchmark_features(tab_id: int, spec: str, title: str,
+                           features: list[dict] | None = None) -> None:
+    """Set the benchmark from a TARGET FEATURE COMBINATION (no document to
+    fetch/transcribe). The composed `spec` IS the benchmark text, so it is ready
+    at once; `features` (a weighted [{name,weight}] list) is stored alongside and
+    drives the candidate ranking when present."""
     with _conn() as c:
         c.execute("DELETE FROM benchmark WHERE tab_id=?", (tab_id,))
         c.execute(
-            "INSERT INTO benchmark(tab_id, title, text, files, status, source, updated_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (tab_id, title, spec, json.dumps([]), "ready", "features", _now()))
+            "INSERT INTO benchmark(tab_id, title, text, files, status, source, "
+            "features_json, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (tab_id, title, spec, json.dumps([]), "ready", "features",
+             json.dumps(features or [], ensure_ascii=False) if features else None, _now()))
 
 
 def update_benchmark(tab_id: int, **fields) -> None:

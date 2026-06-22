@@ -132,6 +132,28 @@ textarea, select, input[type="text"] {
 .bm-feat-actions { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
 .bm-feat-actions .primary { margin-left: auto; }
 
+/* one-by-one weighted feature rows */
+.bm-feat-rows-wrap { margin: 6px 0; }
+.bm-feat-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.bm-feat-row .feat-name { flex: 1; margin-bottom: 0; }
+.bm-feat-row .feat-weight { width: auto; flex: 0 0 auto; }
+.bm-feat-freeform { margin: 8px 0; }
+.bm-feat-freeform summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.bm-feat-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.feat-chip { color: var(--accent2); border-color: var(--accent2); }
+.bm-add-feat { margin: 8px 0 4px; padding: 6px; border: 1px dashed var(--border); border-radius: 8px; }
+.bm-add-feat .muted { margin-bottom: 4px; font-size: 12px; }
+.bm-add-feat .bm-feat-row { margin-bottom: 0; }
+.bm-add-feat .add-feat-name { margin-bottom: 0; }
+
+/* per-candidate weighted feature verdict */
+.feat-scores { margin: 4px 0; }
+.feat-weighted { font-size: 12px; }
+.feat-chip-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.feat-mark.yes { color: var(--ok); border-color: var(--ok); }
+.feat-mark.partial { color: var(--warn, #c90); border-color: var(--warn, #c90); }
+.feat-mark.no { color: var(--muted); opacity: 0.7; }
+
 /* candidates pane */
 .pane-docs #in-text { min-height: 74px; font-family: ui-monospace, monospace; }
 .pane-docs #in-add { margin-top: 8px; }

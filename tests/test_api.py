@@ -19,7 +19,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(claude_bridge, "digest_document",
                         lambda n, t, x, model=None: {"digest": f"digest of {n}"})
     monkeypatch.setattr(claude_bridge, "deep_map",
-                        lambda bm, d, model=None: {"verdict": f"MATCH SCORE: 7 for {d['number']}"})
+                        lambda bm, d, model=None, features=None: {"verdict": f"MATCH SCORE: 7 for {d['number']}"})
     monkeypatch.setattr(claude_bridge, "deep_reduce",
                         lambda *a, **k: {"answer": "ranking: best is X"})
     monkeypatch.setattr(nlm_bridge, "query",
@@ -360,7 +360,7 @@ def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch)
     db.update_document(docs["EP3667902A1"]["id"], score=7, score_note="old", scored_at=1, score_model="claude-opus-4-8")
     read = []
     monkeypatch.setattr(claude_bridge, "deep_map",
-                        lambda bm, d, model=None: (read.append(d["number"]), {"verdict": f"MATCH SCORE: 5 for {d['number']}"})[1])
+                        lambda bm, d, model=None, features=None: (read.append(d["number"]), {"verdict": f"MATCH SCORE: 5 for {d['number']}"})[1])
     monkeypatch.setattr(claude_bridge, "deep_reduce", lambda *a, **k: {"answer": "ranking"})
     client.post(f"/api/tabs/{tid}/deep-compare",
                 json={"skip_scored": True, "reading_model": "claude-sonnet-4-6"})
@@ -421,7 +421,7 @@ def test_deep_compare_pause_stops_and_continue_finishes(client, monkeypatch):
     gate = threading.Event()
     seen = []
 
-    def slow_map(bm, d, model=None):
+    def slow_map(bm, d, model=None, features=None):
         seen.append(d["number"])
         gate.wait(2)
         return {"verdict": f"MATCH SCORE: 5 for {d['number']}"}
@@ -463,7 +463,7 @@ def test_deep_compare_honors_chosen_reading_model(client, monkeypatch):
                 json={"numbers": ["EP3667902A1", "CN114853847B"], "source": "image"})
     used = []
     monkeypatch.setattr(claude_bridge, "deep_map",
-                        lambda bm, d, model=None: (used.append(model),
+                        lambda bm, d, model=None, features=None: (used.append(model),
                                                    {"verdict": f"MATCH SCORE: 6 for {d['number']}"})[1])
     monkeypatch.setattr(claude_bridge, "deep_reduce", lambda *a, **k: {"answer": "ranking"})
     client.post(f"/api/tabs/{tid}/deep-compare", json={"reading_model": "claude-haiku-4-5"})
@@ -706,7 +706,7 @@ def test_reading_model_plumbed(client, monkeypatch):
                         lambda n, t, x, model=None: seen.update(digest=model)
                         or {"digest": "d"})
     monkeypatch.setattr(claude_bridge, "deep_map",
-                        lambda bm, d, model=None: seen.update(map=model)
+                        lambda bm, d, model=None, features=None: seen.update(map=model)
                         or {"verdict": "MATCH SCORE: 5"})
     tab = client.post("/api/tabs", json={"name": "RM"}).json()
     client.post(f"/api/tabs/{tab['id']}/documents",
@@ -726,7 +726,7 @@ def test_reading_model_plumbed(client, monkeypatch):
 
 def test_deep_compare_stores_scores(client, monkeypatch):
     monkeypatch.setattr(claude_bridge, "deep_map",
-                        lambda bm, d, model=None: {"verdict":
+                        lambda bm, d, model=None, features=None: {"verdict":
                             f"MATCH SCORE: 8.5\nKEY FEATURES: AGC fan-out + ESS hierarchy\n"
                             f"OVERLAP: ...\nVERDICT: close for {d['number']}"})
     tab = client.post("/api/tabs", json={"name": "Score"}).json()
@@ -910,3 +910,121 @@ def test_chat_focus_is_sticky_across_turns(client, monkeypatch):
     seen.clear()
     client.post(f"/api/tabs/{tab['id']}/chat", json={"question": "and its description paragraphs?"})
     assert "CN113964850" in [d["number"] for d in (seen.get("focus") or [])]
+
+
+def test_parse_feature_check_aligns_and_defaults():
+    feats = [{"name": "battery", "weight": 5},
+             {"name": "fuel-gauge IC", "weight": 3},
+             {"name": "thermistor", "weight": 1}]
+    verdict = ("MATCH SCORE: 6\n"
+               "FEATURE 1: YES — [0012] a rechargeable cell\n"
+               "FEATURE 2: PARTIAL — claim 3 mentions a gauge vaguely\n"
+               # feature 3 deliberately omitted by the model -> defaults to 'no'
+               "VERDICT: partial\n")
+    out = claude_bridge.parse_feature_check(verdict, feats)
+    assert [f["status"] for f in out] == ["yes", "partial", "no"]
+    assert out[0]["weight"] == 5 and out[0]["name"] == "battery"
+    assert out[0]["note"].startswith("[0012]")
+
+
+def test_deep_map_prompt_carries_target_features(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, timeout=None: captured.update(p=prompt)
+                        or {"answer": "MATCH SCORE: 4\nFEATURE 1: NO — not disclosed"})
+    feats = [{"name": "uniquefeatureZ", "weight": 4}]
+    claude_bridge.deep_map("BENCH TEXT", {"number": "US1", "title": "t",
+                                          "description": "body"}, features=feats)
+    assert "FEATURE CHECK" in captured["p"]
+    assert "uniquefeatureZ" in captured["p"]
+
+
+def test_benchmark_by_weighted_features(client):
+    tab = client.post("/api/tabs", json={"name": "WF"}).json()
+    feats = [{"name": "a rechargeable battery", "weight": 5},
+             {"name": "a fuel-gauge IC", "weight": 2}]
+    r = client.post(f"/api/tabs/{tab['id']}/benchmark/features",
+                    json={"features": feats, "title": "battery + gauge"}).json()
+    assert r["ok"]
+    bm = client.get(f"/api/tabs/{tab['id']}/state").json()["benchmark"]
+    assert bm["source"] == "features"
+    assert [f["weight"] for f in bm["features"]] == [5, 2]
+    assert bm["features"][0]["name"] == "a rechargeable battery"
+    # the composed spec (full view) embeds both features + their weights
+    full = client.get(f"/api/tabs/{tab['id']}/benchmark/full").json()
+    assert "rechargeable battery" in full["text"] and "weight 5" in full["text"]
+    # empty body (no features, no spec) is rejected
+    assert client.post(f"/api/tabs/{tab['id']}/benchmark/features",
+                       json={}).status_code == 400
+
+
+def test_deep_compare_stores_weighted_feature_scores(client, monkeypatch):
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None, features=None: {"verdict":
+                            "MATCH SCORE: 7\n"
+                            "FEATURE 1: YES — [0001] has a battery\n"
+                            "FEATURE 2: NO — no gauge\n"
+                            f"VERDICT: for {d['number']}"})
+    tab = client.post("/api/tabs", json={"name": "WFscore"}).json()
+    feats = [{"name": "a rechargeable battery", "weight": 5},
+             {"name": "a fuel-gauge IC", "weight": 2}]
+    client.post(f"/api/tabs/{tab['id']}/benchmark/features",
+                json={"features": feats, "title": "b+g"})
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "EP3667902A1"})
+    client.post(f"/api/tabs/{tab['id']}/deep-compare", json={})
+    _wait_read(client, tab["id"])
+    d = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"][0]
+    assert d["score"] == 7
+    fs = d["feature_scores"]
+    assert [f["status"] for f in fs] == ["yes", "no"]
+    assert fs[0]["weight"] == 5 and fs[0]["name"] == "a rechargeable battery"
+
+
+def test_benchmark_add_feature_is_additive(client):
+    tab = client.post("/api/tabs", json={"name": "AddFeat"}).json()
+    tid = tab["id"]
+    # start with two weighted features
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "a battery", "weight": 5},
+                                   {"name": "a gauge", "weight": 2}], "title": "b+g"})
+    # append a third — must NOT drop the first two
+    r = client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                    json={"name": "a thermistor", "weight": 3}).json()
+    assert r["ok"]
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert [f["name"] for f in bm["features"]] == ["a battery", "a gauge", "a thermistor"]
+    assert [f["weight"] for f in bm["features"]] == [5, 2, 3]
+    assert bm["title"] == "b+g"          # title preserved across the add
+
+
+def test_benchmark_add_feature_preserves_freeform_text(client):
+    tab = client.post("/api/tabs", json={"name": "AddFeat2"}).json()
+    tid = tab["id"]
+    prose = "A) a rechargeable cell with a unique guardian circuit described at length."
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": prose})
+    # adding a weighted feature to a free-form benchmark keeps the prose as context
+    client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                json={"name": "a thermistor", "weight": 4})
+    full = client.get(f"/api/tabs/{tid}/benchmark/full").json()
+    assert "guardian circuit" in full["text"]      # original prose not discarded
+    assert "a thermistor" in full["text"]          # new feature added
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert [f["name"] for f in bm["features"]] == ["a thermistor"]
+
+
+def test_benchmark_add_feature_rejects_document_benchmark(client):
+    tab = client.post("/api/tabs", json={"name": "AddFeat3"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    assert client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                       json={"name": "x", "weight": 1}).status_code == 400
+
+
+def test_benchmark_add_feature_creates_when_none(client):
+    tab = client.post("/api/tabs", json={"name": "AddFeat4"}).json()
+    tid = tab["id"]
+    r = client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                    json={"name": "a battery", "weight": 5}).json()
+    assert r["ok"]
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert bm["source"] == "features" and bm["features"][0]["name"] == "a battery"

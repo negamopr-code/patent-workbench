@@ -648,12 +648,34 @@ _DEEP_MAP_PROMPT = (
 )
 
 
-def deep_map(benchmark_text: str, doc: dict, model: str | None = None) -> dict:
+def _feature_check_block(features: list[dict]) -> str:
+    """Instruction + numbered target list so the map model rates EACH weighted
+    feature individually (the per-feature verdicts drive the weighted ranking)."""
+    lines = [
+        "FEATURE CHECK: for EACH numbered TARGET FEATURE below, output one line",
+        "  FEATURE <n>: <YES|PARTIAL|NO> — <the candidate's [00NN]/claim locator and a",
+        "  short English note, or 'not disclosed'>",
+        "YES = the candidate clearly discloses it (literally or by clear equivalent);",
+        "PARTIAL = related but incomplete/ambiguous; NO = absent. Judge by substance,",
+        "not wording. TARGET FEATURES:",
+    ]
+    for i, f in enumerate(features, 1):
+        lines.append(f"{i}. {f.get('name', '')}")
+    return "\n".join(lines)
+
+
+def deep_map(benchmark_text: str, doc: dict, model: str | None = None,
+             features: list[dict] | None = None) -> dict:
     """Map phase of deep-compare: the reading model reads the candidate's FULL
-    text vs the benchmark. {verdict} | {error}."""
+    text vs the benchmark. When `features` is given (weighted feature-combination
+    benchmark), the model also emits a per-feature YES/PARTIAL/NO check used for
+    the weighted ranking. {verdict} | {error}."""
     fulltext = "\n\n".join(filter(None, [
         doc.get("abstract"), doc.get("claims"), doc.get("description")]))
-    prompt = (_DEEP_MAP_PROMPT
+    instructions = _DEEP_MAP_PROMPT
+    if features:
+        instructions = instructions + "\n" + _feature_check_block(features)
+    prompt = (instructions
               + "\n\n===== BENCHMARK =====\n" + benchmark_text[:200_000]
               + f"\n\n===== CANDIDATE {doc.get('number')} — {doc.get('title') or ''} =====\n"
               + fulltext[:MAX_FULLTEXT_CHARS])
@@ -671,6 +693,27 @@ def deep_map(benchmark_text: str, doc: dict, model: str | None = None) -> dict:
 
 _SCORE_RE = re.compile(r"MATCH SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 _FEATURES_RE = re.compile(r"KEY FEATURES:\s*(.+)", re.IGNORECASE)
+_FEATURE_CHECK_RE = re.compile(
+    r"FEATURE\s*(\d+)\s*:\s*(YES|PARTIAL|NO)\b[^\n]*", re.IGNORECASE)
+
+
+def parse_feature_check(text: str, features: list[dict]) -> list[dict]:
+    """Map a deep-map verdict's FEATURE CHECK lines back onto the benchmark's
+    weighted features, by 1-based index. Returns [{name, weight, status, note}]
+    aligned to `features`; any feature the model didn't rate defaults to 'no'."""
+    found: dict[int, tuple[str, str]] = {}
+    for m in _FEATURE_CHECK_RE.finditer(text or ""):
+        idx = int(m.group(1))
+        status = m.group(2).lower()
+        line = m.group(0)
+        note = line.split("—", 1)[1].strip()[:200] if "—" in line else ""
+        found[idx] = (status, note)
+    out = []
+    for i, f in enumerate(features, 1):
+        status, note = found.get(i, ("no", ""))
+        out.append({"name": f.get("name", ""), "weight": int(f.get("weight", 1)),
+                    "status": status, "note": note})
+    return out
 
 
 def parse_verdict(text: str) -> dict:

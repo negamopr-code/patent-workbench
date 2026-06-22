@@ -34,16 +34,30 @@
       </div>
 
       <details id="bm-features" class="bm-features">
-        <summary>🧩 …or define the benchmark by a <b>set of features</b></summary>
-        <p class="muted">No document — describe the <b>TARGET FEATURE COMBINATION</b> a
-          matching patent must disclose (elements A, B, C…, their surface-form synonyms,
-          and optional seed/near documents). Candidates are matched against this spec.</p>
+        <summary>🧩 …or define the benchmark by a <b>weighted set of features</b> (add one by one)</summary>
+        <p class="muted">No document — list the <b>TARGET FEATURES</b> a matching patent must
+          disclose, each with an importance <b>weight</b>. Candidates are matched against them,
+          and the weights decide ties.</p>
         <input id="bm-feat-title" type="text" maxlength="200"
           placeholder="Short label (optional, e.g. “battery fuel-gauge + thermistor”)…">
-        <textarea id="bm-feat-spec" rows="10"
-          placeholder="TARGET FEATURE COMBINATION (a document must disclose ALL of A–…)…"></textarea>
-        <div class="bm-feat-actions">
+
+        <div class="bm-feat-rows-wrap">
+          <p class="muted">Add features <b>one by one</b> and give each a <b>weight</b>
+            (1–5). The weight is decisive when two candidates score the same number of
+            points — the one disclosing the heavier features wins.</p>
+          <div id="bm-feat-rows"></div>
+          <button id="bm-feat-add" class="btn small" title="Add another weighted feature">➕ Add feature</button>
+        </div>
+
+        <details class="bm-feat-freeform">
+          <summary>…or paste everything in <b>one window</b> (no per-feature weights)</summary>
+          <textarea id="bm-feat-spec" rows="10"
+            placeholder="TARGET FEATURE COMBINATION (a document must disclose ALL of A–…)…"></textarea>
           <button id="bm-feat-tpl" class="btn small" title="Insert a fill-in scaffold for the feature spec">📋 Insert template</button>
+          <p class="muted">If you added weighted features above, they win — this window is ignored.</p>
+        </details>
+
+        <div class="bm-feat-actions">
           <button id="bm-feat-set" class="btn primary">Set as benchmark</button>
         </div>
       </details>

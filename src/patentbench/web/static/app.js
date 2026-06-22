@@ -35,6 +35,7 @@ let ratePoll = null;
 let readPoll = null;
 let readWasRunning = false;
 let docSelection = new Set();   // candidate ids picked for a scoped deep compare
+let currentBm = null;           // last-rendered benchmark (for weighted feature ranking)
 let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
 let lessonDefaultText = '';
@@ -190,6 +191,7 @@ async function selectTab(id) {
 /* ---------- benchmark (reference document) ---------- */
 function renderBenchmark(bm) {
   clearTimeout(bmPoll);
+  currentBm = bm;
   const card = $('bm-card');
   const setup = $('bm-setup');
   if (!bm) {
@@ -226,6 +228,13 @@ function renderBenchmark(bm) {
     };
     row.appendChild(view);
   }
+  if (bm.source === 'features') {
+    const edit = document.createElement('button');
+    edit.className = 'btn small'; edit.textContent = '✏️ Edit features';
+    edit.title = 'Add / remove / re-weight the target features and re-save';
+    edit.onclick = () => openFeatureEditor(bm);
+    row.appendChild(edit);
+  }
   const del = document.createElement('button');
   del.className = 'btn small del'; del.textContent = '🗑';
   del.title = 'Remove benchmark';
@@ -242,6 +251,21 @@ function renderBenchmark(bm) {
     t.className = 'title'; t.textContent = bm.title;
     card.appendChild(t);
   }
+  if ((bm.features || []).length) {
+    const fl = document.createElement('div');
+    fl.className = 'bm-feat-list';
+    fl.title = 'Weighted target features. Weight = how decisive that feature is in the ranking.';
+    for (const f of bm.features) {
+      const chip = document.createElement('span');
+      chip.className = 'chip feat-chip';
+      chip.textContent = `${f.name} ·${'★'.repeat(f.weight)}`;
+      fl.appendChild(chip);
+    }
+    card.appendChild(fl);
+  }
+  // Always-available "add a feature" window: APPENDS one weighted feature without
+  // touching the existing benchmark (non-destructive).
+  if (bm.source === 'features') card.appendChild(buildAddFeatureBox());
   for (const f of bm.files || []) {
     const chip = document.createElement('span');
     chip.className = 'chip';
@@ -308,15 +332,123 @@ $('bm-feat-tpl').onclick = () => {
   ta.focus();
 };
 
+/* one-by-one weighted feature rows */
+function addFeatureRow(name = '', weight = 1) {
+  const wrap = $('bm-feat-rows');
+  const row = document.createElement('div');
+  row.className = 'bm-feat-row';
+  const txt = document.createElement('input');
+  txt.type = 'text'; txt.className = 'feat-name'; txt.maxLength = 500; txt.value = name;
+  txt.placeholder = 'A feature a matching document must disclose…';
+  const sel = document.createElement('select');
+  sel.className = 'feat-weight';
+  sel.title = 'Importance weight — decisive when candidates tie on points';
+  for (let w = 1; w <= 5; w++) {
+    const o = document.createElement('option');
+    o.value = w; o.textContent = '★'.repeat(w) + ` (${w})`;
+    if (w === weight) o.selected = true;
+    sel.appendChild(o);
+  }
+  const del = document.createElement('button');
+  del.className = 'btn small del'; del.textContent = '🗑'; del.title = 'Remove this feature';
+  del.onclick = () => { row.remove(); if (!wrap.children.length) addFeatureRow(); };
+  row.append(txt, sel, del);
+  wrap.appendChild(row);
+  return txt;
+}
+function collectFeatureRows() {
+  return [...document.querySelectorAll('#bm-feat-rows .bm-feat-row')]
+    .map(r => ({ name: r.querySelector('.feat-name').value.trim(),
+                 weight: parseInt(r.querySelector('.feat-weight').value, 10) || 1 }))
+    .filter(f => f.name);
+}
+$('bm-feat-add').onclick = () => { addFeatureRow().focus(); };
+addFeatureRow();   // start with one empty row
+
+// A self-contained "➕ Add a feature" window rendered on the benchmark card. It
+// APPENDS a single weighted feature to the current benchmark and never clears or
+// replaces what is already there.
+function buildAddFeatureBox() {
+  const box = document.createElement('div');
+  box.className = 'bm-add-feat';
+  const lbl = document.createElement('div');
+  lbl.className = 'muted'; lbl.textContent = '➕ Add a feature to this benchmark:';
+  const row = document.createElement('div');
+  row.className = 'bm-feat-row';
+  const txt = document.createElement('input');
+  txt.type = 'text'; txt.maxLength = 500; txt.className = 'feat-name add-feat-name';
+  txt.placeholder = 'A feature a matching document must disclose…';
+  const sel = document.createElement('select');
+  sel.className = 'feat-weight';
+  sel.title = 'Importance weight — decisive when candidates tie on points';
+  for (let w = 1; w <= 5; w++) {
+    const o = document.createElement('option');
+    o.value = w; o.textContent = '★'.repeat(w) + ` (${w})`;
+    sel.appendChild(o);
+  }
+  const add = document.createElement('button');
+  add.className = 'btn small primary'; add.textContent = 'Add';
+  const submit = async () => {
+    const name = txt.value.trim();
+    if (!name) { txt.focus(); return; }
+    const res = await api(`/api/tabs/${activeTab}/benchmark/features/add`, {
+      method: 'POST', body: JSON.stringify({ name, weight: parseInt(sel.value, 10) || 1 }) });
+    if (res.error) { $('bm-status').textContent = res.error; return; }
+    $('bm-status').textContent = '';
+    renderBenchmark(res.benchmark);   // re-render shows the appended feature + a fresh empty input
+  };
+  add.onclick = submit;
+  txt.onkeydown = e => { if (e.key === 'Enter') submit(); };
+  row.append(txt, sel, add);
+  box.append(lbl, row);
+  return box;
+}
+
+// Re-open the feature editor pre-filled from an existing feature benchmark, so
+// features can be added / removed / re-weighted one by one without deleting it.
+async function openFeatureEditor(bm) {
+  $('bm-setup').classList.remove('hidden');
+  $('bm-features').open = true;
+  $('bm-feat-title').value =
+    (bm.title && bm.title !== '🧩 Feature combination') ? bm.title : '';
+  const rows = $('bm-feat-rows');
+  rows.innerHTML = '';
+  const feats = bm.features || [];
+  if (feats.length) {
+    for (const f of feats) addFeatureRow(f.name, f.weight);
+  } else {
+    addFeatureRow();
+    // freeform spec (no weighted rows) — pull the text so it stays editable
+    const full = await api(`/api/tabs/${activeTab}/benchmark/full`);
+    if (full && full.text) {
+      $('bm-feat-spec').value = full.text;
+      const ff = document.querySelector('.bm-feat-freeform');
+      if (ff) ff.open = true;
+    }
+  }
+  $('bm-features').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  rows.querySelector('.feat-name')?.focus();
+}
+
 $('bm-feat-set').onclick = async () => {
-  const spec = $('bm-feat-spec').value.trim();
-  if (spec.length < 10) { $('bm-status').textContent = 'Describe the feature combination first.'; return; }
   const title = $('bm-feat-title').value.trim();
+  const features = collectFeatureRows();
+  const spec = $('bm-feat-spec').value.trim();
+  let payload;
+  if (features.length) {
+    payload = { features, title: title || null };
+  } else if (spec.length >= 10) {
+    payload = { spec, title: title || null };
+  } else {
+    $('bm-status').textContent = 'Add at least one feature, or describe the combination in the window.';
+    return;
+  }
   const res = await api(`/api/tabs/${activeTab}/benchmark/features`, {
-    method: 'POST', body: JSON.stringify({ spec, title: title || null }) });
+    method: 'POST', body: JSON.stringify(payload) });
   if (res.error) { $('bm-status').textContent = res.error; return; }
   $('bm-feat-spec').value = '';
   $('bm-feat-title').value = '';
+  $('bm-feat-rows').innerHTML = ''; addFeatureRow();
   $('bm-status').textContent = '';
   renderBenchmark(res.benchmark);
 };
@@ -432,14 +564,43 @@ function updateSkillsSummary() {
 
 /* ---------- documents ---------- */
 let docsFilter = 'all';      // 'all' | 'unfetched' — quick view of pending/error only
-let docsSort = 'combined';   // 'combined' | 'claude' | 'nlm' | 'delta' — palmares ranking key
+let docsSort = 'combined';   // 'combined' | 'claude' | 'nlm' | 'delta' | 'weighted' — ranking key
+let docsSortTouched = false; // did the user pick a sort? (else feature mode defaults to weighted)
 // Combined ("common") score: average of the two engines when both rated, else the
 // single available score. Ranking by this puts documents BOTH engines like on top.
 function combinedScore(d) {
   if (d.score != null && d.nlm_score != null) return (d.score + d.nlm_score) / 2;
   return d.score ?? d.nlm_score ?? null;
 }
+function featureMode() {
+  return !!(currentBm && currentBm.source === 'features' && (currentBm.features || []).length);
+}
+// Weighted points a candidate earns from the benchmark's weighted features, using
+// the CURRENT weights (re-weighting re-ranks without re-reading). YES = full weight,
+// PARTIAL = half. {weighted, matched (#YES), total (Σ weight), count} | null.
+function featureStats(d) {
+  const feats = (currentBm && currentBm.features) || [];
+  const fs = d.feature_scores;
+  if (!featureMode() || !fs) return null;
+  let weighted = 0, matched = 0, total = 0;
+  for (let i = 0; i < feats.length; i++) {
+    const w = feats[i].weight || 1;
+    total += w;
+    let s = fs[i];
+    if (!s || s.name !== feats[i].name) s = fs.find(x => x.name === feats[i].name) || s;
+    const status = s ? s.status : 'no';
+    if (status === 'yes') { weighted += w; matched++; }
+    else if (status === 'partial') { weighted += w * 0.5; }
+  }
+  return { weighted, matched, total, count: feats.length };
+}
 function scoreSortValue(d, key) {
+  if (key === 'weighted') {
+    const fst = featureStats(d);
+    if (!fst) return -1;
+    // primary = weighted points, tiebreak = #matched features, then combined score
+    return fst.weighted * 1e6 + fst.matched * 1e3 + (combinedScore(d) ?? 0) * 10;
+  }
   if (key === 'nlm') return d.nlm_score ?? -1;
   if (key === 'delta') return (d.score != null && d.nlm_score != null) ? Math.abs(d.score - d.nlm_score) : -1;
   if (key === 'claude') return d.score ?? -1;
@@ -480,25 +641,30 @@ function renderDocs(allDocs) {
       t.onclick = () => { docsFilter = docsFilter === 'unfetched' ? 'all' : 'unfetched'; renderDocs(allDocs); };
       bar.appendChild(t);
     }
-    // sort the palmares by Claude, NotebookLM, or biggest disagreement
-    if (allDocs.some(d => d.nlm_score != null)) {
+    // sort the palmares — feature mode adds the weighted key (and defaults to it)
+    const fmode = featureMode();
+    const effSort = (!docsSortTouched && fmode) ? 'weighted' : docsSort;
+    if (fmode || allDocs.some(d => d.nlm_score != null)) {
       const sortSel = document.createElement('select');
       sortSel.className = 'sort-sel';
       sortSel.title = 'Rank candidates by';
-      for (const [v, label] of [['combined', '🥇 by combined'], ['claude', '🤖 by Claude'], ['nlm', '📓 by NLM'], ['delta', 'Δ by disagreement']]) {
+      const opts = [['combined', '🥇 by combined'], ['claude', '🤖 by Claude'], ['nlm', '📓 by NLM'], ['delta', 'Δ by disagreement']];
+      if (fmode) opts.unshift(['weighted', '⚖ by weighted features']);
+      for (const [v, label] of opts) {
         const o = document.createElement('option'); o.value = v; o.textContent = label;
-        if (v === docsSort) o.selected = true;
+        if (v === effSort) o.selected = true;
         sortSel.appendChild(o);
       }
-      sortSel.onchange = () => { docsSort = sortSel.value; renderDocs(allDocs); };
+      sortSel.onchange = () => { docsSort = sortSel.value; docsSortTouched = true; renderDocs(allDocs); };
       bar.appendChild(sortSel);
     }
     wrap.appendChild(bar);
   }
 
   // ranking ("palmares"): chosen score first, ties/unscored after (by insertion)
+  const sortKey = (!docsSortTouched && featureMode()) ? 'weighted' : docsSort;
   let docs = [...allDocs].sort((a, b) =>
-    scoreSortValue(b, docsSort) - scoreSortValue(a, docsSort) || a.id - b.id);
+    scoreSortValue(b, sortKey) - scoreSortValue(a, sortKey) || a.id - b.id);
   if (docsFilter === 'unfetched') docs = docs.filter(d => d.status !== 'fetched');
   for (const d of docs) {
     const el = document.createElement('div');
@@ -572,6 +738,31 @@ function renderDocs(allDocs) {
       r.className = 'read-meta muted';
       r.textContent = '🤖 not yet full-read';
       el.appendChild(r);
+    }
+    const fst = featureStats(d);
+    if (fst) {
+      const fw = document.createElement('div');
+      fw.className = 'feat-scores';
+      const head = document.createElement('div');
+      head.className = 'feat-weighted';
+      head.innerHTML = `⚖ <b>${fst.weighted.toFixed(1)}</b>/${fst.total} weighted `
+        + `· ${fst.matched}/${fst.count} features`;
+      head.title = 'Weighted points (Σ weight of disclosed features; partial = half) '
+        + 'out of the max, then how many features matched. Primary ranking key; '
+        + 'matched-count breaks ties.';
+      fw.appendChild(head);
+      const chips = document.createElement('div');
+      chips.className = 'feat-chip-row';
+      const mark = { yes: '✓', partial: '~', no: '✗' };
+      for (const f of (d.feature_scores || [])) {
+        const c = document.createElement('span');
+        c.className = 'chip feat-mark ' + f.status;
+        c.textContent = `${mark[f.status] || '?'} ${f.name} ·${'★'.repeat(f.weight || 1)}`;
+        if (f.note) c.title = f.note;
+        chips.appendChild(c);
+      }
+      fw.appendChild(chips);
+      el.appendChild(fw);
     }
     if (d.status === 'fetched') {
       const sz = document.createElement('div');

@@ -217,16 +217,79 @@ def benchmark_set_features(tab_id: int, body: schemas.BenchmarkFeatures):
     comparison (chat focus, deep-compare map-reduce, NLM rating, mirror) reads it
     through the same _benchmark_fulltext path, so no fetch/transcription runs."""
     _tab_or_404(tab_id)
-    spec = body.spec.strip()
-    if not spec:
-        raise HTTPException(400, "empty feature combination")
+    # Two input shapes: a weighted feature LIST (added one by one) wins; otherwise
+    # the free-form spec window. The list is composed into the benchmark text so all
+    # downstream readers (chat, deep-compare, NLM, mirror) work unchanged, and the
+    # weights are stored separately to drive the candidate ranking.
+    features = [{"name": f.name.strip(), "weight": f.weight}
+                for f in body.features if f.name.strip()]
+    if features:
+        spec = _compose_feature_spec(features)
+    else:
+        spec = (body.spec or "").strip()
+        if len(spec) < 10:
+            raise HTTPException(400, "describe the feature combination, or add features one by one")
     for f in db.clear_benchmark(tab_id):       # replacing: drop previous uploads
         try:
             os.unlink(f["path"])
         except OSError:
             pass
     title = (body.title or "").strip() or "🧩 Feature combination"
-    db.set_benchmark_features(tab_id, spec, title)
+    db.set_benchmark_features(tab_id, spec, title, features=features or None)
+    _mirror_benchmark_if_auto(tab_id)
+    return {"ok": True, "benchmark": _benchmark_view(tab_id)}
+
+
+_FEATURE_SPEC_HEADER = ("TARGET FEATURE COMBINATION — a matching document should "
+                        "disclose these features")
+
+
+def _compose_feature_spec(features: list[dict], extra: str = "") -> str:
+    """Render a weighted feature list into the benchmark text a matching document
+    must satisfy. Weights are shown so the reading model knows which features carry
+    the most importance, but the decisive weighting is applied in code (ranking).
+    `extra` = free-form text the user already wrote; preserved so an incremental
+    add never discards it."""
+    lines = [
+        _FEATURE_SPEC_HEADER + " (importance weight 1–5 in brackets; the more, "
+        "the more decisive):",
+        "",
+    ]
+    for i, f in enumerate(features, 1):
+        lines.append(f"{i}. [weight {f['weight']}] {f['name']}")
+    lines.append("")
+    lines.append("IMPLICIT MATCHES COUNT: if a document physically realizes a "
+                 "feature above without using the literal wording, treat it as a match.")
+    if extra.strip():
+        lines += ["", "ADDITIONAL CONTEXT (kept from the free-form description):", extra.strip()]
+    return "\n".join(lines)
+
+
+@app.post("/api/tabs/{tab_id}/benchmark/features/add")
+def benchmark_add_feature(tab_id: int, body: schemas.FeatureItem):
+    """APPEND one weighted feature to the benchmark, non-destructively. Existing
+    weighted features are kept; any free-form text already written is preserved as
+    context. Creates a fresh feature benchmark if none exists yet."""
+    _tab_or_404(tab_id)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "empty feature")
+    bm = db.get_benchmark(tab_id)
+    if bm and bm.get("source") not in (None, "features"):
+        raise HTTPException(400, "the current benchmark is a document — remove it "
+                                 "before defining the benchmark by features")
+    features = list((bm.get("features") if bm else None) or [])
+    features.append({"name": name, "weight": body.weight})
+    # preserve free-form text the user already wrote (a features benchmark with text
+    # but no weighted list yet) so adding a feature never throws it away
+    extra = ""
+    if bm and bm.get("source") == "features" and not (bm.get("features")):
+        prior = (db.get_benchmark(tab_id, full=True) or {}).get("text") or ""
+        if prior and _FEATURE_SPEC_HEADER not in prior:
+            extra = prior
+    title = (bm.get("title") if bm else "") or "🧩 Feature combination"
+    db.set_benchmark_features(tab_id, _compose_feature_spec(features, extra), title,
+                              features=features)
     _mirror_benchmark_if_auto(tab_id)
     return {"ok": True, "benchmark": _benchmark_view(tab_id)}
 
@@ -1390,6 +1453,7 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
     try:
         bm = db.get_benchmark(tab_id)
         bm_text = _benchmark_fulltext(bm)
+        bm_features = bm.get("features") or []     # weighted feature-combination mode
         idset = set(doc_ids)
         docs = [d for d in db.list_documents(tab_id, full=True)
                 if d["id"] in idset and d["status"] == "fetched"]
@@ -1397,12 +1461,17 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
         history = db.list_messages(tab_id, limit=claude_bridge.MAX_HISTORY)
 
         def one(d: dict) -> dict:
-            res = claude_bridge.deep_map(bm_text, d, model=read_model)
+            res = claude_bridge.deep_map(bm_text, d, model=read_model,
+                                         features=bm_features or None)
             verdict = res.get("verdict") or f"(read failed: {res.get('error')})"
             parsed = claude_bridge.parse_verdict(verdict)
             if parsed["score"] is not None:    # score + features + WHICH model/WHEN land on the row
-                db.update_document(d["id"], score=parsed["score"], score_note=parsed["features"],
-                                   scored_at=db._now(), score_model=read_model)
+                fields = dict(score=parsed["score"], score_note=parsed["features"],
+                              scored_at=db._now(), score_model=read_model)
+                if bm_features:                # per-feature YES/PARTIAL/NO → weighted ranking
+                    fs = claude_bridge.parse_feature_check(verdict, bm_features)
+                    fields["feature_scores"] = json.dumps(fs, ensure_ascii=False)
+                db.update_document(d["id"], **fields)
             os.utime(lock, None)               # heartbeat so the lock isn't seen as stale
             return {"number": d["number"], "title": d.get("title"), "verdict": verdict}
 
