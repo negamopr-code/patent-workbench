@@ -939,6 +939,30 @@ def test_deep_map_prompt_carries_target_features(monkeypatch):
     assert "uniquefeatureZ" in captured["p"]
 
 
+def test_focus_block_loads_full_long_description():
+    # a large patent description (well beyond the 40k benchmark cap) must load IN
+    # FULL when the candidate is FOCUSED — regression: it used to clip at ~40k.
+    desc = "".join(f"[{i:04d}] paragraph body line {i}. " for i in range(1, 3000))
+    assert len(desc) > 90_000   # well past the old 40k benchmark cap
+    doc = {"number": "WO2022239361", "title": "Power supply",
+           "abstract": "abs", "claims": "1. A unit.", "description": desc}
+    prompt = claude_bridge.build_prompt("does it disclose Fig. 23?", focus=[doc])
+    # the tail paragraph [2999] (Fig-23-region analogue) must be present, unclipped
+    assert "[2999]" in prompt
+    assert "CLIPPED" not in prompt
+
+
+def test_focus_block_flags_clip_when_over_budget(monkeypatch):
+    # if a focused doc genuinely exceeds the focus budget, the model must be TOLD
+    # it is truncated — never silently presented as "full text".
+    monkeypatch.setattr(claude_bridge, "MAX_FOCUS_CHARS", 5000)
+    monkeypatch.setattr(claude_bridge, "MAX_FULLTEXT_CHARS", 5000)
+    desc = "".join(f"[{i:04d}] x. " for i in range(1, 3000))
+    doc = {"number": "US9", "title": "t", "description": desc}
+    prompt = claude_bridge.build_prompt("q", focus=[doc])
+    assert "CLIPPED" in prompt
+
+
 def test_deep_reduce_uses_long_timeout_and_bounds_prompt(monkeypatch):
     captured = {}
     monkeypatch.setattr(claude_bridge, "_run_claude",

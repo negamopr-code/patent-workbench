@@ -418,7 +418,10 @@ def _document_block(doc: dict, budget: int, clipped: bool = True) -> str:
         room = budget - sum(len(p) for p in body_parts) - len(head)
         if room <= 100:
             break
-        clip_note = " …[CLIPPED]" if clipped and len(text) > room else ""
+        # Always flag a real truncation — even in the focus path. The focus header
+        # promises "FULL … unclipped" text; if a field actually overflows the budget
+        # the model must NOT treat it as complete (status ≠ substance).
+        clip_note = " …[CLIPPED — truncated here, NOT full text]" if len(text) > room else ""
         body_parts.append(f"{label}: {text[:room]}{clip_note}")
     if not body_parts:
         body_parts.append(f"(text not fetched — status: {doc.get('status', '?')}"
@@ -457,7 +460,7 @@ def _focus_block(doc: dict) -> str:
     """A user-selected candidate rendered with the FULL primary-text budget (no
     abstract/digest-first clipping) — this is the uncl­ipped text the chat needs to
     quote real paragraphs/claims."""
-    per = min(MAX_BENCHMARK_CHARS, max(MIN_DOC_CHARS, MAX_FOCUS_CHARS))
+    per = max(MIN_DOC_CHARS, min(MAX_FULLTEXT_CHARS, MAX_FOCUS_CHARS))
     return _document_block(doc, per, clipped=False)
 
 
@@ -485,7 +488,7 @@ def build_prompt(question: str, history: list[dict] | None = None,
     if focus:
         # the FULL primary text of the candidate(s) the user selected — divide the
         # focus budget across them so each is as complete as possible.
-        per = min(MAX_BENCHMARK_CHARS, max(MIN_DOC_CHARS, MAX_FOCUS_CHARS // len(focus)))
+        per = max(MIN_DOC_CHARS, min(MAX_FULLTEXT_CHARS, MAX_FOCUS_CHARS // len(focus)))
         fblocks = "\n\n".join(_document_block(d, per, clipped=False) for d in focus)
         parts.append(
             f"FOCUSED CANDIDATE(S) — the user selected these {len(focus)} document(s); "
