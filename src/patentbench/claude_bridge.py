@@ -60,6 +60,7 @@ MAX_TURN_CHARS = 4000       # each history turn clipped
 MAX_SKILL_CHARS = 16_000    # each skill doctrine clipped
 MAX_DOC_CHARS = 9000        # per-candidate ceiling (abstract+digest+claims first)
 MAX_DOCS_CHARS = 400_000    # total candidate budget per prompt
+MAX_ROSTER_CHARS = 240_000  # total budget for non-focused candidates' DIGESTS (focus path)
 MIN_DOC_CHARS = 1200        # floor below which a candidate block stops being useful
 MAX_FULLTEXT_CHARS = 400_000  # full document fed to the digest/deep-map model
 MAX_FOCUS_CHARS = 300_000     # total budget for user-SELECTED candidates loaded in full
@@ -497,17 +498,51 @@ def build_prompt(question: str, history: list[dict] | None = None,
             "source: quote and cite from here. Ground your answer in these:\n\n"
             + fblocks)
     if documents and focus:
-        # The user focused on specific candidate(s): keep the prompt tight and the
-        # answer grounded in the FULL focused text above — the rest collapse to a
-        # compact roster (number + title) so the model knows the corpus exists
-        # without 400k chars of clipped bodies diluting the focus (and slowing the
-        # call toward a timeout). Ask about a roster candidate → select it too.
-        roster = "\n".join(f"• {d.get('number','?')} — {d.get('title') or 'no title'}"
-                           for d in documents)
+        # The user focused on specific candidate(s): the answer is grounded in the
+        # FULL focused text above. The rest collapse to a roster — but one that
+        # CARRIES each candidate's already-computed DIGEST + score note (paid for at
+        # full-read time), not just number+title. That keeps the prompt far smaller
+        # than 400k chars of clipped primary bodies while letting the model REASON
+        # about every candidate it already read, instead of going blind and telling
+        # the user to "load full text" for something already digested. The digest is
+        # DERIVED (not quotable); a candidate must still be SELECTED only when a
+        # VERBATIM claim/[00NN] quote is needed.
+        # Prefer the stored deep-compare VERDICT (a full-text assessment vs THIS
+        # benchmark, with verified [00NN] evidence) over the generic digest — both
+        # are already paid for; reuse whichever is richer.
+        def _summary(d: dict) -> tuple[str, str]:
+            v = (d.get("verdict") or "").strip()
+            if v:
+                return ("ASSESSMENT vs benchmark (full-text read; its [00NN]/claim "
+                        "markers were verified — you MAY cite them)", v)
+            dig = (d.get("digest") or "").strip()
+            if dig:
+                return ("DIGEST (DERIVED summary — do NOT quote/cite paragraphs from "
+                        "it; SELECT this candidate to load full text for a verbatim quote)", dig)
+            return ("", "")
+        with_text = [d for d in documents if _summary(d)[1]]
+        per = (min(MAX_DOC_CHARS, max(MIN_DOC_CHARS, MAX_ROSTER_CHARS // len(with_text)))
+               if with_text else 0)
+        lines = []
+        for d in documents:
+            head = f"• {d.get('number','?')} — {d.get('title') or 'no title'}"
+            if d.get("score") is not None:
+                note = (d.get("score_note") or "").strip()
+                head += f"  [{d['score']:g}/10{(' — ' + note) if note else ''}]"
+            label, body = _summary(d)
+            if body:
+                clip = " …[clipped]" if len(body) > per else ""
+                head += f"\n  {label}: {body[:per]}{clip}"
+            else:
+                head += "  (not yet read; SELECT or Deep-compare to read it)"
+            lines.append(head)
         parts.append(
-            f"OTHER CANDIDATES in this tab ({len(documents)}) — roster only, NOT "
-            "their text. To quote or cite any of these, the user must SELECT it "
-            "(loads its full text into the FOCUSED block):\n" + roster)
+            f"OTHER CANDIDATES in this tab ({len(documents)}) — each shown with its "
+            "stored full-text ASSESSMENT (or digest) and match score, already computed "
+            "at read time. Use these to REASON about and compare every candidate; you "
+            "do NOT need the user to reload them. A candidate carrying an ASSESSMENT "
+            "was read in full — rely on it; a digest-only candidate must be SELECTED "
+            "for a verbatim claim/[00NN] quote:\n" + "\n".join(lines))
     elif documents:
         # EVERY candidate is always present: the per-candidate slice shrinks as
         # the list grows instead of dropping the tail (which is arbitrary —

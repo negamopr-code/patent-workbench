@@ -94,6 +94,8 @@ def _conn():
         dcols = {r[1] for r in con.execute("PRAGMA table_info(documents)")}
         if "digest" not in dcols:
             con.execute("ALTER TABLE documents ADD COLUMN digest TEXT")
+        if "verdict" not in dcols:  # full deep-map assessment vs benchmark — the
+            con.execute("ALTER TABLE documents ADD COLUMN verdict TEXT")  # reusable read artifact
         if "feature_scores" not in dcols:  # per-target-feature verdict [{name,status}]
             con.execute("ALTER TABLE documents ADD COLUMN feature_scores TEXT")
         if "score" not in dcols:
@@ -213,7 +215,8 @@ def list_documents(tab_id: int, full: bool = False) -> list[dict]:
             "nlm_score, nlm_score_note, nlm_scored_at, "
             "nlm_source_notebook, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
-            "length(description) AS description_len, length(digest) AS digest_len")
+            "length(description) AS description_len, length(digest) AS digest_len, "
+            "length(verdict) AS verdict_len")
     with _conn() as c:
         rows = c.execute(f"SELECT {cols} FROM documents WHERE tab_id=? ORDER BY id",
                          (tab_id,)).fetchall()

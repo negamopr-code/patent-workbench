@@ -622,10 +622,17 @@ function renderDocs(allDocs) {
   const disagree = allDocs.filter(d => d.score != null && d.nlm_score != null && Math.abs(d.score - d.nlm_score) >= 2).length;
   const rcl = $('reconcile');
   if (rcl) { rcl.classList.toggle('hidden', !disagree); rcl.textContent = `🔍 Why the gap? (${disagree})`; }
-  // surface "Continue deep-read" only when some fetched candidates are NOT yet full-read
-  const unread = allDocs.filter(d => d.status === 'fetched' && d.score == null).length;
+  // "Continue / Re-rank": read the leftovers if any, else just re-rank the WHOLE
+  // corpus from the already-stored full-text assessments (zero re-reading).
+  const isRead = d => d.status === 'fetched' && (d.verdict_len || d.score != null);
+  const unread = allDocs.filter(d => d.status === 'fetched' && !isRead(d)).length;
+  const assessed = allDocs.filter(isRead).length;
   const cont = $('claude-continue');
-  if (cont) { cont.classList.toggle('hidden', !unread); cont.textContent = `▶️ Continue deep-read (${unread} left)`; }
+  if (cont) {
+    cont.classList.toggle('hidden', !(unread || assessed));
+    cont.textContent = unread ? `▶️ Continue deep-read (${unread} left)`
+                              : `📊 Re-rank ${assessed} stored`;
+  }
   if (!unfetched && docsFilter === 'unfetched') docsFilter = 'all';
   if (allDocs.length) {
     const bar = document.createElement('div');
@@ -1071,16 +1078,24 @@ async function runDeepCompare(idsArg, skipScored, readModelOverride) {
   const answerModel = $('model').value;                      // the model that COMPILES the ranking
   const short = m => m.replace('claude-', '');
   let scope = ids.length ? `the ${ids.length} SELECTED candidate(s)` : 'EVERY candidate';
+  let rerankOnly = false;
   if (skipScored) {
-    const todo = lastDocs.filter(d => d.status === 'fetched' && d.score == null).length;
-    if (!todo) { alert('All candidates have already been full-read by Claude. Use 🤖 Claude deep-read all to re-read.'); return; }
-    scope = `the ${todo} candidate(s) NOT yet full-read (most promising first)`;
+    const isRead = d => d.status === 'fetched' && (d.verdict_len || d.score != null);
+    const todo = lastDocs.filter(d => d.status === 'fetched' && !isRead(d)).length;
+    const have = lastDocs.filter(isRead).length;
+    if (!todo && !have) { alert('No candidate has been full-read yet. Use 🤖 Claude deep-read all first.'); return; }
+    rerankOnly = !todo;
+    scope = todo ? `the ${todo} candidate(s) NOT yet full-read (most promising first)`
+                 : `all ${have} already-read candidate(s) — RE-RANK from stored assessments, no re-reading`;
   }
-  if (!confirm(`Assess ${scope} in FULL against the benchmark, most-promising first`
-               + (skipScored ? ', skipping the ones already read' : '') + '.\n\n'
-               + `📖 reads/matches each candidate with: ${short(readModel)}\n`
-               + `💬 compiles the ranking with: ${short(answerModel)}\n\n`
-               + (ids.length ? '' : 'Takes a few minutes. ') + 'Start?')) return;
+  const ask = rerankOnly
+    ? `Re-rank ${scope}.\n\n💬 compiles the ranking with: ${short(answerModel)}\n\nNo candidates are re-read. Start?`
+    : `Assess ${scope} in FULL against the benchmark, most-promising first`
+        + (skipScored ? ', skipping the ones already read' : '') + '.\n\n'
+        + `📖 reads/matches each candidate with: ${short(readModel)}\n`
+        + `💬 compiles the ranking with: ${short(answerModel)}\n\n`
+        + (ids.length ? '' : 'Takes a few minutes. ') + 'Start?';
+  if (!confirm(ask)) return;
   const q = $('q').value.trim();          // optional custom task; default ranking otherwise
   $('q').value = '';
   const tabAtSend = activeTab;

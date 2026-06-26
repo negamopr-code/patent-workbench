@@ -372,6 +372,35 @@ def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch)
     assert after["CN114853847"]["score_model"] == "claude-sonnet-4-6"   # records which model read it
 
 
+def test_rerank_reuses_stored_reads_without_rereading(client, monkeypatch):
+    """The core demand: once read ANYWHERE, an assessment is reused EVERYWHERE. A
+    Continue/re-rank with everything already read must do ZERO reads yet rank the
+    WHOLE corpus — including a legacy doc that has only a score (no stored verdict)."""
+    tab = client.post("/api/tabs", json={"name": "Reuse"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114547092"})
+    docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    # one fully-read (verdict stored), one LEGACY read (score only, verdict NULL)
+    db.update_document(docs["EP3667902A1"]["id"], verdict="MATCH SCORE: 8\n[0012]: foo",
+                       score=8, scored_at=1, score_model="claude-sonnet-4-6")
+    db.update_document(docs["CN114547092"]["id"], score=4, score_note="legacy note",
+                       scored_at=1, score_model="claude-opus-4-8")
+    reads, ranked = [], {}
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None, features=None: reads.append(d["number"]) or {"verdict": "x"})
+    monkeypatch.setattr(claude_bridge, "deep_reduce",
+                        lambda q, bm, verdicts, **k: ranked.update(v=verdicts) or {"answer": "ranking"})
+    r = client.post(f"/api/tabs/{tid}/deep-compare", json={"skip_scored": True}).json()
+    assert r.get("started")
+    _wait_read(client, tid)
+    assert reads == []                                  # NOTHING was re-read
+    nums = {v["number"] for v in ranked["v"]}
+    assert nums == {"EP3667902A1", "CN114547092"}       # BOTH ranked (legacy one included)
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any(m["role"] == "q" and "Re-rank" in m["text"] for m in msgs)
+
+
 def test_nlm_shortlist_matches_candidates(client, monkeypatch):
     tab = client.post("/api/tabs", json={"name": "Short"}).json()
     tid = tab["id"]
@@ -672,7 +701,7 @@ def test_deep_compare(client):
     _wait_read(client, tid)
     msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
     assert msgs[-1]["role"] == "c" and msgs[-1]["text"] == "ranking: best is X"
-    assert any(m["role"] == "s" and "2/2 candidates at FULL text" in m["text"] for m in msgs)
+    assert any(m["role"] == "s" and "ranking ALL 2 candidate(s)" in m["text"] for m in msgs)
     parts = msgs[-1]["participants"]
     assert any(p["title"].endswith("full text") for p in parts if p["kind"] == "documents")
     # no benchmark -> 400 (validated before the job starts)
@@ -691,8 +720,9 @@ def test_deep_compare_subset(client):
     assert client.post(f"/api/tabs/{tid}/deep-compare", json={"doc_ids": pick}).json()["started"]
     _wait_read(client, tid)
     msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
-    assert any(m["role"] == "s" and "2/2 candidates at FULL text" in m["text"] for m in msgs)
-    assert any(p["title"] == "2 of 3 candidates · full text" for p in msgs[-1]["participants"])
+    assert any(m["role"] == "s" and "Read 2 candidate(s) at FULL text this run" in m["text"]
+               for m in msgs)
+    assert any(p["title"] == "2 candidates · full text" for p in msgs[-1]["participants"])
     q = [m for m in msgs if m["role"] == "q"][-1]
     assert "2 of 3 candidates" in q["text"]
     # unknown ids only -> 400
@@ -850,6 +880,28 @@ def test_build_prompt_focus_full_text_and_full_style():
     assert "FOCUSED CANDIDATE" in p and "FULL primary text" in p
     assert "[0057] AGC stuff" in p                               # full description present, uncl­ipped
     assert "FULL analysis" in p                                  # full style instruction
+
+
+def test_build_prompt_roster_carries_digest_when_focused():
+    """With a focus, NON-focused candidates must still expose their already-computed
+    digest + score (paid for at read time) — not collapse to bare number+title — so
+    the model can reason about them instead of asking the user to reload full text."""
+    focus = [{"id": 1, "number": "CN111", "title": "f", "claims": "1. c",
+              "description": "[0001] focused body"}]
+    others = [{"id": 2, "number": "EP3977876", "title": "Power supply unit",
+               "digest": "discloses independent sensing and heating paths",
+               "score": 1, "score_note": "thermistor voltage divider"},
+              {"id": 4, "number": "CN117295425", "title": "Power supply unit",
+               "verdict": "ASSESSMENT: [0015] independent heater path confirmed",
+               "score": 2, "score_note": "independent paths"},
+              {"id": 3, "number": "CN999", "title": "no digest yet"}]
+    p = claude_bridge.build_prompt("q", focus=focus, documents=others)
+    assert "discloses independent sensing and heating paths" in p   # digest present
+    assert "1/10" in p and "thermistor voltage divider" in p        # score + note present
+    assert "DERIVED summary" in p                                    # digest flagged not-quotable
+    assert "[0015] independent heater path confirmed" in p          # stored verdict reused
+    assert "ASSESSMENT vs benchmark" in p                           # verdict labelled citable
+    assert "not yet read" in p                                       # un-read candidate flagged
 
 
 def test_chat_focus_and_full_plumbed(client, monkeypatch):

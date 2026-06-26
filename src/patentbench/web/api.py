@@ -1440,6 +1440,29 @@ def _claude_read_counts(tab_id: int) -> dict:
     return {"total": len(docs), "done": done}
 
 
+def _has_assessment(d: dict) -> bool:
+    """True if this candidate was EVER full-read — a stored deep-map verdict, OR a
+    legacy read that left only a score (verdict column predates those reads)."""
+    return bool((d.get("verdict") or "").strip()) or d.get("score") is not None
+
+
+def _stored_assessment(d: dict) -> str:
+    """The candidate's reusable full-text assessment for the reduce/ranking. Uses the
+    rich stored verdict when present; for a legacy read (score but no verdict)
+    synthesizes a block from score + key features + digest so it still ranks."""
+    v = (d.get("verdict") or "").strip()
+    if v:
+        return v
+    parts = []
+    if d.get("score") is not None:
+        parts.append(f"MATCH SCORE: {d['score']:g}")
+    if (d.get("score_note") or "").strip():
+        parts.append("KEY FEATURES: " + d["score_note"].strip())
+    if (d.get("digest") or "").strip():
+        parts.append(d["digest"].strip())
+    return "\n".join(parts).strip()
+
+
 def _promise(d: dict) -> float:
     """Rank key: read the MOST PROMISING first (avg of any Claude/NLM score we have),
     so a limited token budget is spent on the best candidates before it runs out."""
@@ -1463,17 +1486,20 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
         def one(d: dict) -> dict:
             res = claude_bridge.deep_map(bm_text, d, model=read_model,
                                          features=bm_features or None)
+            ok = "verdict" in res
             verdict = res.get("verdict") or f"(read failed: {res.get('error')})"
-            parsed = claude_bridge.parse_verdict(verdict)
-            if parsed["score"] is not None:    # score + features + WHICH model/WHEN land on the row
-                fields = dict(score=parsed["score"], score_note=parsed["features"],
+            if ok:                             # PERSIST the read artifact so EVERY feature
+                parsed = claude_bridge.parse_verdict(verdict)   # (chat, re-rank, future
+                fields = dict(verdict=verdict, # deep-compares) reuses it without re-reading
                               scored_at=db._now(), score_model=read_model)
+                if parsed["score"] is not None:    # score + features land on the row too
+                    fields.update(score=parsed["score"], score_note=parsed["features"])
                 if bm_features:                # per-feature YES/PARTIAL/NO → weighted ranking
                     fs = claude_bridge.parse_feature_check(verdict, bm_features)
                     fields["feature_scores"] = json.dumps(fs, ensure_ascii=False)
                 db.update_document(d["id"], **fields)
             os.utime(lock, None)               # heartbeat so the lock isn't seen as stale
-            return {"number": d["number"], "title": d.get("title"), "verdict": verdict}
+            return {"number": d["number"], "title": d.get("title"), "verdict": verdict, "ok": ok}
 
         # Pausable sliding window: keep ≤ DIGEST_WORKERS in flight and check the
         # pause flag between completions. Scores land per-candidate live (in `one`),
@@ -1504,7 +1530,7 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                     if d is None:
                         break
                     pending[ex.submit(one, d)] = d
-        read = sum(1 for v in verdicts if not v["verdict"].startswith("(read failed"))
+        read = sum(1 for v in verdicts if v["ok"])
         failed = len(verdicts) - read
         if paused:
             remaining = len(docs) - len(verdicts)
@@ -1515,20 +1541,43 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                 + f"; {remaining + failed} still to assess. Change the 📖 reading model if "
                 "this one is wrong, then ▶️ Continue deep-read (only the un-assessed ones run).")
             return                                    # no partial ranking on pause — resume to finish
+
+        # REDUCE over the WHOLE corpus of stored assessments — every candidate that
+        # was EVER full-read (this run or any earlier one) participates in the ranking,
+        # so already-read documents are reused, never re-read. Reading above only
+        # filled the gaps; the ranking is always whole-corpus.
+        corpus = [d for d in db.list_documents(tab_id, full=True)
+                  if d["status"] == "fetched" and _has_assessment(d)]
+        corpus.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)
+        reduce_verdicts = [{"number": d["number"], "title": d.get("title"),
+                            "verdict": _stored_assessment(d)} for d in corpus
+                           if _stored_assessment(d)]
+        reused = max(0, len(corpus) - read)
+        if not reduce_verdicts:
+            db.append_message(tab_id, "s",
+                              f"No candidate could be full-read ({failed} failed, likely token "
+                              "limit) — nothing to rank. ▶️ Continue deep-read once renewed.")
+            return
         db.append_message(
-            tab_id, "s", f"Read {read}/{len(docs)} candidates at FULL text ({read_model})"
-            + (f"; {failed} failed (likely token limit) — ▶️ Continue deep-read once renewed" if failed else ""))
+            tab_id, "s",
+            (f"Read {read} candidate(s) at FULL text this run ({read_model}); "
+             if read else "")
+            + (f"{failed} failed (likely token limit); " if failed else "")
+            + f"ranking ALL {len(corpus)} candidate(s) with a stored full-text "
+            f"assessment" + (f" ({reused} reused, no re-read)" if reused else "") + ".")
 
         skill_blocks = []
         participants = [{"kind": "model", "title": model},
                         {"kind": "benchmark", "title": _benchmark_label(bm)},
-                        {"kind": "documents", "title": f"{scope_label} candidates · full text"}]
+                        {"kind": "documents",
+                         "title": f"{len(corpus)} candidates · full text"
+                         + (f" ({reused} reused)" if reused else "")}]
         for name in skills:
             content = claude_bridge.load_skill(name)
             if content:
                 skill_blocks.append({"name": name, "content": content})
                 participants.append({"kind": "skill", "title": name})
-        res = claude_bridge.deep_reduce(question, bm, verdicts, skills=skill_blocks,
+        res = claude_bridge.deep_reduce(question, bm, reduce_verdicts, skills=skill_blocks,
                                         model=model, history=history)
         if "error" in res:
             db.append_message(tab_id, "s", f"Claude error compiling the ranking: {res['error']}")
@@ -1563,28 +1612,37 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
     if body.doc_ids:
         want = set(body.doc_ids)
         docs = [d for d in all_docs if d["id"] in want]
+        if not docs:
+            raise HTTPException(400, "no fetched candidate documents among the selected ones")
     else:
         docs = list(all_docs)
-    if body.skip_scored:
-        docs = [d for d in docs if d.get("score") is None]
-    if not docs:
-        if body.skip_scored:
-            return {"started": False, "messages": [db.append_message(
-                tab_id, "s", "Every candidate has already been full-read by Claude — nothing to "
-                             "continue. Use 🤖 Claude deep-read all to re-read.")]}
+    # READING happens only for candidates that still need it; the RANKING always
+    # reuses the whole corpus of stored assessments (see _run_claude_read). Continue
+    # = read only the un-assessed; Deep-read all / selected = (re-)read the targeted
+    # set fresh. When nothing needs reading but assessments exist, RE-RANK from them
+    # (zero reads) — work done anywhere is reused everywhere.
+    to_read = [d for d in docs if not _has_assessment(d)] if body.skip_scored else list(docs)
+    corpus = [d for d in all_docs if _has_assessment(d)]
+    if not to_read and not corpus:
         raise HTTPException(400, "no fetched candidate documents"
                             + (" among the selected ones" if body.doc_ids else ""))
     if _claude_read_running(tab_id):
         return {"started": False, "running": True, **_claude_read_counts(tab_id)}
-    target_ids = [d["id"] for d in docs]
-    scope = (f"{len(docs)} of {len(all_docs)}" if len(docs) != len(all_docs) else f"all {len(docs)}")
+    target_ids = [d["id"] for d in to_read]
     model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
     question = (body.question or "").strip() or DEEP_DEFAULT_QUESTION
     read_model = _read_model(body.reading_model) or claude_bridge.DIGEST_MODEL
-    docs.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)
-    db.append_message(tab_id, "q",
-                      f"[Deep {'read · continue' if body.skip_scored else 'compare'} — {scope} "
-                      f"candidates at full text: {', '.join(d['number'] for d in docs[:30])}]\n{question}")
+    to_read.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)
+    if to_read:
+        scope = (f"{len(to_read)} of {len(all_docs)}"
+                 if len(to_read) != len(all_docs) else f"all {len(to_read)}")
+        head = (f"[Deep {'read · continue' if body.skip_scored else 'compare'} — {scope} "
+                f"candidates at full text: {', '.join(d['number'] for d in to_read[:30])}]")
+    else:                                          # reduce-only: re-rank from stored
+        scope = f"all {len(all_docs)}"
+        head = (f"[Re-rank — compiling the stored full-text assessments of "
+                f"{len(corpus)} candidate(s), no re-reading]")
+    db.append_message(tab_id, "q", f"{head}\n{question}")
     lock = _claude_read_lock_path(tab_id)
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
