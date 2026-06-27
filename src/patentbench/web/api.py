@@ -1139,7 +1139,9 @@ def _run_pipeline(tab_id: int) -> None:
             st = _pipeline_set(tab_id, step="debate")
         if st.get("step") == "debate":
             _pipeline_set(tab_id, status_text="⚖️ Claude ↔ NotebookLM debating block by block…")
-            nlm_challenge(tab_id, schemas.NlmChallengeRequest(doc_ids=st.get("doc_ids") or None))
+            # doc_ids=None → debate the UNION of NLM's finalists + Claude's top picks (the
+            # bidirectional set); the debate adds any of Claude's picks missing from the notebook.
+            nlm_challenge(tab_id, schemas.NlmChallengeRequest())
             st = _pipeline_set(tab_id, step="done")
         _pipeline_set(tab_id, step="done", status_text="✅ done", error=None)
     except Exception as exc:                            # keep the file so the user can ▶️ Resume
@@ -1699,14 +1701,20 @@ def reconcile_scores(tab_id: int, body: schemas.ReconcileRequest):
 
 
 NLM_DEBATE_PROMPT = (
-    "Assess ONLY these finalist documents — {finalists} — which are all in the sources. "
-    "For EACH finalist, go through the TARGET FEATURE BLOCKS below ONE BY ONE and mark each "
-    "YES / PARTIAL / NO with a few words of evidence FROM THE DOCUMENT (treat an implicit "
-    "realisation — doing the step without the literal word — as covered). Then name the single "
-    "best finalist and the runner-up. Do not bring in documents outside this list.\n\n"
-    "=== TARGET FEATURE BLOCKS ===\n{spec}"
+    "Assess ONLY these documents — {finalists} — which are all in the sources. Some were "
+    "picked by you earlier, OTHERS were rated highly by an independent full-text analysis "
+    "(Claude); judge them ALL on equal footing. For EACH, go through the TARGET FEATURE BLOCKS "
+    "below ONE BY ONE and mark each YES / PARTIAL / NO with a few words of evidence FROM THE "
+    "DOCUMENT (treat an implicit realisation — doing the step without the literal word — as "
+    "covered). Then name the single best and the runner-up, and — importantly — for any "
+    "document you rank LOW, state SPECIFICALLY which block(s) it misses or only partially "
+    "discloses, so a disagreement with the other analysis is explained. Do not bring in "
+    "documents outside this list.\n\n=== TARGET FEATURE BLOCKS ===\n{spec}"
 )
-NLM_CHALLENGE_MAX = 8        # finalists fit comfortably in one bulk prompt on each side
+NLM_CHALLENGE_MAX = 10       # union of both sides' picks; still fits one bulk prompt per side
+CLAUDE_TOP_MIN = 7.0         # Claude's "good picks" worth challenging NotebookLM with
+# the block-by-block reconciliation is the decisive call → run it on the strong model
+DEBATE_MODEL = os.environ.get("PB_DEBATE_MODEL", "claude-opus-4-8")
 
 
 def _claude_finalist_brief(d: dict) -> str:
@@ -1738,65 +1746,94 @@ def nlm_challenge(tab_id: int, body: schemas.NlmChallengeRequest):
     if not bm or bm.get("status") != "ready":
         raise HTTPException(400, "benchmark is not ready — set it first")
     docs = db.list_documents(tab_id, full=True)
-    # subject = NotebookLM's finalists (in the notebook) — its persisted shortlist, else the
-    # top NLM-rated, else the checked set. NOT Claude's own picks (those may not be sources).
+    fetched = [d for d in docs if d["status"] == "fetched"]
+    # subject = BIDIRECTIONAL union: NotebookLM's finalists (its shortlist) AND Claude's own
+    # high-scored picks — so NLM is challenged on Claude's choices too, not only its own.
     if body.doc_ids:
         idset = set(body.doc_ids)
-        finalists = [d for d in docs if d["id"] in idset and d["status"] == "fetched"]
+        subject = [d for d in fetched if d["id"] in idset]
     else:
-        finalists = [d for d in docs if d.get("shortlisted") and d["status"] == "fetched"]
-        if not finalists:
-            finalists = sorted([d for d in docs if d.get("nlm_score") is not None
-                                and d["status"] == "fetched"],
-                               key=lambda d: (d["nlm_score"], d["id"]), reverse=True)
-    if not finalists:
-        raise HTTPException(400, "no NotebookLM finalists yet — run 📓 NLM shortlist (and "
-                                 "🧺 Consolidate) first, or check the documents to debate")
-    finalists = finalists[:NLM_CHALLENGE_MAX]
+        finalists = [d for d in fetched if d.get("shortlisted")] or sorted(
+            [d for d in fetched if d.get("nlm_score") is not None],
+            key=lambda d: (d["nlm_score"], d["id"]), reverse=True)
+        claude_top = sorted([d for d in fetched if (d.get("score") or 0) >= CLAUDE_TOP_MIN],
+                            key=lambda d: (d["score"], d["id"]), reverse=True)
+        if not claude_top:                             # fall back to Claude's best few if none ≥ min
+            claude_top = sorted([d for d in fetched if d.get("score") is not None],
+                                key=lambda d: (d["score"], d["id"]), reverse=True)[:5]
+        seen, subject = set(), []
+        for d in finalists + claude_top:               # finalists first, then Claude's picks, deduped
+            if d["id"] not in seen:
+                seen.add(d["id"])
+                subject.append(d)
+    if not subject:
+        raise HTTPException(400, "nothing to debate yet — run 📓 NLM shortlist / 🏆 Deep compare "
+                                 "first, or check the documents to debate")
+    subject = subject[:NLM_CHALLENGE_MAX]
     spec = _benchmark_feature_spec_for_nlm(bm)
-    nums = ", ".join(d["number"] for d in finalists)
-    # 1) NotebookLM round — one bulk grounded prompt, scoped to the connected (consolidated)
-    #    notebook so every finalist is a source; cached so re-runs are free.
-    question = NLM_DEBATE_PROMPT.format(finalists=nums, spec=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
+    nums = ", ".join(d["number"] for d in subject)
     cfg = db.get_notebook_config(tab_id) or {}
+    # ensure EVERY subject document is a source in the connected notebook — otherwise NLM
+    # answers "not present in the source set" for Claude's picks that were never consolidated.
+    not_in_nb = []
+    if cfg.get("notebook_id"):
+        nb = cfg["notebook_id"]
+        _add_benchmark_to_notebook(tab_id, nb)
+        for d in subject:
+            if d.get("nlm_source_notebook") != nb:
+                res = _add_doc_to_notebook(d["id"], nb)
+                if not res.get("ok") and not res.get("skip"):
+                    not_in_nb.append(d["number"])
+    # 1) NotebookLM round — one bulk grounded prompt, scoped to the connected notebook (now
+    #    holding both sides' picks); cached so re-runs are free.
+    question = NLM_DEBATE_PROMPT.format(finalists=nums, spec=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
     if cfg.get("notebook_id"):
         titles = {n["id"]: n["title"]
                   for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
-        qres = _nlm_query_cached(cfg["notebook_id"], question, source_ids=None)
+        qres = _nlm_query_cached(cfg["notebook_id"], question, source_ids=None, force=bool(not_in_nb))
         series = [{"notebook_id": cfg["notebook_id"],
                    "title": titles.get(cfg["notebook_id"], cfg["notebook_id"]),
                    **({"error": qres["error"]} if "error" in qres else {"answer": qres["answer"]})}]
     else:
         series = _query_tab_series(tab_id, question)
+    finalists = subject                                # name kept for the messages below
     answers = [e for e in series if e.get("answer")]
     if not answers:
         errs = "; ".join(e.get("error", "?") for e in series) or "no notebook connected"
         msg = db.append_message(tab_id, "s", f"📓 NotebookLM debate failed: {errs}")
         return {"ok": False, "messages": [msg], "error": errs}
     nlm_answer = _series_answer_text(answers)
-    # 2) Claude round — one cheap call: argue per block from the finalists' digests + NLM's reply
+    # 2) Claude round — ONE strong-model (opus by default) call: argue per block from the
+    #    subject's digests + stored verdicts vs NLM's reply, and reconcile. Opus, not haiku,
+    #    because this is the decisive reasoning step.
     finalists_text = "\n\n".join(_claude_finalist_brief(d) for d in finalists)
-    cres = claude_bridge.debate(spec, finalists_text, nlm_answer, model=claude_bridge.DIGEST_MODEL)
+    debate_model = DEBATE_MODEL if DEBATE_MODEL in claude_bridge.MODELS else claude_bridge.DIGEST_MODEL
+    cres = claude_bridge.debate(spec, finalists_text, nlm_answer, model=debate_model)
     # 3) post the two-sided debate to chat
     nb_parts = [{"kind": "benchmark", "title": _benchmark_label(bm)}]
     for e in answers:
         nb_parts.append({"kind": "notebook", "title": e.get("title") or e["notebook_id"]})
     out = [db.append_message(
         tab_id, "q",
-        f"[⚖️ Debate — Claude ↔ NotebookLM reconcile {len(finalists)} finalist(s) block by block: {nums}]")]
+        f"[⚖️ Debate — Claude ↔ NotebookLM reconcile {len(finalists)} pick(s) block by block "
+        f"(both sides' choices): {nums}]")]
+    if not_in_nb:
+        out.append(db.append_message(tab_id, "s", "Note: couldn't add to the notebook (so NLM "
+                   f"couldn't judge them): {', '.join(not_in_nb)} — the notebook may be at its "
+                   "50-source cap."))
     out.append(db.append_message(tab_id, "c", "**📓 NotebookLM (grounded on the documents):**\n\n"
                                  + nlm_answer, model="notebooklm", participants=nb_parts))
     if cres.get("answer"):
         out.append(db.append_message(
-            tab_id, "c", "**🤖 Claude (reconciling block by block):**\n\n" + cres["answer"],
-            model=claude_bridge.DIGEST_MODEL,
-            participants=[{"kind": "model", "title": claude_bridge.DIGEST_MODEL},
-                          {"kind": "documents", "title": f"{len(finalists)} finalists · digests"}]))
+            tab_id, "c", f"**🤖 Claude · {debate_model} (reconciling block by block):**\n\n" + cres["answer"],
+            model=debate_model,
+            participants=[{"kind": "model", "title": debate_model},
+                          {"kind": "documents", "title": f"{len(finalists)} picks · digests"}]))
     else:
         out.append(db.append_message(tab_id, "s", f"Claude side failed: {cres.get('error')}"))
     out.append(db.append_message(
-        tab_id, "s", "⚖️ Above: NotebookLM's grounded block-by-block read and Claude's reconciliation "
-        "(consensus + any disputed blocks). Tick the agreed best and 🤖 Verify with opus."))
+        tab_id, "s", "⚖️ Above: NotebookLM's grounded block-by-block read of BOTH sides' picks and "
+        "Claude's (opus) reconciliation. Tick the agreed best and 🤖 Verify with opus."))
     return {"ok": True, "messages": out, "finalists": [d["number"] for d in finalists]}
 
 

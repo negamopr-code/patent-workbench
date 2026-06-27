@@ -1371,10 +1371,11 @@ async function runChallenge({ confirmFirst = true, docIds = null } = {}) {
     return;
   }
   if (confirmFirst) {
-    const subj = useSel ? `the ${docSelection.size} checked` : `the ${finalists} shortlisted`;
-    if (!confirm(`Run a Claude ↔ NotebookLM debate over ${subj} finalist(s)? NotebookLM re-reads them `
-      + 'block-by-block (one grounded prompt), then Claude argues per block from the stored digests and '
-      + 'reconciles. One prompt per side — cheap.')) return;
+    const subj = useSel ? `the ${docSelection.size} checked document(s)`
+                        : "both sides' picks (NotebookLM's shortlist + Claude's high-scored)";
+    if (!confirm(`Run a Claude ↔ NotebookLM debate over ${subj}? Claude's picks are added into the `
+      + 'notebook so NotebookLM can judge them too; NLM reads each block-by-block, then Claude '
+      + 'reconciles on opus. One prompt per side.')) return;
   }
   const btn = $('nlm-challenge'); if (btn) btn.disabled = true;
   appendMsg({ role: 'q', text: '⚖️ Debate the finalists — where do Claude and NotebookLM agree/disagree per block, and what reconciles them?' });

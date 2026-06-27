@@ -564,19 +564,23 @@ def test_nlm_challenge_debates_finalists_both_sides(client, monkeypatch):
     docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
     _db.set_shortlisted(tid, [docs[0]["id"]])
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
     nlm_calls, claude_calls = [], []
     monkeypatch.setattr(nlm_bridge, "query",
                         lambda nb, q, source_ids=None: nlm_calls.append(q) or {
                             "answer": f"{docs[0]['number']}: A) YES, B) PARTIAL."})
-    monkeypatch.setattr(claude_bridge, "debate",
-                        lambda blocks, finals, nlm, model=None: claude_calls.append((finals, nlm)) or {
-                            "answer": "Consensus: agree on A, dispute B.", "model": "claude-haiku-4-5"})
+    debate_models = []
+    def fake_debate(blocks, finals, nlm, model=None):
+        claude_calls.append((finals, nlm)); debate_models.append(model)
+        return {"answer": "Consensus: agree on A, dispute B.", "model": model}
+    monkeypatch.setattr(claude_bridge, "debate", fake_debate)
     r = client.post(f"/api/tabs/{tid}/nlm-challenge", json={}).json()
     assert r["ok"] is True
     assert r["finalists"] == [docs[0]["number"]]          # debates NLM's finalist, not Claude's picks
     assert len(nlm_calls) == 1 and len(claude_calls) == 1  # one prompt per side
     assert docs[0]["number"] in nlm_calls[0]              # finalist named to NLM
     assert docs[0]["number"] in claude_calls[0][0]        # finalist digest given to Claude
+    assert debate_models[0] == "claude-opus-4-8"         # reconciliation runs on opus, not haiku
     msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
     assert any(m["role"] == "c" and "NotebookLM" in m["text"] for m in msgs)
     assert any(m["role"] == "c" and "Claude" in m["text"] for m in msgs)
