@@ -631,6 +631,36 @@ def test_pipeline_needs_doc_ids(client, monkeypatch):
     assert client.post(f"/api/tabs/{tid}/pipeline", json={"title": "X", "doc_ids": []}).status_code == 400
 
 
+def test_nlm_challenge_includes_claude_top_picks(client, monkeypatch):
+    """Claude's high-scored picks are challenged by NLM too (union with the finalists),
+    and they get added into the connected notebook so NLM can actually judge them."""
+    tab = client.post("/api/tabs", json={"name": "Both"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"spec": "A) a fuel-gauge IC.\nB) a thermistor.", "title": "feats"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689", "US10395648B1"], "source": "image"})
+    import patentbench.db as _db
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    by_num = {d["number"]: d for d in docs}
+    _db.set_shortlisted(tid, [by_num["EP4340163A1"]["id"]])          # NLM finalist
+    _db.update_document(by_num["CN117241689"]["id"], score=8.0, score_note="strong")  # Claude pick
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    added = []
+    monkeypatch.setattr(nlm_bridge, "add_source_text",
+                        lambda nb, ti, tx: added.append(ti) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "query",
+                        lambda nb, q, source_ids=None: {"answer": "block-by-block…"})
+    monkeypatch.setattr(claude_bridge, "debate",
+                        lambda *a, **k: {"answer": "consensus", "model": "claude-opus-4-8"})
+    r = client.post(f"/api/tabs/{tid}/nlm-challenge", json={}).json()
+    assert r["ok"] is True
+    assert "EP4340163A1" in r["finalists"] and "CN117241689" in r["finalists"]  # both sides debated
+    assert any("CN117241689" in t for t in added)     # Claude's pick was added into the notebook
+
+
 def test_nlm_challenge_needs_finalists(client, monkeypatch):
     tab = client.post("/api/tabs", json={"name": "ChalNo"}).json()
     tid = tab["id"]

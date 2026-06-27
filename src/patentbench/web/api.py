@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -1761,11 +1762,14 @@ def nlm_challenge(tab_id: int, body: schemas.NlmChallengeRequest):
         if not claude_top:                             # fall back to Claude's best few if none ≥ min
             claude_top = sorted([d for d in fetched if d.get("score") is not None],
                                 key=lambda d: (d["score"], d["id"]), reverse=True)[:5]
+        # INTERLEAVE the two sides so Claude's top picks are always challenged too —
+        # never crowded out by a long finalist list when the set is capped.
         seen, subject = set(), []
-        for d in finalists + claude_top:               # finalists first, then Claude's picks, deduped
-            if d["id"] not in seen:
-                seen.add(d["id"])
-                subject.append(d)
+        for a, b in itertools.zip_longest(finalists, claude_top):
+            for d in (a, b):
+                if d and d["id"] not in seen:
+                    seen.add(d["id"])
+                    subject.append(d)
     if not subject:
         raise HTTPException(400, "nothing to debate yet — run 📓 NLM shortlist / 🏆 Deep compare "
                                  "first, or check the documents to debate")
