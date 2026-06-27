@@ -1,6 +1,7 @@
 """Patent Workbench FastAPI app — tabs, documents, chat, NotebookLM, lessons."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -805,6 +806,7 @@ def notebook_delete_account(notebook_id: str):
     res = nlm_bridge.delete_notebook(notebook_id)
     if "error" in res:
         raise HTTPException(400, res["error"])
+    db.nlm_cache_clear(notebook_id)                   # drop its now-orphan cached answers
     for t in db.list_tabs():
         cfg = db.get_notebook_config(t["id"])
         if cfg and cfg.get("notebook_id") == notebook_id:
@@ -1047,6 +1049,35 @@ def notebook_consolidate(tab_id: int, body: schemas.NotebookConsolidate):
             "errors": errors[:5], "notebook": db.get_notebook_config(tab_id)}
 
 
+def _notebook_signature(notebook_id: str) -> str:
+    """A short fingerprint of a notebook's current source SET — so a cached answer is
+    reused only while the sources are unchanged, and auto-misses once a source is
+    added/removed (the answer would otherwise be stale)."""
+    srcs = nlm_bridge.list_sources(notebook_id).get("sources") or []
+    ids = ",".join(sorted(s["id"] for s in srcs))
+    return hashlib.sha256(ids.encode()).hexdigest()[:16]
+
+
+def _nlm_query_cached(notebook_id: str, question: str,
+                      source_ids: list[str] | None = None, force: bool = False) -> dict:
+    """nlm_bridge.query with a PERSISTENT answer cache keyed on
+    (notebook, source-restriction, question, source-set signature). Identical queries
+    return the stored answer for free — no NotebookLM call, no quota — and survive
+    rebuilds (the cache lives in the /data DB). Stale automatically when sources change.
+    Only successful answers are cached. {answer, cached?} | {error}."""
+    sig = _notebook_signature(notebook_id)
+    raw = "|".join([notebook_id, ",".join(source_ids or []), sig, question])
+    key = hashlib.sha256(raw.encode()).hexdigest()
+    if not force:
+        hit = db.nlm_cache_get(key)
+        if hit is not None:
+            return {"answer": hit, "cached": True}
+    res = nlm_bridge.query(notebook_id, question, source_ids=source_ids)
+    if res.get("answer"):
+        db.nlm_cache_put(key, notebook_id, question, res["answer"])
+    return res
+
+
 def _query_tab_series(tab_id: int, question: str) -> list[dict]:
     """Fan a question across EVERY notebook the tab's candidates are spread over.
     Auto-rollover splits candidates across several notebooks at the per-notebook
@@ -1062,7 +1093,7 @@ def _query_tab_series(tab_id: int, question: str) -> list[dict]:
     out: list[dict] = []
     for nb in db.tab_notebook_ids(tab_id):
         sids = (cfg.get("selected_source_ids") or None) if nb == connected else None
-        res = nlm_bridge.query(nb, question, source_ids=sids)
+        res = _nlm_query_cached(nb, question, source_ids=sids)
         entry = {"notebook_id": nb, "title": titles.get(nb, nb)}
         entry["error" if "error" in res else "answer"] = res.get("error") or res["answer"]
         out.append(entry)
@@ -1418,7 +1449,7 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
         # one consolidated notebook → a single global best/second-best across all of them
         titles = {n["id"]: n["title"]
                   for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
-        qres = nlm_bridge.query(body.notebook_id, question, source_ids=None)
+        qres = _nlm_query_cached(body.notebook_id, question, source_ids=None)
         e = {"notebook_id": body.notebook_id,
              "title": titles.get(body.notebook_id, body.notebook_id)}
         e["error" if "error" in qres else "answer"] = qres.get("error") or qres["answer"]

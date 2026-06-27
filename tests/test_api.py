@@ -529,6 +529,26 @@ def test_nlm_shortlist_scoped_to_one_notebook(client, monkeypatch):
     assert set(r["matched"]) == {"EP4340163A1", "CN117241689"}
 
 
+def test_nlm_query_cache_avoids_rerun(client, monkeypatch):
+    """An identical NotebookLM query is served from the persistent cache — no re-run."""
+    tab = client.post("/api/tabs", json={"name": "Cache"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"spec": "A) a fuel-gauge IC.\nB) a thermistor via voltage divider.",
+                      "title": "gauge + thermistor"})
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1"], "source": "image"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    calls = []
+    monkeypatch.setattr(nlm_bridge, "query",
+                        lambda nb, q, source_ids=None: calls.append(1) or {"answer": "BEST: EP4340163."})
+    r1 = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-1"}).json()
+    r2 = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-1"}).json()
+    assert r1["ok"] and r2["ok"]
+    assert len(calls) == 1                      # second identical query came from cache
+
+
 def test_nlm_shortlist_requires_benchmark(client, monkeypatch):
     tab = client.post("/api/tabs", json={"name": "ShortNoBm"}).json()
     tid = tab["id"]

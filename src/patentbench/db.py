@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS uploads(
   name TEXT,
   kind TEXT,
   ts INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS nlm_query_cache(
+  key TEXT PRIMARY KEY,
+  notebook_id TEXT,
+  question TEXT,
+  answer TEXT,
+  created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_messages_tab ON messages(tab_id, id);
 CREATE INDEX IF NOT EXISTS idx_documents_tab ON documents(tab_id, id);
 """
@@ -255,6 +261,31 @@ def set_shortlisted(tab_id: int, doc_ids: list[int]) -> None:
             qs = ",".join("?" * len(idset))
             c.execute(f"UPDATE documents SET shortlisted=1 WHERE tab_id=? AND id IN ({qs})",
                       (tab_id, *idset))
+
+
+def nlm_cache_get(key: str) -> str | None:
+    """A previously-stored NotebookLM answer for this exact (notebook+sources+question)
+    key, or None. Persisted so identical queries don't re-hit NotebookLM (quota) across
+    rebuilds; the key embeds a source-set signature so it auto-misses when sources change."""
+    with _conn() as c:
+        r = c.execute("SELECT answer FROM nlm_query_cache WHERE key=?", (key,)).fetchone()
+        return r["answer"] if r else None
+
+
+def nlm_cache_put(key: str, notebook_id: str, question: str, answer: str) -> None:
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO nlm_query_cache(key, notebook_id, question, answer, "
+                  "created_at) VALUES(?,?,?,?,?)", (key, notebook_id, question, answer, _now()))
+
+
+def nlm_cache_clear(notebook_id: str | None = None) -> int:
+    """Drop cached NotebookLM answers (all, or just one notebook's). Returns rows removed."""
+    with _conn() as c:
+        if notebook_id:
+            cur = c.execute("DELETE FROM nlm_query_cache WHERE notebook_id=?", (notebook_id,))
+        else:
+            cur = c.execute("DELETE FROM nlm_query_cache")
+        return cur.rowcount
 
 
 def set_document_number(tab_id: int, doc_id: int, number: str) -> dict:
