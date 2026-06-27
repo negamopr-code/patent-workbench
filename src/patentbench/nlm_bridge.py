@@ -127,8 +127,18 @@ def list_sources(notebook_id: str, force: bool = False) -> dict:
 SOURCE_LIMIT = int(os.environ.get("NLM_SOURCE_LIMIT", "50"))
 
 
+def _notebook_count() -> int:
+    """Best-effort count of notebooks in the account (-1 if it can't be read)."""
+    try:
+        return len(list_notebooks(force=True).get("notebooks") or [])
+    except Exception:
+        return -1
+
+
 def create_notebook(title: str) -> dict:
-    """Create a notebook: {id, title} | {error}."""
+    """Create a notebook: {id, title} | {error, limit?}. NotebookLM caps an account at
+    ~100 notebooks; over that, create fails with a cryptic 'API error (code 3):
+    INVALID_ARGUMENT' — we translate that into an actionable message (delete some)."""
     ok, why = available()
     if not ok:
         return {"error": why}
@@ -136,19 +146,54 @@ def create_notebook(title: str) -> dict:
         proc = _run([NLM_BIN, "notebook", "create", title, "--json"], LIST_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"error": "nlm notebook create: timeout"}
-    if proc.returncode != 0:
-        return {"error": (proc.stderr or proc.stdout).strip()[:400] or "create failed"}
+    # the CLI may signal failure via returncode OR a {"status":"error"} JSON payload
+    data = {}
     try:
         data = _json_after(proc.stdout, "{")
-    except Exception as exc:
-        return {"error": f"parse nlm output: {exc}"}
-    data = data.get("value", data) if isinstance(data, dict) else {}
-    nb_id = data.get("id") or data.get("notebook_id")
-    if not nb_id:
-        return {"error": "nlm notebook create returned no id"}
+        if isinstance(data, dict):
+            data = data.get("value", data)
+    except Exception:
+        data = {}
+    nb_id = data.get("id") or data.get("notebook_id") if isinstance(data, dict) else None
+    if nb_id:
+        global _list_cache
+        _list_cache = None                  # the notebook list changed
+        return {"id": nb_id, "title": data.get("title") or title}
+    err = (data.get("error") if isinstance(data, dict) else "") or ""
+    if not err:
+        err = (proc.stderr or proc.stdout).strip()[:400]
+    if "INVALID_ARGUMENT" in err or "limit" in err.lower() or "quota" in err.lower():
+        n = _notebook_count()
+        return {"limit": True,
+                "error": ("NotebookLM refused to create the notebook"
+                          + (f" — your account has {n} notebooks" if n >= 0 else "")
+                          + " (NotebookLM caps an account at ~100). Delete some old notebooks "
+                          "(🗑 in the 🔗 Notebook list) to free a slot, then try again.")}
+    return {"error": err or "nlm notebook create failed"}
+
+
+def delete_notebook(notebook_id: str) -> dict:
+    """Delete a notebook permanently: {ok} | {error}. Frees a slot toward the ~100 cap."""
+    ok, why = available()
+    if not ok:
+        return {"error": why}
+    try:
+        proc = _run([NLM_BIN, "notebook", "delete", notebook_id, "-y"], LIST_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {"error": "nlm notebook delete: timeout"}
+    if proc.returncode != 0:
+        return {"error": (proc.stderr or proc.stdout).strip()[:400] or "delete failed"}
+    try:                                    # also catch a {"status":"error"} payload
+        data = _json_after(proc.stdout, "{")
+        val = data.get("value", data) if isinstance(data, dict) else {}
+        if isinstance(val, dict) and val.get("status") == "error":
+            return {"error": str(val.get("error") or "delete failed")[:400]}
+    except Exception:
+        pass
     global _list_cache
-    _list_cache = None                      # the notebook list changed
-    return {"id": nb_id, "title": data.get("title") or title}
+    _list_cache = None
+    _sources_cache.pop(notebook_id, None)
+    return {"ok": True}
 
 
 def _clip_bytes(text: str, limit: int = 120_000) -> str:

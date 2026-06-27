@@ -459,41 +459,48 @@ def _verify_citations(tab_id: int, answer: str) -> str:
     return citations.verify(answer, sources)["answer"]
 
 
-def _add_doc_to_notebook(doc_id: int) -> dict:
-    """Mirror one fetched candidate into the tab's connected notebook.
+def _add_doc_to_notebook(doc_id: int, notebook_id: str | None = None) -> dict:
+    """Mirror one fetched candidate into a notebook — the tab's connected one by
+    default, or an explicit `notebook_id` (the destination the user chose).
     {ok} | {error, full?} | {skip: reason}."""
     doc = db.get_document(doc_id)
     if not doc or doc["status"] != "fetched":
         return {"skip": "not fetched"}
-    cfg = db.get_notebook_config(doc["tab_id"])
-    if not cfg or not cfg.get("notebook_id"):
+    nb = notebook_id
+    if not nb:
+        cfg = db.get_notebook_config(doc["tab_id"])
+        nb = cfg.get("notebook_id") if cfg else None
+    if not nb:
         return {"skip": "no notebook connected"}
-    if doc.get("nlm_source_notebook") == cfg["notebook_id"]:
+    if doc.get("nlm_source_notebook") == nb:
         return {"skip": "already added"}
     title = f"{doc['number']} — {(doc.get('title') or '')[:120]}"
-    res = nlm_bridge.add_source_text(cfg["notebook_id"], title, _doc_source_text(doc))
+    res = nlm_bridge.add_source_text(nb, title, _doc_source_text(doc))
     if res.get("ok"):
-        db.update_document(doc_id, nlm_source_notebook=cfg["notebook_id"])
+        db.update_document(doc_id, nlm_source_notebook=nb)
     return res
 
 
-def _add_benchmark_to_notebook(tab_id: int) -> dict:
-    """Mirror the tab's benchmark into the connected notebook as a text source.
-    {ok} | {error, full?} | {skip: reason}."""
+def _add_benchmark_to_notebook(tab_id: int, notebook_id: str | None = None) -> dict:
+    """Mirror the tab's benchmark into a notebook (connected by default, or an
+    explicit `notebook_id`). {ok} | {error, full?} | {skip: reason}."""
     bm = db.get_benchmark(tab_id)
     if not bm or bm.get("status") != "ready":
         return {"skip": "benchmark not ready"}
-    cfg = db.get_notebook_config(tab_id)
-    if not cfg or not cfg.get("notebook_id"):
+    nb = notebook_id
+    if not nb:
+        cfg = db.get_notebook_config(tab_id)
+        nb = cfg.get("notebook_id") if cfg else None
+    if not nb:
         return {"skip": "no notebook connected"}
-    if bm.get("nlm_source_notebook") == cfg["notebook_id"]:
+    if bm.get("nlm_source_notebook") == nb:
         return {"skip": "already added"}
     label = (bm.get("number") or bm.get("title")
              or f"{len(bm.get('files') or [])} file(s)")
     title = f"🎯 BENCHMARK — {label}"
-    res = nlm_bridge.add_source_text(cfg["notebook_id"], title, _benchmark_fulltext(bm))
+    res = nlm_bridge.add_source_text(nb, title, _benchmark_fulltext(bm))
     if res.get("ok"):
-        db.update_benchmark(tab_id, nlm_source_notebook=cfg["notebook_id"])
+        db.update_benchmark(tab_id, nlm_source_notebook=nb)
     return res
 
 
@@ -790,6 +797,21 @@ def sources(notebook_id: str, force: bool = False):
     return nlm_bridge.list_sources(notebook_id, force=force)
 
 
+@app.delete("/api/notebooks/{notebook_id}")
+def notebook_delete_account(notebook_id: str):
+    """Delete a notebook permanently from the NotebookLM account (frees a slot toward
+    the ~100-notebook cap). Any tab connected to it is disconnected so it doesn't try
+    to query a notebook that no longer exists."""
+    res = nlm_bridge.delete_notebook(notebook_id)
+    if "error" in res:
+        raise HTTPException(400, res["error"])
+    for t in db.list_tabs():
+        cfg = db.get_notebook_config(t["id"])
+        if cfg and cfg.get("notebook_id") == notebook_id:
+            db.set_notebook_config(t["id"], None, None, [], auto_add=False)
+    return {"ok": True}
+
+
 @app.put("/api/tabs/{tab_id}/notebook")
 def notebook_set(tab_id: int, body: schemas.NotebookConfig):
     _tab_or_404(tab_id)
@@ -915,6 +937,114 @@ def notebook_create(tab_id: int, body: schemas.NotebookCreate):
     db.append_message(tab_id, "s", f"Created notebook «{res['title']}» and connected "
                                    "the tab to it (auto-add on).")
     return {"ok": True, "notebook": db.get_notebook_config(tab_id)}
+
+
+@app.post("/api/tabs/{tab_id}/notebook/add-selected")
+def notebook_add_selected(tab_id: int, body: schemas.NotebookAddSelected):
+    """Push a CHOSEN subset of this tab's documents (optionally the benchmark) into
+    the connected notebook. Stops at the source cap and reports `full` + how many of
+    the requested items are still missing, so the UI can offer a follow-up notebook
+    and re-call with the same payload (the rollover then re-adds them there)."""
+    _tab_or_404(tab_id)
+    nb = body.notebook_id                            # the destination the user chose
+    if not nb:
+        cfg = db.get_notebook_config(tab_id)
+        nb = cfg.get("notebook_id") if cfg else None
+    if not nb:
+        cfg = _ensure_tab_notebook(tab_id)          # none connected → auto-create one
+        nb = cfg.get("notebook_id") if cfg else None
+    if not nb:
+        raise HTTPException(400, "no notebook connected and auto-create is disabled")
+    added, errors, full = 0, [], False
+    if body.include_benchmark:
+        res = _add_benchmark_to_notebook(tab_id, nb)
+        if res.get("ok"):
+            added += 1
+        elif res.get("full"):
+            full = True
+        elif res.get("error"):
+            errors.append(f"benchmark: {res['error']}")
+    if not full:
+        for doc_id in body.doc_ids:
+            res = _add_doc_to_notebook(doc_id, nb)
+            if res.get("ok"):
+                added += 1
+            elif res.get("full"):
+                full = True
+                break
+            elif res.get("error"):
+                d = db.get_document(doc_id)
+                errors.append(f"{(d or {}).get('number', doc_id)}: {res['error']}")
+            # a {skip} (not fetched / already in this notebook) is silently ignored
+    remaining = 0
+    if body.include_benchmark:
+        bm = db.get_benchmark(tab_id)
+        if bm and bm.get("status") == "ready" and bm.get("nlm_source_notebook") != nb:
+            remaining += 1
+    for doc_id in body.doc_ids:
+        d = db.get_document(doc_id)
+        if d and d["status"] == "fetched" and d.get("nlm_source_notebook") != nb:
+            remaining += 1
+    titles = {n["id"]: n["title"]
+              for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+    return {"added": added, "remaining": remaining, "full": full, "errors": errors[:5],
+            "notebook_id": nb, "notebook_title": titles.get(nb, nb)}
+
+
+@app.post("/api/tabs/{tab_id}/notebook/consolidate")
+def notebook_consolidate(tab_id: int, body: schemas.NotebookConsolidate):
+    """Create ONE new notebook (the name the user chose) and copy a chosen set of the
+    tab's candidates (+ benchmark) into it, then connect the tab to it. The point: the
+    candidates are normally spread across rollover notebooks (50-source cap), so no
+    single NotebookLM query can compare them all — consolidating a focused set into one
+    notebook lets 🏆 best-match pick a single global winner. Reports how many didn't fit."""
+    _tab_or_404(tab_id)
+    ok, why = nlm_bridge.available()
+    if not ok:
+        raise HTTPException(400, f"NotebookLM unavailable: {why}")
+    fetched = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    if body.doc_ids:
+        idset = set(body.doc_ids)
+        docs = [d for d in fetched if d["id"] in idset]
+    else:
+        docs = fetched
+    if not docs:
+        raise HTTPException(400, "no fetched candidates to consolidate")
+    created = nlm_bridge.create_notebook(body.title)
+    if "error" in created or not created.get("id"):
+        raise HTTPException(400, created.get("error") or "create failed")
+    nb = created["id"]
+    db.set_notebook_config(tab_id, nb, created["title"], [], auto_add=True)
+    added, errors, full = 0, [], False
+    if body.include_benchmark:
+        res = _add_benchmark_to_notebook(tab_id, nb)
+        if res.get("ok"):
+            added += 1
+        elif res.get("full"):
+            full = True
+        elif res.get("error"):
+            errors.append(f"benchmark: {res['error']}")
+    if not full:
+        for d in docs:
+            res = _add_doc_to_notebook(d["id"], nb)
+            if res.get("ok"):
+                added += 1
+            elif res.get("full"):
+                full = True
+                break
+            elif res.get("error"):
+                errors.append(f"{d['number']}: {res['error']}")
+    remaining = sum(1 for d in docs
+                    if (db.get_document(d["id"]) or {}).get("nlm_source_notebook") != nb)
+    db.append_message(
+        tab_id, "s",
+        f"🧺 Consolidated {added} document(s) into new notebook «{created['title']}» and connected "
+        "the tab to it"
+        + (f"; {remaining} didn't fit (NotebookLM's 50-source cap) — consolidate a smaller, "
+           "best-only set" if full and remaining else "")
+        + (f"; errors: {'; '.join(errors[:3])}" if errors else "") + ".")
+    return {"ok": True, "added": added, "remaining": remaining, "full": full,
+            "errors": errors[:5], "notebook": db.get_notebook_config(tab_id)}
 
 
 def _query_tab_series(tab_id: int, question: str) -> list[dict]:
@@ -1239,13 +1369,19 @@ def nlm_rate_status(tab_id: int):
 # ---------- funnel stage 1: NotebookLM shortlist (free, broad) ----------
 
 NLM_SHORTLIST_PROMPT = (
-    "Across ALL the source documents provided, which ones disclose the COMPLETE "
-    "TARGET FEATURE COMBINATION below? Treat the listed surface-form synonyms and "
-    "any IMPLICIT realisation (a document that physically does the step without the "
-    "literal word) as a match. List EVERY document that discloses ALL of the "
-    "elements, each by its publication number (e.g. EP4340163A1, CN117241689). If "
-    "none disclose every element, list the closest few and say which element each "
-    "is missing.\n\n=== TARGET FEATURE COMBINATION ===\n{benchmark}"
+    "Across ALL the source documents provided, assess which ones best disclose the "
+    "TARGET FEATURE COMBINATION below. Treat the listed surface-form synonyms and any "
+    "IMPLICIT realisation (a document that physically does the step without the literal "
+    "word) as a match. Answer in this order:\n"
+    "1. SHORTLIST — list EVERY document that discloses ALL of the elements, each by its "
+    "publication number (e.g. EP4340163A1, CN117241689).\n"
+    "2. BEST and SECOND-BEST — name the single closest document and the runner-up by "
+    "publication number (use these even if none disclose every element).\n"
+    "3. FEATURE MAP — for the BEST and the SECOND-BEST, go through the target features "
+    "ONE BY ONE and mark each YES / PARTIAL / NO with a few words of evidence, then state "
+    "the feature(s) the BEST document still does NOT cover.\n"
+    "Only use documents actually among the sources; do not invent publication numbers."
+    "\n\n=== TARGET FEATURE COMBINATION ===\n{benchmark}"
 )
 
 NLM_SHORTLIST_QUERY_CAP = 6000   # NotebookLM rejects very long questions (~5-7k char ceiling)
@@ -1275,11 +1411,20 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
     cands = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
     if not cands:
         raise HTTPException(400, "no fetched candidate documents to shortlist")
-    spec = (bm.get("text") if bm.get("source") == "features"
-            else _benchmark_summary_for_nlm(bm, limit=NLM_SHORTLIST_QUERY_CAP))
+    spec = _benchmark_feature_spec_for_nlm(bm)        # weighted feature names → spec → summary
     question = (body.question or "").strip() or NLM_SHORTLIST_PROMPT.format(
         benchmark=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
-    series = _query_tab_series(tab_id, question)
+    if body.notebook_id:
+        # one consolidated notebook → a single global best/second-best across all of them
+        titles = {n["id"]: n["title"]
+                  for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+        qres = nlm_bridge.query(body.notebook_id, question, source_ids=None)
+        e = {"notebook_id": body.notebook_id,
+             "title": titles.get(body.notebook_id, body.notebook_id)}
+        e["error" if "error" in qres else "answer"] = qres.get("error") or qres["answer"]
+        series = [e]
+    else:
+        series = _query_tab_series(tab_id, question)
     if not series:
         raise HTTPException(400, "no notebook connected — connect/export to a notebook first")
     answers = [e for e in series if e.get("answer")]
@@ -1304,18 +1449,21 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
         elif not d and n not in unmatched:
             unmatched.append(n)
 
+    if matched:                                       # persist the picks so they survive reloads
+        db.set_shortlisted(tab_id, [d["id"] for d in matched])
     participants = [{"kind": "benchmark", "title": _benchmark_label(bm)}]
     for e in answers:
         participants.append({"kind": "notebook", "title": e.get("title") or e["notebook_id"]})
     out = [db.append_message(tab_id, "q",
-                             f"[📓 NLM shortlist — which of {len(cands)} candidates disclose the "
-                             f"benchmark's full feature combination?]")]
+                             f"[📓 NLM shortlist — which of {len(cands)} candidates best disclose the "
+                             f"benchmark's full feature combination? (ranked best + per-feature map)]")]
     out.append(db.append_message(tab_id, "c", _series_answer_text(answers),
                                  model="notebooklm", participants=participants))
     summary = (f"📓 NotebookLM shortlisted {len(matched)} of {len(cands)} candidate(s)"
-               + (f": {', '.join(d['number'] for d in matched)}" if matched else "")
-               + ". Review them (auto-checked on the right), then 🤖 Verify shortlist to run "
-               "the precise opus read on just these.")
+               + (f" — best first: {', '.join(d['number'] for d in matched)}" if matched else "")
+               + ". The answer above ranks the best + second-best with a per-feature "
+               "YES/PARTIAL/NO map. Review them (auto-checked on the right), then 🤖 Verify "
+               "shortlist to run the precise opus read on just these.")
     if unmatched:
         summary += (f"\n\n({len(unmatched)} number(s) NotebookLM named are NOT in your candidate "
                     f"pool — add them as candidates if you want them assessed: {', '.join(unmatched[:20])}"
@@ -1328,6 +1476,21 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
     return {"ok": True, "shortlist_ids": [d["id"] for d in matched],
             "matched": [d["number"] for d in matched], "unmatched": unmatched,
             "total": len(cands), "messages": out}
+
+
+def _benchmark_feature_spec_for_nlm(bm: dict, limit: int = NLM_SHORTLIST_QUERY_CAP) -> str:
+    """The benchmark rendered as a SHORT target-feature list for the single NLM
+    shortlist question — the weighted feature names when defined that way, else the
+    feature spec text, else a compact abstract+claim summary. Tiny on purpose: the
+    candidate texts live in the notebook (read Gemini-side, no tokens to us), so the
+    question only has to carry the features to check against."""
+    feats = bm.get("features") or []
+    if feats:
+        return "\n".join(f"{i}. {f['name']} (importance {f['weight']}/5)"
+                         for i, f in enumerate(feats, 1))[:limit]
+    if bm.get("source") == "features" and bm.get("text"):
+        return bm["text"][:limit]
+    return _benchmark_summary_for_nlm(bm, limit=limit)
 
 
 RECONCILE_MAX_DOCS = 30      # cap the disagreement set so the single call stays cheap

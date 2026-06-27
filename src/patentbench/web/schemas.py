@@ -58,6 +58,16 @@ class NotebookCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+class NotebookAddSelected(BaseModel):
+    """Push a CHOSEN subset of the tab's documents into a CHOSEN notebook (vs
+    /notebook/sync which mirrors everything fetched into the connected one).
+    notebook_id picks the destination explicitly; None falls back to the tab's
+    connected notebook (auto-creating one if needed)."""
+    doc_ids: list[int] = []
+    include_benchmark: bool = True
+    notebook_id: str | None = None
+
+
 # A pasted patent excerpt / long instruction is a legitimate question — cap it
 # generously (the prompt builder clips per-turn history downstream) rather than
 # rejecting a long message with an opaque 422.
@@ -99,6 +109,18 @@ class NlmShortlistRequest(BaseModel):
     # feature combination → narrows 100s of candidates to a handful before the
     # expensive opus verification. None question = build it from the benchmark.
     question: str | None = Field(default=None, max_length=MAX_QUESTION)
+    # restrict the query to ONE notebook (e.g. the just-consolidated one → a single
+    # global best/second-best pick); None = fan across every notebook the candidates live in
+    notebook_id: str | None = None
+
+
+class NotebookConsolidate(BaseModel):
+    """Create ONE new notebook (user-named) and copy a chosen set of the tab's
+    candidates (+ benchmark) into it, then connect the tab — so a single global
+    🏆 best-match query can compare them all. doc_ids None = every fetched candidate."""
+    title: str = Field(min_length=1, max_length=200)
+    doc_ids: list[int] | None = None
+    include_benchmark: bool = True
 
 
 class ReconcileRequest(BaseModel):

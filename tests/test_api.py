@@ -426,6 +426,107 @@ def test_nlm_shortlist_matches_candidates(client, monkeypatch):
     # NLM's reasoning is posted to chat for the user to review
     msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
     assert any(m["role"] == "c" and "EP4340163" in m["text"] for m in msgs)
+    # the picks are PERSISTED (shortlisted=1) so 🧺 Consolidate reuses them after a reload
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    sl = {d["number"]: d["shortlisted"] for d in docs}
+    assert sl["EP4340163A1"] == 1 and sl["CN117241689"] == 1 and sl["US10395648B1"] == 0
+
+
+def test_nlm_shortlist_ranks_best_with_feature_map(client, monkeypatch):
+    """Shortlist now also returns the ranked best + second-best (merged-in best-match)."""
+    tab = client.post("/api/tabs", json={"name": "Rank"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"spec": "A) a fuel-gauge IC.\nB) a thermistor via voltage divider.",
+                      "title": "gauge + thermistor"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689", "US10395648B1"], "source": "image"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    calls = []
+    def fake_q(nb, q, source_ids=None):
+        calls.append(q)
+        return {"answer": "SHORTLIST: EP4340163, CN117241689. BEST: EP4340163 — A) YES, B) YES. "
+                          "SECOND-BEST: CN117241689 — A) YES, B) NO."}
+    monkeypatch.setattr(nlm_bridge, "query", fake_q)
+    r = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={}).json()
+    assert r["ok"] is True
+    assert set(r["matched"]) == {"EP4340163A1", "CN117241689"}
+    assert len(calls) == 1                                       # one fan-out query, not per-candidate
+    assert "BEST" in calls[0] and "FEATURE MAP" in calls[0]      # prompt asks for ranking + per-feature map
+
+
+def test_notebook_delete_account_disconnects_tabs(client, monkeypatch):
+    deleted = []
+    monkeypatch.setattr(nlm_bridge, "delete_notebook",
+                        lambda nb: deleted.append(nb) or {"ok": True})
+    tab = client.post("/api/tabs", json={"name": "Del"}).json()
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-doomed", "notebook_title": "NB", "source_ids": [],
+                     "auto_add": False})
+    r = client.delete("/api/notebooks/nb-doomed")
+    assert r.status_code == 200 and deleted == ["nb-doomed"]
+    # the tab connected to it is disconnected (no dangling notebook to query)
+    st = client.get(f"/api/tabs/{tab['id']}/state").json()
+    assert not (st["notebook"] and st["notebook"].get("notebook_id"))
+
+
+def test_notebook_create_at_cap_returns_helpful_error(client, monkeypatch):
+    # nlm_bridge maps the cryptic INVALID_ARGUMENT into an actionable cap message
+    monkeypatch.setattr(nlm_bridge, "create_notebook",
+                        lambda t: {"limit": True, "error": "NotebookLM refused to create the "
+                                   "notebook — your account has 100 notebooks (caps at ~100). "
+                                   "Delete some old notebooks to free a slot, then try again."})
+    tab = client.post("/api/tabs", json={"name": "Cap"}).json()
+    r = client.post(f"/api/tabs/{tab['id']}/notebook/create", json={"title": "X"})
+    assert r.status_code == 400 and "100" in r.json()["detail"]
+
+
+def test_notebook_consolidate_creates_and_copies(client, monkeypatch):
+    added = []
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "add_source_text",
+                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "create_notebook",
+                        lambda t: {"id": "nb-consol", "title": t})
+    tab = client.post("/api/tabs", json={"name": "Cons"}).json()
+    tid = tab["id"]
+    # candidates already live in another notebook (auto_add off so the pipeline doesn't mirror)
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": [],
+                     "auto_add": False})
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114547092"})
+    ids = [d["id"] for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]]
+    r = client.post(f"/api/tabs/{tid}/notebook/consolidate",
+                    json={"title": "Best picks — Cons", "doc_ids": ids,
+                          "include_benchmark": True}).json()
+    assert r["ok"] is True and not r["full"]
+    assert r["added"] == len(ids) + 1                       # candidates + benchmark
+    assert r["notebook"]["notebook_id"] == "nb-consol"      # tab now connected to the new one
+    assert all(nb == "nb-consol" for nb, _ in added)        # everything copied into it
+    assert any("BENCHMARK" in t for _, t in added)
+
+
+def test_nlm_shortlist_scoped_to_one_notebook(client, monkeypatch):
+    """notebook_id restricts the query to a single (e.g. consolidated) notebook."""
+    tab = client.post("/api/tabs", json={"name": "Scoped"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-consol", "notebook_title": "C", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"spec": "A) x.\nB) y.", "title": "feats"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    seen = []
+    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None: (
+        seen.append(nb) or {"answer": "BEST: EP4340163. SECOND-BEST: CN117241689."}))
+    r = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-consol"}).json()
+    assert r["ok"] is True
+    assert seen == ["nb-consol"]                       # queried ONLY the consolidated notebook
+    assert set(r["matched"]) == {"EP4340163A1", "CN117241689"}
 
 
 def test_nlm_shortlist_requires_benchmark(client, monkeypatch):
@@ -822,6 +923,96 @@ def test_notebook_export_includes_benchmark(client, monkeypatch):
     # a manual sync now finds everything already mirrored → nothing to add
     r = client.post(f"/api/tabs/{tab['id']}/notebook/sync").json()
     assert r["added"] == 0 and r["remaining"] == 0
+
+
+def test_notebook_add_selected_pushes_only_chosen(client, monkeypatch):
+    added = []
+    monkeypatch.setattr(nlm_bridge, "add_source_text",
+                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+    tab = client.post("/api/tabs", json={"name": "AddSel"}).json()
+    # connect with auto_add OFF so the pipeline does NOT pre-mirror candidates
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": [],
+                     "auto_add": False})
+    client.post(f"/api/tabs/{tab['id']}/documents",
+                json={"text": "US10395648B1 EP3667902A1 CN114547092"})
+    assert added == []                                   # auto-add off → nothing mirrored yet
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    chosen = [d["id"] for d in docs[:2]]
+    r = client.post(f"/api/tabs/{tab['id']}/notebook/add-selected",
+                    json={"doc_ids": chosen, "include_benchmark": False}).json()
+    assert r["added"] == 2 and not r["full"] and r["remaining"] == 0
+    assert len(added) == 2                               # only the two chosen, not the third
+    # re-posting the same ids is idempotent (already in this notebook → skipped)
+    added.clear()
+    r2 = client.post(f"/api/tabs/{tab['id']}/notebook/add-selected",
+                     json={"doc_ids": chosen, "include_benchmark": False}).json()
+    assert r2["added"] == 0 and added == []
+
+
+def test_notebook_add_selected_benchmark_first_then_full(client, monkeypatch):
+    added, state = [], {"full_after": 1}
+    def fake_add(nb, title, text):
+        if len(added) >= state["full_after"]:
+            return {"error": "notebook is full (50 sources)", "full": True}
+        added.append((nb, title)); return {"ok": True}
+    monkeypatch.setattr(nlm_bridge, "add_source_text", fake_add)
+    tab = client.post("/api/tabs", json={"name": "AddBm"}).json()
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": [],
+                     "auto_add": False})
+    client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "EP3667902A1 CN114547092"})
+    ids = [d["id"] for d in client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]]
+    r = client.post(f"/api/tabs/{tab['id']}/notebook/add-selected",
+                    json={"doc_ids": ids, "include_benchmark": True}).json()
+    # benchmark takes the only free slot → reports full, candidates still remaining
+    assert r["added"] == 1 and r["full"] is True
+    assert any("BENCHMARK" in t for _, t in added)
+    assert r["remaining"] == len(ids)
+
+
+def test_notebook_add_selected_auto_creates_when_none_connected(client, monkeypatch):
+    added = []
+    monkeypatch.setattr(nlm_bridge, "add_source_text",
+                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "create_notebook",
+                        lambda t: {"id": "nb-made", "title": t})
+    # disable the pipeline's own auto-create so the tab stays notebook-less until we add
+    monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", False)
+    tab = client.post("/api/tabs", json={"name": "Lonely"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
+    assert added == []                                   # no notebook → nothing mirrored
+    doc_id = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"][0]["id"]
+    # add-selected re-enables on its own only when AUTO_CREATE is on
+    monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", True)
+    r = client.post(f"/api/tabs/{tab['id']}/notebook/add-selected",
+                    json={"doc_ids": [doc_id], "include_benchmark": False}).json()
+    assert r["added"] == 1 and added and added[0][0] == "nb-made"
+    st = client.get(f"/api/tabs/{tab['id']}/state").json()
+    assert st["notebook"]["notebook_id"] == "nb-made"
+
+
+def test_notebook_add_selected_to_explicit_notebook(client, monkeypatch):
+    """An explicit notebook_id sends docs to THAT notebook, not the connected one."""
+    added = []
+    monkeypatch.setattr(nlm_bridge, "add_source_text",
+                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+    tab = client.post("/api/tabs", json={"name": "Pick"}).json()
+    # tab is connected to nb-1, but we add to a DIFFERENT notebook
+    client.put(f"/api/tabs/{tab['id']}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": [],
+                     "auto_add": False})
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
+    doc_id = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"][0]["id"]
+    r = client.post(f"/api/tabs/{tab['id']}/notebook/add-selected",
+                    json={"doc_ids": [doc_id], "include_benchmark": False,
+                          "notebook_id": "nb-other"}).json()
+    assert r["added"] == 1 and r["notebook_id"] == "nb-other"
+    assert added and added[0][0] == "nb-other"          # landed in the chosen notebook
+    # the tab's connection is untouched
+    st = client.get(f"/api/tabs/{tab['id']}/state").json()
+    assert st["notebook"]["notebook_id"] == "nb-1"
 
 
 def test_notebook_import_patents_and_text(client, monkeypatch):

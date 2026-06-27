@@ -101,7 +101,7 @@
 
     <div id="funnel-bar" class="rate-bar funnel-bar">
       <span class="funnel-label" title="Two-stage funnel: NotebookLM narrows the pool for free, then opus precisely verifies only the few it shortlisted.">🔻 Funnel:</span>
-      <button id="nlm-shortlist" class="btn small" title="STAGE 1 (free, broad): ask NotebookLM — in one fan-out question — which candidates disclose the benchmark's FULL feature combination. Auto-checks the ones it names so you can verify just those.">📓 NLM shortlist</button>
+      <button id="nlm-shortlist" class="btn small" title="STAGE 1 (free, broad): ONE NotebookLM question (per notebook, not per candidate) — which candidates disclose the benchmark's FULL feature combination, PLUS the ranked best + second-best with a per-feature YES/PARTIAL/NO map. Auto-checks the ones it names so you can verify just those. The cheap alternative to 📓 NLM-rate (which queries every candidate).">📓 NLM shortlist</button>
       <span class="funnel-arrow">→</span>
       <button id="verify-shortlist" class="btn small" title="STAGE 2 (precise, narrow): opus 4.8 deep-reads ONLY the checked shortlist against the benchmark. Small set, so opus is affordable. Pausable — switch the model mid-run.">🤖 Verify shortlist (opus)</button>
       <span id="funnel-status" class="muted"></span>
@@ -112,7 +112,8 @@
       <button id="claude-continue" class="btn small hidden" title="Continue after a token-limit interruption: Claude full-reads ONLY the candidates not yet read this batch, most-promising first. Skips everything already read.">▶️ Continue deep-read</button>
       <button id="claude-pause" class="btn small hidden" title="Pause the running assessment: it stops launching new candidates and lets in-flight ones finish (their scores are saved). Switch the 📖 reading model, then ▶️ Continue to assess the rest.">⏸ Pause</button>
       <span id="read-status" class="muted"></span>
-      <button id="nlm-rate" class="btn small" title="Ask NotebookLM to rate candidates not yet rated (already-rated ones are skipped) against the benchmark, to compare 📓 NLM vs 🤖 Claude">📓 NLM-rate all candidates</button>
+      <button id="nlm-consolidate" class="btn small" title="Copy ONLY the checked (best) candidates into ONE new NotebookLM notebook you name, then connect this tab to it — so 📓 NLM shortlist can rank a single global winner across all of them. Tick the best ones first (📓 NLM shortlist auto-checks them); a notebook holds max 50 sources.">🧺 Consolidate best → 1 notebook</button>
+      <button id="nlm-rate" class="btn small" title="Ask NotebookLM to rate candidates not yet rated (already-rated ones are skipped) against the benchmark, to compare 📓 NLM vs 🤖 Claude. Costs ONE query PER candidate — for a quick pick use 📓 NLM shortlist instead.">📓 NLM-rate all candidates</button>
       <button id="reconcile" class="btn small hidden" title="Explain — in one cheap call over the stored rating notes — why 📓 NLM and 🤖 Claude disagree on the candidates where they diverge most">🔍 Why the gap?</button>
       <span id="rate-status" class="muted"></span>
     </div>
@@ -162,7 +163,29 @@
 <div id="nb-modal" class="modal hidden">
   <div class="modal-box">
     <h3>Connect NotebookLM notebook</h3>
+    <div class="row">
+      <input id="nb-new-title" type="text" class="nb-new-title" placeholder="New notebook name (defaults to the tab name)">
+      <button id="nb-create" class="btn small primary">➕ Create notebook</button>
+    </div>
+    <div id="nb-create-status" class="muted"></div>
+    <h4>…or connect an existing one</h4>
     <div id="nb-list" class="nb-list">Loading…</div>
+    <div id="nb-add-wrap" class="hidden">
+      <h4>Add this tab's documents to <span id="nb-add-target-name" class="strong"></span></h4>
+      <p class="muted">Adds go to the notebook selected above — pick a different one (or create one) to change the destination.</p>
+      <label class="check"><input type="checkbox" id="nb-add-bm" checked> 🎯 benchmark</label>
+      <div class="row">
+        <button id="nb-add-all" class="btn small">Check all</button>
+        <button id="nb-add-clear" class="btn small">Uncheck all</button>
+        <span id="nb-add-count" class="chip"></span>
+      </div>
+      <div id="nb-add-list" class="nb-sources"></div>
+      <div class="row">
+        <button id="nb-add-selected" class="btn small primary">📤 Add selected</button>
+        <button id="nb-add-allfetched" class="btn small">📤 Add all fetched</button>
+      </div>
+      <div id="nb-add-status" class="muted"></div>
+    </div>
     <div id="nb-sources-wrap" class="hidden">
       <h4>Sources <span class="muted">(restrict questions to selected documents)</span></h4>
       <div class="row">
@@ -182,7 +205,6 @@
       sources back in — patent numbers become fetched candidates, other sources become
       text documents.</p>
     <div class="row">
-      <button id="nb-sync" class="btn small">📤 Export now (benchmark + candidates)</button>
       <button id="nb-import" class="btn small">📥 Import from notebook</button>
     </div>
     <div class="row right">
@@ -191,6 +213,23 @@
       <button id="nb-cancel" class="btn">Cancel</button>
     </div>
     <div id="nb-sync-status" class="muted"></div>
+  </div>
+</div>
+
+<!-- Consolidate-into-one-notebook modal -->
+<div id="consolidate-modal" class="modal hidden">
+  <div class="modal-box">
+    <h3>🧺 Consolidate best candidates into one notebook</h3>
+    <p id="consolidate-info" class="muted"></p>
+    <label class="block">Notebook name:
+      <input id="consolidate-title" type="text" class="nb-new-title">
+    </label>
+    <label class="check"><input type="checkbox" id="consolidate-bm" checked> Include the 🎯 benchmark</label>
+    <div id="consolidate-status" class="muted"></div>
+    <div class="row right">
+      <button id="consolidate-go" class="btn primary">Consolidate &amp; pick best</button>
+      <button id="consolidate-cancel" class="btn">Cancel</button>
+    </div>
   </div>
 </div>
 

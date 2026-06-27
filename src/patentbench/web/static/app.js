@@ -38,6 +38,12 @@ let docSelection = new Set();   // candidate ids picked for a scoped deep compar
 let currentBm = null;           // last-rendered benchmark (for weighted feature ranking)
 let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
+// When opening the notebook modal to add SPECIFIC documents (the per-row 📓➕),
+// addPrefill holds {ids:Set, label} so the picker pre-checks exactly those and
+// shows a "choose a destination" hint. null = normal open (pre-check from the
+// candidate-list selection, benchmark on).
+let addPrefill = null;
+let consolidateIds = [];   // doc ids the consolidate modal will copy (resolved on open)
 let lessonDefaultText = '';
 
 /* ---------- reading / OCR model (shared by the benchmark + candidates panes) ---------- */
@@ -697,6 +703,13 @@ function renderDocs(allDocs) {
     st.textContent = d.status;
     if (d.error) st.title = d.error;
     row1.appendChild(st);
+    if (d.status === 'fetched') {
+      const addNb = document.createElement('button');
+      addNb.className = 'btn small'; addNb.textContent = '📓➕';
+      addNb.title = 'Add this candidate to a NotebookLM notebook — pick which one (or create one)';
+      addNb.onclick = () => openAddToNotebook([d.id], `${d.number}`);
+      row1.appendChild(addNb);
+    }
     const del = document.createElement('button');
     del.className = 'btn small del'; del.textContent = '🗑';
     del.title = 'Remove document';
@@ -1173,29 +1186,34 @@ $('deep-clear').onclick = () => { docSelection = new Set(); refreshDocs(); };
 
 /* ---------- funnel: 📓 NLM shortlist (free, broad) → 🤖 opus verify (precise, narrow) ---------- */
 const VERIFY_MODEL = 'claude-opus-4-8';   // shortlist is tiny, so default the precise read to opus
-$('nlm-shortlist').onclick = async () => {
+// One fan-out NLM question → shortlist + ranked best/second-best + per-feature map.
+// notebookId restricts it to ONE notebook (e.g. the just-consolidated one → a true
+// single global pick); omitted = fan across every notebook the candidates live in.
+async function runShortlist({ confirmFirst = true, statusEl = 'funnel-status', notebookId = null } = {}) {
   if (!activeTab) return;
   const fetched = lastDocs.filter(d => d.status === 'fetched').length;
   if (!fetched) { alert('No fetched candidates yet. Add and let some candidates fetch first.'); return; }
-  if (!confirm(`Ask NotebookLM (free) — in one fan-out question — which of the ${fetched} candidate(s) `
-    + 'disclose the benchmark\'s FULL feature combination? It auto-checks the ones it names so you '
-    + 'can then 🤖 Verify shortlist with opus on just those.')) return;
-  const fs = $('funnel-status'); fs.textContent = '📓 asking NotebookLM across the notebook(s)…';
+  if (confirmFirst && !confirm(`Ask NotebookLM (free) — in one fan-out question — which of the ${fetched} `
+    + 'candidate(s) disclose the benchmark\'s FULL feature combination, and which are the best + '
+    + 'second-best? It auto-checks the ones it names so you can then 🤖 Verify shortlist on just those.')) return;
+  const fs = $(statusEl); if (fs) fs.textContent = '📓 asking NotebookLM…';
   const tabAt = activeTab;
   const res = await api(`/api/tabs/${activeTab}/nlm-shortlist`, {
-    method: 'POST', body: JSON.stringify({}) });
-  if (activeTab !== tabAt) return;
-  if (res.error && !(res.messages || []).length) { fs.textContent = `Error: ${res.error}`; return; }
+    method: 'POST', body: JSON.stringify(notebookId ? { notebook_id: notebookId } : {}) });
+  if (activeTab !== tabAt) return res;
+  if (res.error && !(res.messages || []).length) { if (fs) fs.textContent = `Error: ${res.error}`; return res; }
   await reloadChat();
   const ids = res.shortlist_ids || [];
   if (ids.length) {
-    docSelection = new Set(ids);          // auto-check the shortlist for stage 2
-    fs.textContent = `✓ shortlisted ${ids.length}/${res.total} — checked them; now 🤖 Verify shortlist`;
-  } else {
+    docSelection = new Set(ids);          // auto-check the picks for stage 2
+    if (fs) fs.textContent = `✓ ${ids.length}/${res.total} picked — best first: ${res.matched.join(', ')}; now 🤖 Verify shortlist`;
+  } else if (fs) {
     fs.textContent = 'NotebookLM named none of your candidates — see chat.';
   }
   refreshDocs();
-};
+  return res;
+}
+$('nlm-shortlist').onclick = () => runShortlist();
 $('verify-shortlist').onclick = () => {
   if (!docSelection.size) {
     alert('No shortlist is checked. Run 📓 NLM shortlist first, or tick the candidates you want opus to verify.');
@@ -1203,6 +1221,66 @@ $('verify-shortlist').onclick = () => {
   }
   // one-shot opus for THIS verify only — do NOT mutate the tab's 📖 model choice
   runDeepCompare([...docSelection], false, VERIFY_MODEL);
+};
+
+// 🧺 Consolidate → copy ONLY the best (checked) candidates into ONE new notebook so
+// 📓 NLM shortlist can compare them in a single query. Uses an IN-PAGE modal (not
+// native prompt/confirm — browsers silently suppress those after a few dialogs, which
+// looked like "nothing happens"). Best-only by design.
+$('nlm-consolidate').onclick = () => {
+  if (!activeTab) return;
+  // use the checked candidates if any, else fall back to the PERSISTED shortlist picks
+  // (📓 NLM shortlist remembers them, so no need to re-check after a reload / tab switch)
+  const shortlisted = (lastDocs || []).filter(d => d.shortlisted).map(d => d.id);
+  const usingShortlist = !docSelection.size && shortlisted.length > 0;
+  consolidateIds = docSelection.size ? [...docSelection] : shortlisted;
+  const n = consolidateIds.length;
+  $('consolidate-title').value = `Best picks — ${currentTabName()}`;
+  $('consolidate-bm').checked = true;
+  $('consolidate-status').textContent = '';
+  const go = $('consolidate-go');
+  if (!n) {
+    $('consolidate-info').textContent = 'No best candidates yet. Run 📓 NLM shortlist first (it picks '
+      + 'and remembers the best), or tick candidates by hand, then reopen this.';
+    go.disabled = true;
+  } else if (n > 50) {
+    $('consolidate-info').textContent = `${n} candidate(s) selected, but a NotebookLM notebook holds at `
+      + 'most 50 sources. Narrow to ≤50 (untick weaker ones, or re-run 📓 shortlist), then reopen this.';
+    go.disabled = true;
+  } else {
+    $('consolidate-info').textContent = `${n} ${usingShortlist ? 'shortlisted (best)' : 'checked'} `
+      + 'candidate(s) will be copied into a NEW notebook (it becomes this tab’s notebook). '
+      + 'Then the best + second-best are picked automatically.';
+    go.disabled = false;
+  }
+  $('consolidate-modal').classList.remove('hidden');
+};
+$('consolidate-cancel').onclick = () => $('consolidate-modal').classList.add('hidden');
+$('consolidate-go').onclick = async () => {
+  const title = ($('consolidate-title').value || '').trim();
+  if (!title) { $('consolidate-status').textContent = 'Enter a name for the notebook.'; return; }
+  const ids = consolidateIds;
+  if (!ids.length) { $('consolidate-status').textContent = 'No candidates to consolidate.'; return; }
+  const includeBm = $('consolidate-bm').checked;
+  const go = $('consolidate-go'); go.disabled = true;
+  $('consolidate-status').textContent = `🧺 creating «${title}» and copying ${ids.length} document(s)…`;
+  const tabAt = activeTab;
+  const res = await api(`/api/tabs/${activeTab}/notebook/consolidate`, {
+    method: 'POST', body: JSON.stringify({ title, doc_ids: ids, include_benchmark: includeBm }) });
+  go.disabled = false;
+  if (activeTab !== tabAt) return;
+  if (res.error) { $('consolidate-status').textContent = `Error: ${res.error}`; return; }
+  $('consolidate-modal').classList.add('hidden');
+  renderNbChip(res.notebook);
+  await reloadChat();
+  await refreshDocs();
+  const rs = $('rate-status');
+  rs.textContent = `🧺 Consolidated ${res.added} into «${res.notebook.notebook_title}»`
+    + (res.remaining ? `, ${res.remaining} didn't fit (50 cap)` : '')
+    + ' — now picking the best + second-best…';
+  // single notebook now → shortlist gives a TRUE global best + second-best across them
+  await runShortlist({ confirmFirst: false, statusEl: 'rate-status',
+                       notebookId: res.notebook.notebook_id });
 };
 
 /* ---------- NotebookLM rating (palmares: 📓 NLM vs 🤖 Claude) ---------- */
@@ -1332,9 +1410,8 @@ async function runNotebookSync(setStatus) {
     const st = await api(`/api/tabs/${activeTab}/state`);
     const title = (st.notebook && st.notebook.notebook_title) || 'notebook';
     if (!confirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
-    const next = title.replace(/ \((\d+)\)$/, (m, n) => ` (${+n + 1})`);
     const created = await api(`/api/tabs/${activeTab}/notebook/create`, {
-      method: 'POST', body: JSON.stringify({ title: next === title ? `${title} (2)` : next }) });
+      method: 'POST', body: JSON.stringify({ title: nextSeriesTitle(title) }) });
     if (created.error) { setStatus(created.error); return res; }
     renderNbChip(created.notebook);
     res = await api(`/api/tabs/${activeTab}/notebook/sync`, { method: 'POST' });
@@ -1355,12 +1432,29 @@ $('nb-export').onclick = async () => {
   btn.disabled = false;
 };
 
-$('nb-btn').onclick = async () => {
+function currentTabName() {
+  const t = tabs.find(t => t.id === activeTab);
+  return t ? t.name : '';
+}
+
+// next notebook in a rollover series: 'X' -> 'X (2)', 'X (2)' -> 'X (3)'.
+function nextSeriesTitle(title) {
+  const m = title.match(/ \((\d+)\)$/);
+  return m ? title.replace(/ \(\d+\)$/, ` (${+m[1] + 1})`) : `${title} (2)`;
+}
+
+// (Re)load the notebook modal: the create box, the existing-notebook list, the
+// restrict-query sources, and the "documents to add" picker. force=true busts the
+// notebook-list cache so a just-created notebook (and fresh source counts) show up.
+// selectId pre-selects a specific notebook (e.g. the one just created / added to);
+// otherwise the tab's connected notebook is selected.
+async function loadNbModal(force = false, selectId = null) {
   $('nb-modal').classList.remove('hidden');
   $('nb-list').textContent = 'Loading notebooks…';
   $('nb-sources-wrap').classList.add('hidden');
+  $('nb-add-wrap').classList.add('hidden');
   const [res, st] = await Promise.all([
-    api('/api/notebooks'),
+    api('/api/notebooks' + (force ? '?force=true' : '')),
     api(`/api/tabs/${activeTab}/state`),
   ]);
   nbState = { notebooks: res.notebooks || [], chosen: null, sources: [], selected: new Set() };
@@ -1370,11 +1464,21 @@ $('nb-btn').onclick = async () => {
   // choice when re-opening an already-configured notebook.
   $('nb-auto-add').checked = current ? !!current.auto_add : true;
   $('nb-sync-status').textContent = '';
+  const wantId = selectId || (current && current.notebook_id);   // which notebook to pre-select
   const wrap = $('nb-list');
   wrap.innerHTML = '';
   if (res.error) { wrap.textContent = `NotebookLM unavailable: ${res.error}`; return; }
-  if (!nbState.notebooks.length) { wrap.textContent = 'No notebooks in the account.'; return; }
+  if (!nbState.notebooks.length) { wrap.textContent = 'No notebooks yet — create one above.'; return; }
+  // account-cap awareness: NotebookLM allows ~100 notebooks; at the cap, create fails
+  const cnt = nbState.notebooks.length;
+  const info = document.createElement('div');
+  info.className = 'muted';
+  info.textContent = `${cnt} notebook(s) in the account`
+    + (cnt >= 95 ? ` — near NotebookLM's ~100 limit; 🗑 delete some to create/consolidate new ones.` : '');
+  wrap.appendChild(info);
   for (const nb of nbState.notebooks) {
+    const row = document.createElement('div');
+    row.className = 'nb-row';
     const label = document.createElement('label');
     const r = document.createElement('input');
     r.type = 'radio'; r.name = 'nb'; r.value = nb.id;
@@ -1382,16 +1486,166 @@ $('nb-btn').onclick = async () => {
     label.appendChild(r);
     label.appendChild(document.createTextNode(
       ` ${nb.title}` + (nb.sources != null ? ` (${nb.sources} sources)` : '')));
-    wrap.appendChild(label);
-    if (current && current.notebook_id === nb.id) { r.checked = true; chooseNotebook(nb, current); }
+    row.appendChild(label);
+    const del = document.createElement('button');
+    del.className = 'btn small del'; del.textContent = '🗑';
+    del.title = 'Delete this notebook permanently from NotebookLM (frees a slot toward the ~100 cap)';
+    del.onclick = async (ev) => {
+      ev.preventDefault();
+      if (!confirm(`Delete notebook «${nb.title}» permanently from NotebookLM? Its sources are lost. `
+        + 'This frees a slot so you can create / consolidate.')) return;
+      del.disabled = true; del.textContent = '⏳';
+      const dr = await api(`/api/notebooks/${encodeURIComponent(nb.id)}`, { method: 'DELETE' });
+      if (dr.error) { alert(`Delete failed: ${dr.error}`); del.disabled = false; del.textContent = '🗑'; return; }
+      addPrefill = null;
+      await loadNbModal(true);                 // refresh list + count
+    };
+    row.appendChild(del);
+    wrap.appendChild(row);
+    if (nb.id === wantId) { r.checked = true; chooseNotebook(nb, current); }
   }
+}
+
+$('nb-btn').onclick = () => {
+  addPrefill = null;
+  $('nb-new-title').value = currentTabName();     // propose the tab name as the notebook name
+  $('nb-create-status').textContent = '';
+  loadNbModal();
 };
+
+// Open the notebook modal to add SPECIFIC documents, letting the user pick the
+// destination notebook (or create a new one) before confirming.
+function openAddToNotebook(ids, label) {
+  addPrefill = { ids: new Set(ids), label };
+  $('nb-new-title').value = currentTabName();
+  $('nb-create-status').textContent = '';
+  loadNbModal();
+}
+
+$('nb-create').onclick = async () => {
+  const title = ($('nb-new-title').value || '').trim() || currentTabName();
+  if (!title) { $('nb-create-status').textContent = 'Enter a name for the notebook.'; return; }
+  $('nb-create-status').textContent = `Creating «${title}»…`;
+  const res = await api(`/api/tabs/${activeTab}/notebook/create`, {
+    method: 'POST', body: JSON.stringify({ title }) });
+  if (res.error) { $('nb-create-status').textContent = `Error: ${res.error}`; return; }
+  renderNbChip(res.notebook);
+  await loadNbModal(true, res.notebook.notebook_id);   // reload, select the new notebook → it's the add target
+  $('nb-create-status').textContent =
+    `Created «${res.notebook.notebook_title}» — it's selected below; now pick documents to add to it.`;
+};
+
+// "documents to add" picker: benchmark + every fetched candidate as a checkbox,
+// pre-checked from the candidate-list selection. The destination is the notebook
+// SELECTED in the list above (nbState.chosen); a "✓ in notebook" marks documents
+// already in THAT notebook.
+function renderAddPicker() {
+  const wrap = $('nb-add-wrap');
+  const target = nbState.chosen;
+  wrap.classList.toggle('hidden', !target);
+  if (!target) return;
+  $('nb-add-target-name').textContent = `📓 ${target.title}`;
+  $('nb-add-bm').checked = !addPrefill;             // benchmark off for a single-doc quick add
+  $('nb-add-status').textContent = addPrefill
+    ? `Pick the destination notebook above (or create one), then click “Add selected” to add ${addPrefill.label}.`
+    : '';
+  const list = $('nb-add-list');
+  list.innerHTML = '';
+  const fetched = (lastDocs || []).filter(d => d.status === 'fetched');
+  if (!fetched.length) { list.textContent = 'No fetched candidates yet.'; updateAddCount(); return; }
+  for (const d of fetched) {
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = String(d.id);
+    const inNb = d.nlm_source_notebook === target.id;
+    // pre-check the requested docs (per-row 📓➕) or the candidate-list selection; never ones already in
+    cb.checked = !inNb && (addPrefill ? addPrefill.ids.has(d.id) : docSelection.has(d.id));
+    cb.onchange = updateAddCount;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(
+      ` ${d.number}` + (d.title ? ` — ${d.title}` : '') + (inNb ? ' ✓ in notebook' : '')));
+    list.appendChild(label);
+  }
+  updateAddCount();
+}
+function updateAddCount() {
+  const n = document.querySelectorAll('#nb-add-list input:checked').length;
+  $('nb-add-count').textContent = `${n} selected` + ($('nb-add-bm').checked ? ' + benchmark' : '');
+}
+$('nb-add-bm').onchange = updateAddCount;
+$('nb-add-all').onclick = () => {
+  document.querySelectorAll('#nb-add-list input').forEach(i => i.checked = true); updateAddCount();
+};
+$('nb-add-clear').onclick = () => {
+  document.querySelectorAll('#nb-add-list input').forEach(i => i.checked = false); updateAddCount();
+};
+$('nb-add-selected').onclick = async () => {
+  const target = nbState.chosen;
+  if (!target) { $('nb-add-status').textContent = 'Select a notebook above first.'; return; }
+  const ids = [...document.querySelectorAll('#nb-add-list input:checked')].map(i => +i.value);
+  const includeBm = $('nb-add-bm').checked;
+  if (!ids.length && !includeBm) { $('nb-add-status').textContent = 'Nothing checked.'; return; }
+  let msg = '';
+  const r = await runAddToNotebook({ doc_ids: ids, include_benchmark: includeBm, notebook_id: target.id },
+    t => { msg = t; });
+  addPrefill = null;
+  await loadNbModal(true, r.notebookId);          // reselect the target → fresh source list + ✓ marks
+  $('nb-add-status').textContent = msg;            // restore the result line (loadNbModal cleared it)
+};
+$('nb-add-allfetched').onclick = async () => {
+  const target = nbState.chosen;
+  if (!target) { $('nb-add-status').textContent = 'Select a notebook above first.'; return; }
+  const ids = (lastDocs || []).filter(d => d.status === 'fetched').map(d => d.id);
+  let msg = '';
+  const r = await runAddToNotebook({ doc_ids: ids, include_benchmark: true, notebook_id: target.id },
+    t => { msg = t; });
+  addPrefill = null;
+  await loadNbModal(true, r.notebookId);
+  $('nb-add-status').textContent = msg;
+};
+
+// Push a CHOSEN payload {doc_ids, include_benchmark, notebook_id?} into a notebook,
+// walking past the source cap by offering a follow-up notebook (the payload's
+// notebook_id is retargeted to the rollover so the rest land there). Returns the
+// response plus notebookId = the notebook it ended on. Mirrors runNotebookSync.
+async function runAddToNotebook(payload, setStatus) {
+  setStatus('Adding to the notebook…');
+  payload = { ...payload };
+  let res = await api(`/api/tabs/${activeTab}/notebook/add-selected`,
+    { method: 'POST', body: JSON.stringify(payload) });
+  let notebookId = res.notebook_id || payload.notebook_id;
+  while (res.full) {
+    setStatus(`Added ${res.added}; notebook is FULL, ${res.remaining} left.`);
+    const title = res.notebook_title || 'notebook';
+    if (!confirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
+    const created = await api(`/api/tabs/${activeTab}/notebook/create`, {
+      method: 'POST', body: JSON.stringify({ title: nextSeriesTitle(title) }) });
+    if (created.error) { setStatus(created.error); break; }
+    renderNbChip(created.notebook);
+    notebookId = created.notebook.notebook_id;
+    payload.notebook_id = notebookId;             // retarget the rest to the new notebook
+    res = await api(`/api/tabs/${activeTab}/notebook/add-selected`,
+      { method: 'POST', body: JSON.stringify(payload) });
+    notebookId = res.notebook_id || notebookId;
+  }
+  setStatus(res.error
+    ? `Error: ${res.error}`
+    : (res.added
+        ? `Done: ${res.added} added to «${res.notebook_title || ''}»`
+        : `Nothing new to add — already in «${res.notebook_title || ''}»`)
+      + (res.remaining ? `, ${res.remaining} remaining` : '')
+      + ((res.errors || []).length ? ` — errors: ${res.errors.join('; ')}` : ''));
+  await refreshDocs();
+  return { ...res, notebookId };
+}
 
 async function chooseNotebook(nb, current) {
   nbState.chosen = nb;
+  renderAddPicker();                              // this notebook is now the add destination
   $('nb-sources-wrap').classList.remove('hidden');
   $('nb-sources').textContent = 'Loading sources…';
-  const res = await api(`/api/sources?notebook_id=${encodeURIComponent(nb.id)}`);
+  // force=true so a source just added to this notebook shows up immediately
+  const res = await api(`/api/sources?notebook_id=${encodeURIComponent(nb.id)}&force=true`);
   nbState.sources = res.sources || [];
   const preselected = (current && current.notebook_id === nb.id)
     ? new Set(current.selected_source_ids || []) : new Set();
@@ -1429,7 +1683,6 @@ $('src-none').onclick = () => {
   document.querySelectorAll('#nb-sources input').forEach(i => i.checked = false);
   updateSrcCount();
 };
-$('nb-sync').onclick = () => runNotebookSync(t => { $('nb-sync-status').textContent = t; });
 $('nb-import').onclick = async () => {
   if (!confirm('Import the notebook’s sources into this tab? Patent numbers become ' +
                'fetched candidates; other sources are imported as text documents. ' +
@@ -1443,7 +1696,7 @@ $('nb-import').onclick = async () => {
       + ((res.errors || []).length ? ` — errors: ${res.errors.join('; ')}` : '');
   refreshDocs();
 };
-$('nb-cancel').onclick = () => $('nb-modal').classList.add('hidden');
+$('nb-cancel').onclick = () => { addPrefill = null; $('nb-modal').classList.add('hidden'); };
 $('nb-disconnect').onclick = async () => {
   await api(`/api/tabs/${activeTab}/notebook`, {
     method: 'PUT', body: JSON.stringify({ notebook_id: null, source_ids: [] }) });

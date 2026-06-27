@@ -112,6 +112,8 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN nlm_score REAL")
             con.execute("ALTER TABLE documents ADD COLUMN nlm_score_note TEXT")
             con.execute("ALTER TABLE documents ADD COLUMN nlm_scored_at INTEGER")
+        if "shortlisted" not in dcols:      # last 📓 NLM shortlist's picks — persists the
+            con.execute("ALTER TABLE documents ADD COLUMN shortlisted INTEGER NOT NULL DEFAULT 0")
         bmcols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "nlm_source_notebook" not in bmcols:   # benchmark mirrored into which notebook
             con.execute("ALTER TABLE benchmark ADD COLUMN nlm_source_notebook TEXT")
@@ -213,7 +215,7 @@ def list_documents(tab_id: int, full: bool = False) -> list[dict]:
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
             "score, score_note, scored_at, score_model, feature_scores, "
             "nlm_score, nlm_score_note, nlm_scored_at, "
-            "nlm_source_notebook, "
+            "nlm_source_notebook, shortlisted, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
             "length(description) AS description_len, length(digest) AS digest_len, "
             "length(verdict) AS verdict_len")
@@ -240,6 +242,19 @@ def update_document(doc_id: int, **fields) -> None:
     sets = ", ".join(f"{k}=?" for k in fields)
     with _conn() as c:
         c.execute(f"UPDATE documents SET {sets} WHERE id=?", (*fields.values(), doc_id))
+
+
+def set_shortlisted(tab_id: int, doc_ids: list[int]) -> None:
+    """Persist the latest 📓 NLM shortlist's picks for a tab: mark these doc ids
+    shortlisted=1 and clear the flag on all others, so the picks survive page reloads /
+    tab switches (transient checkboxes don't) and 🧺 Consolidate can reuse them."""
+    idset = set(doc_ids)
+    with _conn() as c:
+        c.execute("UPDATE documents SET shortlisted=0 WHERE tab_id=? AND shortlisted=1", (tab_id,))
+        if idset:
+            qs = ",".join("?" * len(idset))
+            c.execute(f"UPDATE documents SET shortlisted=1 WHERE tab_id=? AND id IN ({qs})",
+                      (tab_id, *idset))
 
 
 def set_document_number(tab_id: int, doc_id: int, number: str) -> dict:

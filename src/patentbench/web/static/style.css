@@ -284,6 +284,10 @@ textarea, select, input[type="text"] {
 .nb-list label, .nb-sources label { display: block; padding: 4px 2px; font-size: 13px; }
 .nb-sources { max-height: 240px; overflow-y: auto; background: var(--pane2);
   border-radius: 8px; padding: 8px; margin-top: 6px; }
+.nb-new-title { flex: 1; min-width: 0; }
+.nb-row { display: flex; align-items: center; gap: 6px; }
+.nb-row label { flex: 1; min-width: 0; }
+#nb-create-status, #nb-add-status { margin-top: 4px; }
 #lesson-modal textarea, #lesson-modal select { margin-top: 8px; }
 
 /* Small screens: the grid squeezed the chat into a short bottom row. Stack
