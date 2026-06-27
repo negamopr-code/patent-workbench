@@ -1281,6 +1281,9 @@ $('consolidate-go').onclick = async () => {
   // single notebook now → shortlist gives a TRUE global best + second-best across them
   await runShortlist({ confirmFirst: false, statusEl: 'rate-status',
                        notebookId: res.notebook.notebook_id });
+  // …then auto-run the Claude ↔ NotebookLM debate over the consolidated finalists
+  rs.textContent += ' — now debating Claude ↔ NotebookLM block by block…';
+  await runChallenge({ confirmFirst: false, docIds: ids });
 };
 
 /* ---------- NotebookLM rating (palmares: 📓 NLM vs 🤖 Claude) ---------- */
@@ -1320,6 +1323,39 @@ $('reconcile').onclick = async () => {
   if (res.error && !(res.messages || []).length) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
   for (const m of res.messages || []) appendMsg(m);
 };
+// ⚖️ Debate finalists: NotebookLM's shortlisted finalists (in its notebook) are read
+// block-by-block by NLM (grounded) and argued by Claude (from stored digests) — a
+// bidirectional reconciliation, one prompt per side. docIds = explicit set (e.g. the
+// just-consolidated finalists); else the checked set; else the persisted shortlist.
+async function runChallenge({ confirmFirst = true, docIds = null } = {}) {
+  if (!activeTab) return;
+  const explicit = docIds && docIds.length;
+  const useSel = !explicit && docSelection.size > 0;
+  const finalists = lastDocs.filter(d => d.shortlisted).length;
+  if (!explicit && !useSel && !finalists) {
+    alert('No finalists to debate yet. Run 📓 NLM shortlist (it picks & remembers the finalists) '
+      + 'and 🧺 Consolidate them, or tick the documents you want debated.');
+    return;
+  }
+  if (confirmFirst) {
+    const subj = useSel ? `the ${docSelection.size} checked` : `the ${finalists} shortlisted`;
+    if (!confirm(`Run a Claude ↔ NotebookLM debate over ${subj} finalist(s)? NotebookLM re-reads them `
+      + 'block-by-block (one grounded prompt), then Claude argues per block from the stored digests and '
+      + 'reconciles. One prompt per side — cheap.')) return;
+  }
+  const btn = $('nlm-challenge'); if (btn) btn.disabled = true;
+  appendMsg({ role: 'q', text: '⚖️ Debate the finalists — where do Claude and NotebookLM agree/disagree per block, and what reconciles them?' });
+  setBusy(true, 'NotebookLM is re-reading the finalists; Claude will argue back block by block…');
+  const tabAt = activeTab;
+  const body = explicit ? { doc_ids: docIds } : (useSel ? { doc_ids: [...docSelection] } : {});
+  const res = await api(`/api/tabs/${activeTab}/nlm-challenge`, { method: 'POST', body: JSON.stringify(body) });
+  setBusy(false); if (btn) btn.disabled = false;
+  if (activeTab !== tabAt) return res;
+  if (res.error && !(res.messages || []).length) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return res; }
+  for (const m of res.messages || []) appendMsg(m);
+  return res;
+}
+$('nlm-challenge').onclick = () => runChallenge();
 async function pollRate() {
   clearTimeout(ratePoll);
   const tabAt = activeTab;

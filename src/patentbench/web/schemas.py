@@ -123,6 +123,12 @@ class NotebookConsolidate(BaseModel):
     include_benchmark: bool = True
 
 
+class NlmChallengeRequest(BaseModel):
+    # Confront NotebookLM (grounded on the docs) with Claude's top picks in ONE query
+    # and ask it to reconcile the divergence. doc_ids overrides "Claude's top picks".
+    doc_ids: list[int] | None = None
+
+
 class ReconcileRequest(BaseModel):
     model: str | None = None           # cheap model by default — this is one small call
     min_delta: float = 2.0             # only candidates whose two scores differ by >= this

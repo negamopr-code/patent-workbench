@@ -843,6 +843,31 @@ RECONCILE_PROMPT = (
 )
 
 
+DEBATE_PROMPT = (
+    "Reconcile two assessments of how well each FINALIST patent matches the benchmark, "
+    "FUNCTIONAL BLOCK by functional block. NotebookLM read the FULL documents on its side "
+    "(its reply is given). You are given each finalist's full-text DIGEST (and your earlier "
+    "per-block verdicts where available). For EACH finalist and EACH target block output: "
+    "YOUR verdict (YES/PARTIAL/NO from the digest), NLM's verdict (from its reply), AGREE? "
+    "(yes/no), and a one-line reconciled conclusion (who is better supported and why). Treat "
+    "an implicit realisation — doing the step without the literal word — as covered. Then give "
+    "a short CONSENSUS ranking of the finalists both views support, and a DISPUTED list: each "
+    "block where you still disagree + the specific evidence that would settle it. Be concise."
+)
+
+
+def debate(blocks_text: str, finalists_text: str, nlm_answer: str,
+           model: str | None = None) -> dict:
+    """ONE cheap call that has Claude argue per functional block against NotebookLM's
+    grounded reply — Claude reasons from the finalists' DIGESTS (not full re-read), so it
+    stays cheap. Returns {answer, model} | {error}."""
+    prompt = (DEBATE_PROMPT
+              + "\n\n=== TARGET FEATURE BLOCKS ===\n" + (blocks_text or "")[:4000]
+              + "\n\n=== FINALIST DIGESTS (Claude side) ===\n" + (finalists_text or "")[:12000]
+              + "\n\n=== NOTEBOOKLM'S GROUNDED REPLY ===\n" + (nlm_answer or "")[:6000])
+    return _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+
+
 def reconcile(benchmark_summary: str, items: list[dict], model: str | None = None) -> dict:
     """Explain — in ONE cheap call over the already-stored short notes (no full
     texts) — why Claude and NotebookLM disagree. items=[{number,title,score,

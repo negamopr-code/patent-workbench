@@ -549,6 +549,50 @@ def test_nlm_query_cache_avoids_rerun(client, monkeypatch):
     assert len(calls) == 1                      # second identical query came from cache
 
 
+def test_nlm_challenge_debates_finalists_both_sides(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "Chal"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"spec": "A) a fuel-gauge IC.\nB) a thermistor via voltage divider.",
+                      "title": "feats"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
+    # NLM finalist = the persisted shortlist (what NotebookLM picked, in its notebook)
+    import patentbench.db as _db
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    _db.set_shortlisted(tid, [docs[0]["id"]])
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    nlm_calls, claude_calls = [], []
+    monkeypatch.setattr(nlm_bridge, "query",
+                        lambda nb, q, source_ids=None: nlm_calls.append(q) or {
+                            "answer": f"{docs[0]['number']}: A) YES, B) PARTIAL."})
+    monkeypatch.setattr(claude_bridge, "debate",
+                        lambda blocks, finals, nlm, model=None: claude_calls.append((finals, nlm)) or {
+                            "answer": "Consensus: agree on A, dispute B.", "model": "claude-haiku-4-5"})
+    r = client.post(f"/api/tabs/{tid}/nlm-challenge", json={}).json()
+    assert r["ok"] is True
+    assert r["finalists"] == [docs[0]["number"]]          # debates NLM's finalist, not Claude's picks
+    assert len(nlm_calls) == 1 and len(claude_calls) == 1  # one prompt per side
+    assert docs[0]["number"] in nlm_calls[0]              # finalist named to NLM
+    assert docs[0]["number"] in claude_calls[0][0]        # finalist digest given to Claude
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any(m["role"] == "c" and "NotebookLM" in m["text"] for m in msgs)
+    assert any(m["role"] == "c" and "Claude" in m["text"] for m in msgs)
+
+
+def test_nlm_challenge_needs_finalists(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "ChalNo"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1"], "source": "image"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    assert client.post(f"/api/tabs/{tid}/nlm-challenge", json={}).status_code == 400
+
+
 def test_nlm_shortlist_requires_benchmark(client, monkeypatch):
     tab = client.post("/api/tabs", json={"name": "ShortNoBm"}).json()
     tid = tab["id"]
