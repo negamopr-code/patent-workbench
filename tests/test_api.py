@@ -582,6 +582,51 @@ def test_nlm_challenge_debates_finalists_both_sides(client, monkeypatch):
     assert any(m["role"] == "c" and "Claude" in m["text"] for m in msgs)
 
 
+def test_pipeline_runs_all_steps_and_reports_done(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "Pipe"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"spec": "A) a fuel-gauge IC.\nB) a thermistor via voltage divider.",
+                      "title": "feats"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
+    ids = [d["id"] for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]]
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-pipe", "title": t})
+    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda nb, ti, tx: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "list_sources",
+                        lambda nb, force=False: {"sources": [{"id": "s1", "title": "EP4340163A1"}]})
+    monkeypatch.setattr(nlm_bridge, "query",
+                        lambda nb, q, source_ids=None: {"answer": "BEST: EP4340163A1. A) YES."})
+    monkeypatch.setattr(claude_bridge, "debate",
+                        lambda *a, **k: {"answer": "consensus", "model": "claude-haiku-4-5"})
+    r = client.post(f"/api/tabs/{tid}/pipeline",
+                    json={"title": "Best picks — Pipe", "doc_ids": ids, "include_benchmark": True}).json()
+    assert r["started"] is True
+    # the job runs in a daemon thread; poll status until it finishes
+    import time as _t
+    for _ in range(50):
+        s = client.get(f"/api/tabs/{tid}/pipeline/status").json()
+        if s.get("phase") == "done":
+            break
+        _t.sleep(0.1)
+    s = client.get(f"/api/tabs/{tid}/pipeline/status").json()
+    assert s["phase"] == "done"
+    cfg = client.get(f"/api/tabs/{tid}/state").json()["notebook"]
+    assert cfg["notebook_id"] == "nb-pipe"          # consolidate step connected the tab
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any("Consolidated" in m["text"] for m in msgs)
+    assert any(m["role"] == "c" and "NotebookLM" in m["text"] for m in msgs)   # debate ran
+
+
+def test_pipeline_needs_doc_ids(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "PipeNo"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    assert client.post(f"/api/tabs/{tid}/pipeline", json={"title": "X", "doc_ids": []}).status_code == 400
+
+
 def test_nlm_challenge_needs_finalists(client, monkeypatch):
     tab = client.post("/api/tabs", json={"name": "ChalNo"}).json()
     tid = tab["id"]

@@ -1049,6 +1049,143 @@ def notebook_consolidate(tab_id: int, body: schemas.NotebookConsolidate):
             "errors": errors[:5], "notebook": db.get_notebook_config(tab_id)}
 
 
+# ---------- consolidate → shortlist → debate, as a resumable background job ----------
+# A dropped browser request no longer interrupts the work (it runs in a server thread);
+# a container restart no longer loses it (step + created-notebook id are persisted to a
+# /data file the entrypoint does NOT clear, so ▶️ Resume continues from the last step).
+PIPELINE_TTL = float(os.environ.get("PB_PIPELINE_TTL", "1200"))   # secs before a job looks stale
+_PIPELINE_STEPS = ("consolidate", "shortlist", "debate")
+
+
+def _pipeline_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".pipeline_{tab_id}.json")
+
+
+def _pipeline_read(tab_id: int) -> dict | None:
+    try:
+        with open(_pipeline_path(tab_id)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _pipeline_set(tab_id: int, **kw) -> dict:
+    st = _pipeline_read(tab_id) or {}
+    st.update(kw)
+    with open(_pipeline_path(tab_id), "w") as f:
+        json.dump(st, f)
+    return st
+
+
+def _pipeline_fresh(tab_id: int) -> bool:
+    try:
+        return (time.time() - os.path.getmtime(_pipeline_path(tab_id))) < PIPELINE_TTL
+    except OSError:
+        return False
+
+
+def _pipeline_status(tab_id: int) -> dict:
+    st = _pipeline_read(tab_id)
+    if not st:
+        return {"present": False, "running": False, "resumable": False, "step": None}
+    active = st.get("step") in _PIPELINE_STEPS
+    fresh = _pipeline_fresh(tab_id)
+    if st.get("error"):
+        phase = "error"
+    elif st.get("step") == "done":
+        phase = "done"
+    elif active and fresh:
+        phase = "running"
+    elif active:
+        phase = "interrupted"           # crashed/restarted mid-step → resumable
+    else:
+        phase = "idle"
+    return {"present": True, "phase": phase, "running": phase == "running",
+            "resumable": phase in ("error", "interrupted"), "step": st.get("step"),
+            "status_text": st.get("status_text", ""), "error": st.get("error"),
+            "notebook_id": st.get("notebook_id"), "notebook_title": st.get("notebook_title")}
+
+
+def _run_pipeline(tab_id: int) -> None:
+    st = _pipeline_read(tab_id)
+    if not st:
+        return
+    try:
+        if st.get("step") == "consolidate":
+            nb = st.get("notebook_id")
+            if not nb:                                  # fresh: create + copy (idempotent on resume)
+                _pipeline_set(tab_id, status_text="🧺 creating notebook & copying finalists…")
+                created = nlm_bridge.create_notebook(st["title"])
+                if not created.get("id"):
+                    raise RuntimeError(created.get("error") or "notebook create failed")
+                nb = created["id"]
+                db.set_notebook_config(tab_id, nb, created["title"], [], auto_add=True)
+                st = _pipeline_set(tab_id, notebook_id=nb, notebook_title=created["title"])
+                if st.get("include_benchmark", True):
+                    _add_benchmark_to_notebook(tab_id, nb)
+                copied = 0
+                for did in st.get("doc_ids", []):
+                    if _add_doc_to_notebook(did, nb).get("ok"):
+                        copied += 1
+                    _pipeline_set(tab_id, status_text=f"🧺 copying finalists… {copied}")
+                db.append_message(tab_id, "s", f"🧺 Consolidated {copied} document(s) into "
+                                  f"«{created['title']}» and connected the tab.")
+            else:                                       # resume: the notebook already exists, reuse it
+                db.set_notebook_config(tab_id, nb, st.get("notebook_title") or nb, [], auto_add=True)
+            st = _pipeline_set(tab_id, step="shortlist")
+        if st.get("step") == "shortlist":
+            _pipeline_set(tab_id, status_text="📓 picking best + second-best…")
+            nlm_shortlist(tab_id, schemas.NlmShortlistRequest(notebook_id=st.get("notebook_id")))
+            st = _pipeline_set(tab_id, step="debate")
+        if st.get("step") == "debate":
+            _pipeline_set(tab_id, status_text="⚖️ Claude ↔ NotebookLM debating block by block…")
+            nlm_challenge(tab_id, schemas.NlmChallengeRequest(doc_ids=st.get("doc_ids") or None))
+            st = _pipeline_set(tab_id, step="done")
+        _pipeline_set(tab_id, step="done", status_text="✅ done", error=None)
+    except Exception as exc:                            # keep the file so the user can ▶️ Resume
+        _pipeline_set(tab_id, error=str(exc)[:300], status_text=f"interrupted: {str(exc)[:120]}")
+        db.append_message(tab_id, "s",
+                          f"Pipeline step failed: {str(exc)[:200]} — ▶️ Resume to continue.")
+
+
+@app.post("/api/tabs/{tab_id}/pipeline")
+def pipeline_start(tab_id: int, body: schemas.PipelineRequest):
+    """Start (or ▶️ Resume) the consolidate→shortlist→debate background job."""
+    _tab_or_404(tab_id)
+    ok, why = nlm_bridge.available()
+    if not ok:
+        raise HTTPException(400, f"NotebookLM unavailable: {why}")
+    stt = _pipeline_status(tab_id)
+    if stt["running"]:
+        return {"started": False, "running": True, **stt}
+    if body.resume:
+        st = _pipeline_read(tab_id)
+        if not st or st.get("step") not in _PIPELINE_STEPS:
+            raise HTTPException(400, "no interrupted pipeline to resume")
+        _pipeline_set(tab_id, error=None, status_text="▶️ resuming…")
+        threading.Thread(target=_run_pipeline, args=(tab_id,), daemon=True).start()
+        return {"started": True, "running": True, "resumed": True}
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("status") != "ready":
+        raise HTTPException(400, "benchmark is not ready — set it first")
+    ids = body.doc_ids or []
+    if not ids:
+        raise HTTPException(400, "no finalists selected for the pipeline")
+    if not body.title.strip():
+        raise HTTPException(400, "name the consolidated notebook")
+    _pipeline_set(tab_id, step="consolidate", title=body.title.strip(), doc_ids=ids,
+                  include_benchmark=bool(body.include_benchmark), error=None,
+                  notebook_id=None, notebook_title=None, status_text="queued…")
+    threading.Thread(target=_run_pipeline, args=(tab_id,), daemon=True).start()
+    return {"started": True, "running": True}
+
+
+@app.get("/api/tabs/{tab_id}/pipeline/status")
+def pipeline_status_ep(tab_id: int):
+    _tab_or_404(tab_id)
+    return _pipeline_status(tab_id)
+
+
 def _notebook_signature(notebook_id: str) -> str:
     """A short fingerprint of a notebook's current source SET — so a cached answer is
     reused only while the sources are unchanged, and auto-misses once a source is

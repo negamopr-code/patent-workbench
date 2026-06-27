@@ -114,6 +114,16 @@ class NlmShortlistRequest(BaseModel):
     notebook_id: str | None = None
 
 
+class PipelineRequest(BaseModel):
+    """Run consolidate → shortlist → debate as ONE resumable background job. resume=True
+    continues an interrupted job from its last completed step (reusing the notebook it
+    already created); otherwise title + doc_ids start a fresh run."""
+    title: str = Field(default="", max_length=200)
+    doc_ids: list[int] | None = None
+    include_benchmark: bool = True
+    resume: bool = False
+
+
 class NotebookConsolidate(BaseModel):
     """Create ONE new notebook (user-named) and copy a chosen set of the tab's
     candidates (+ benchmark) into it, then connect the tab — so a single global

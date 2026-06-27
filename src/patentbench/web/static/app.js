@@ -192,6 +192,7 @@ async function selectTab(id) {
   scheduleDocsPoll(st.documents || []);
   pollRate();                     // resume showing progress if an NLM rating job is in flight
   pollRead();                     // resume showing progress if a Claude deep-read is in flight
+  attachPipeline();               // re-attach / offer ▶️ Resume if a pipeline job is in flight
 }
 
 /* ---------- benchmark (reference document) ---------- */
@@ -1263,28 +1264,60 @@ $('consolidate-go').onclick = async () => {
   if (!ids.length) { $('consolidate-status').textContent = 'No candidates to consolidate.'; return; }
   const includeBm = $('consolidate-bm').checked;
   const go = $('consolidate-go'); go.disabled = true;
-  $('consolidate-status').textContent = `🧺 creating «${title}» and copying ${ids.length} document(s)…`;
-  const tabAt = activeTab;
-  const res = await api(`/api/tabs/${activeTab}/notebook/consolidate`, {
+  // launch the resumable BACKGROUND job (consolidate → shortlist → debate). It runs on
+  // the server, so closing the tab / a dropped connection no longer interrupts it.
+  const res = await api(`/api/tabs/${activeTab}/pipeline`, {
     method: 'POST', body: JSON.stringify({ title, doc_ids: ids, include_benchmark: includeBm }) });
   go.disabled = false;
-  if (activeTab !== tabAt) return;
   if (res.error) { $('consolidate-status').textContent = `Error: ${res.error}`; return; }
   $('consolidate-modal').classList.add('hidden');
-  renderNbChip(res.notebook);
-  await reloadChat();
-  await refreshDocs();
-  const rs = $('rate-status');
-  rs.textContent = `🧺 Consolidated ${res.added} into «${res.notebook.notebook_title}»`
-    + (res.remaining ? `, ${res.remaining} didn't fit (50 cap)` : '')
-    + ' — now picking the best + second-best…';
-  // single notebook now → shortlist gives a TRUE global best + second-best across them
-  await runShortlist({ confirmFirst: false, statusEl: 'rate-status',
-                       notebookId: res.notebook.notebook_id });
-  // …then auto-run the Claude ↔ NotebookLM debate over the consolidated finalists
-  rs.textContent += ' — now debating Claude ↔ NotebookLM block by block…';
-  await runChallenge({ confirmFirst: false, docIds: ids });
+  pollPipeline();
 };
+
+/* ---------- consolidate→shortlist→debate background job (crash-resilient) ---------- */
+let pipelinePoll = null;
+async function pollPipeline() {
+  clearTimeout(pipelinePoll);
+  const tabAt = activeTab;
+  const s = await api(`/api/tabs/${activeTab}/pipeline/status`);
+  if (activeTab !== tabAt) return;
+  const rs = $('rate-status'); const rb = $('pipeline-resume');
+  if (s.error && !s.present) { rs.textContent = `Error: ${s.error}`; return; }
+  await reloadChat();                       // surface messages the worker appended
+  if (s.running) {
+    rs.classList.remove('err');
+    rs.textContent = `⏳ ${s.status_text || ('pipeline: ' + (s.step || ''))} (runs on the server — safe to wait or leave)`;
+    if (rb) rb.classList.add('hidden');
+    pipelinePoll = setTimeout(pollPipeline, 3000);
+  } else if (s.phase === 'done') {
+    rs.classList.remove('err');
+    rs.textContent = '✅ Pipeline done — consolidated, picked best, and debated Claude ↔ NotebookLM (see chat).';
+    if (rb) rb.classList.add('hidden');
+    refreshDocs();
+  } else if (s.resumable) {
+    rs.classList.add('err');
+    rs.textContent = `⚠️ Pipeline interrupted at “${s.step}”${s.error ? ' — ' + s.error : ''}.`;
+    if (rb) rb.classList.remove('hidden');
+  }
+}
+$('pipeline-resume').onclick = async () => {
+  const rb = $('pipeline-resume'); rb.disabled = true;
+  const res = await api(`/api/tabs/${activeTab}/pipeline`, { method: 'POST', body: JSON.stringify({ resume: true }) });
+  rb.disabled = false;
+  if (res.error) { $('rate-status').textContent = `Resume failed: ${res.error}`; return; }
+  pollPipeline();
+};
+// re-attach on tab load: if a pipeline is running or was interrupted, show it / poll it
+async function attachPipeline() {
+  const s = await api(`/api/tabs/${activeTab}/pipeline/status`);
+  const rb = $('pipeline-resume');
+  if (s.running) { pollPipeline(); }
+  else if (s.resumable) {
+    if (rb) rb.classList.remove('hidden');
+    $('rate-status').classList.add('err');
+    $('rate-status').textContent = `⚠️ Pipeline interrupted at “${s.step}” — ▶️ Resume to finish.`;
+  } else if (rb) { rb.classList.add('hidden'); }
+}
 
 /* ---------- NotebookLM rating (palmares: 📓 NLM vs 🤖 Claude) ---------- */
 async function startNlmRate(ids, force) {
