@@ -714,6 +714,7 @@ def test_pipeline_runs_all_steps_and_reports_done(client, monkeypatch):
     _db.update_document(by_num["EP4340163A1"], score=5, scored_at=1, score_model="claude-sonnet-4-6")
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
     monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-pipe", "title": t})
+    monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda nb, ti, tx: {"ok": True})
     deleted = []
     monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: deleted.append(nb) or {"ok": True})
@@ -763,6 +764,7 @@ def test_pipeline_consensus_skips_debate(client, monkeypatch):
     _db.update_document(by_num["CN117241689"], score=4, scored_at=1, score_model="claude-sonnet-4-6")
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
     monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-agree", "title": t})
+    monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: {"ok": True})
     monkeypatch.setattr(nlm_bridge, "list_sources",
@@ -799,6 +801,7 @@ def test_pipeline_funnel_auto_selects_top_n(client, monkeypatch):
     copied = []
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
     monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-fn", "title": t})
+    monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text",
                         lambda nb, ti, tx: copied.append(ti) or {"ok": True})
     monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: {"ok": True})
@@ -835,6 +838,7 @@ def test_pipeline_deletes_rollover_notebooks(client, monkeypatch):
     deleted, cleared = [], []
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
     monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-new", "title": t})
+    monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: deleted.append(nb) or {"ok": True})
     monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
@@ -873,6 +877,7 @@ def test_pipeline_frees_slots_before_create(client, monkeypatch):
             return {"limit": True, "error": "account has 100 notebooks (caps at ~100)"}
         return {"id": "nb-new", "title": t}
     monkeypatch.setattr(nlm_bridge, "create_notebook", fake_create)
+    monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
     monkeypatch.setattr(nlm_bridge, "query",
@@ -897,6 +902,43 @@ def test_pipeline_funnel_needs_scored_candidates(client, monkeypatch):
     client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
     assert client.post(f"/api/tabs/{tid}/pipeline", json={"title": "X"}).status_code == 400
+
+
+def test_wait_sources_ready_blocks_until_ingested(monkeypatch):
+    """The ingestion gate returns only once EVERY source reports content — not while any is
+    still 'empty' (un-processed). It probes via source_content (no chat quota)."""
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "list_sources",
+                        lambda nb, force=False: {"sources": [{"id": "s1", "title": "a"},
+                                                             {"id": "s2", "title": "b"}]})
+    # s1 ready immediately; s2 only on its 2nd probe → the gate must loop once
+    calls = {"s2": 0}
+    def fake_content(sid):
+        if sid == "s1":
+            return {"content": "ready"}
+        calls["s2"] += 1
+        return {"content": "ready"} if calls["s2"] >= 2 else {"error": "empty source content"}
+    monkeypatch.setattr(nlm_bridge, "source_content", fake_content)
+    slept = []
+    rd = nlm_bridge.wait_sources_ready("nb", timeout=100, poll=5, _sleep=lambda s: slept.append(s))
+    assert rd == {"ready": True, "processed": 2, "total": 2}
+    assert slept == [5]                         # waited exactly one poll for s2 to finish ingesting
+
+
+def test_wait_sources_ready_times_out_when_stuck(monkeypatch):
+    """If a source never ingests, the gate gives up at the deadline and reports the shortfall
+    (so the pipeline can warn rather than hang forever)."""
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "list_sources",
+                        lambda nb, force=False: {"sources": [{"id": "s1", "title": "a"},
+                                                             {"id": "s2", "title": "b"}]})
+    monkeypatch.setattr(nlm_bridge, "source_content",
+                        lambda sid: {"content": "ok"} if sid == "s1" else {"error": "empty source content"})
+    # fake clock: advances past the deadline after a couple of polls
+    ticks = iter([0.0, 5.0, 50.0, 200.0, 400.0])
+    rd = nlm_bridge.wait_sources_ready("nb", timeout=100, poll=5,
+                                       _sleep=lambda s: None, _now=lambda: next(ticks))
+    assert rd["ready"] is False and rd["processed"] == 1 and rd["total"] == 2
 
 
 def test_shortlist_rejects_truncated_answer(client, monkeypatch):

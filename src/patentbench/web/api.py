@@ -1231,6 +1231,7 @@ def notebook_consolidate(tab_id: int, body: schemas.NotebookConsolidate):
 # a container restart no longer loses it (step + created-notebook id are persisted to a
 # /data file the entrypoint does NOT clear, so ▶️ Resume continues from the last step).
 PIPELINE_TTL = float(os.environ.get("PB_PIPELINE_TTL", "1200"))   # secs before a job looks stale
+PIPELINE_INGEST_TIMEOUT = float(os.environ.get("PB_INGEST_TIMEOUT", "300"))  # max wait for NLM to process sources
 _PIPELINE_STEPS = ("consolidate", "shortlist", "debate")
 
 
@@ -1326,8 +1327,20 @@ def _run_pipeline(tab_id: int) -> None:
                 db.set_notebook_config(tab_id, nb, st.get("notebook_title") or nb, [], auto_add=True)
             st = _pipeline_set(tab_id, step="shortlist")
         if st.get("step") == "shortlist":
+            # WAIT for NotebookLM to finish ingesting the freshly-copied sources before the ONE
+            # query fires — adding a source is instant but querying a half-processed notebook
+            # returns a truncated 'full text isn't present' answer and wastes the query. The probe
+            # costs no chat quota.
+            nb = st.get("notebook_id")
+            _pipeline_set(tab_id, status_text="⏳ waiting for NotebookLM to ingest the sources…")
+            rd = nlm_bridge.wait_sources_ready(nb, timeout=PIPELINE_INGEST_TIMEOUT)
+            if not rd.get("ready"):
+                db.append_message(tab_id, "s",
+                    f"⚠️ NotebookLM was still ingesting ({rd.get('processed', 0)}/{rd.get('total', 0)} "
+                    f"sources ready) after {int(PIPELINE_INGEST_TIMEOUT)}s — asking anyway. If the "
+                    "answer looks truncated, re-run 📓 shortlist in a minute (the sources will be ready).")
             _pipeline_set(tab_id, status_text="📓 picking best + second-best…")
-            sl = nlm_shortlist(tab_id, schemas.NlmShortlistRequest(notebook_id=st.get("notebook_id")))
+            sl = nlm_shortlist(tab_id, schemas.NlmShortlistRequest(notebook_id=nb))
             nlm_top_id = (sl.get("shortlist_ids") or [None])[0]
             st = _pipeline_set(tab_id, step="debate", nlm_top_id=nlm_top_id)
         if st.get("step") == "debate":

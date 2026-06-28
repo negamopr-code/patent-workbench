@@ -277,6 +277,34 @@ def source_content(source_id: str) -> dict:
     return {"content": content}
 
 
+def wait_sources_ready(notebook_id: str, timeout: float = 240.0, poll: float = 8.0,
+                       _sleep=time.sleep, _now=time.monotonic) -> dict:
+    """Block until EVERY source in a notebook is ingested (i.e. queryable), or until
+    `timeout` seconds elapse. NotebookLM accepts `source add` instantly but then needs
+    time to PROCESS the text; querying before that finishes yields the truncated
+    'the full text isn't explicitly present' answers and wastes the query. source_content()
+    returns text only once a source is processed and costs NO Gemini chat quota, so we use
+    it as the readiness probe (each source is probed once, then remembered). Returns
+    {ready, processed, total}."""
+    ok, why = available()
+    if not ok:
+        return {"ready": False, "processed": 0, "total": 0, "error": why}
+    deadline = _now() + timeout
+    ready_ids: set[str] = set()
+    total = 0
+    while True:
+        srcs = list_sources(notebook_id, force=True).get("sources") or []
+        total = len(srcs)
+        for s in srcs:                              # probe only the not-yet-confirmed ones
+            if s["id"] not in ready_ids and "content" in source_content(s["id"]):
+                ready_ids.add(s["id"])
+        if total and len(ready_ids) >= total:
+            return {"ready": True, "processed": len(ready_ids), "total": total}
+        if _now() >= deadline:
+            return {"ready": False, "processed": len(ready_ids), "total": total}
+        _sleep(poll)
+
+
 def query(notebook_id: str, question: str, source_ids: list[str] | None = None) -> dict:
     """Ask one notebook (optionally restricted to EXACT source files inside it).
     Returns {answer, sources_used} or {error}."""
