@@ -33,6 +33,11 @@ class FeatureItem(BaseModel):
     # the sum of the weights a candidate discloses, broken by how many it matches.
     name: str = Field(min_length=1, max_length=500)
     weight: int = Field(default=1, ge=1, le=5)
+    # kind: "M" = mandatory/fundamental (drives the base score); "A" = additional (presence
+    # raises the score, absence never lowers it). sl = stretch level 1-10 for A features:
+    # how far the argument may be stretched (only meaningful when kind == "A").
+    kind: str = Field(default="M")
+    sl: int = Field(default=5, ge=1, le=10)
 
 
 class BenchmarkFeatures(BaseModel):
@@ -148,6 +153,15 @@ class PipelineRequest(BaseModel):
     include_benchmark: bool = True
     consolidate_only: bool = False         # stop after copying the 49 in — no shortlist, no NLM query
     resume: bool = False
+
+
+class AdditionalReadRequest(BaseModel):
+    """➕ Additional read: check the benchmark's ADDITIONAL (A) features against the top
+    candidates' stored digests in ONE bulk pass (no full-text re-read). doc_ids = the exact
+    set (the UI sends its top-N in ranked order); None → top_n by Claude score."""
+    doc_ids: list[int] | None = None
+    top_n: int = Field(default=10, ge=1, le=50)
+    model: str | None = None
 
 
 class NotebookConsolidate(BaseModel):

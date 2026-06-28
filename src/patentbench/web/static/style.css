@@ -200,6 +200,13 @@ textarea, select, input[type="text"] {
 .doc .score .combined { color: var(--accent); font-weight: 700; }
 .doc .score .consensus { color: #0a7d28; font-weight: 700; background: #dcfce7; border-radius: 4px; padding: 0 5px; }
 .doc .score .rankpos { color: var(--bg); background: var(--accent); font-weight: 800; border-radius: 4px; padding: 0 6px; }
+.doc .score .addl { color: #1d4ed8; font-weight: 700; background: #dbeafe; border-radius: 4px; padding: 0 5px; }
+.doc .addl-feats { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0; }
+.doc .addl-chip { font-size: 11px; border-radius: 4px; padding: 1px 6px; background: var(--card2, #f1f5f9); }
+.doc .addl-chip.present { background: #dcfce7; }
+.doc .addl-chip.stretch { background: #fef9c3; }
+.doc .addl-chip.absent { opacity: .55; }
+.chip.feat-a { background: #dbeafe; }
 .doc .score .delta { color: var(--muted); font-weight: 600; }
 .doc .score .delta.big { color: var(--warn); }
 .doc .score .score-note { color: var(--muted); font-weight: 400; }

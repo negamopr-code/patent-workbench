@@ -223,7 +223,8 @@ def benchmark_set_features(tab_id: int, body: schemas.BenchmarkFeatures):
     # the free-form spec window. The list is composed into the benchmark text so all
     # downstream readers (chat, deep-compare, NLM, mirror) work unchanged, and the
     # weights are stored separately to drive the candidate ranking.
-    features = [{"name": f.name.strip(), "weight": f.weight}
+    features = [{"name": f.name.strip(), "weight": f.weight,
+                 "kind": (f.kind if f.kind in ("M", "A") else "M"), "sl": f.sl}
                 for f in body.features if f.name.strip()]
     if features:
         spec = _compose_feature_spec(features)
@@ -251,13 +252,19 @@ def _compose_feature_spec(features: list[dict], extra: str = "") -> str:
     must satisfy. Weights are shown so the reading model knows which features carry
     the most importance, but the decisive weighting is applied in code (ranking).
     `extra` = free-form text the user already wrote; preserved so an incremental
-    add never discards it."""
+    add never discards it.
+
+    Only MANDATORY (kind=='M') features compose the base benchmark — the established score
+    must not move when an ADDITIONAL (kind=='A') feature is absent. A-features are stored
+    separately (features_json) and assessed by the ➕ additional read, which only adds to
+    the score. If the user marked everything 'A', fall back to all so the spec isn't empty."""
+    mand = [f for f in features if f.get("kind", "M") == "M"] or features
     lines = [
         _FEATURE_SPEC_HEADER + " (importance weight 1–5 in brackets; the more, "
         "the more decisive):",
         "",
     ]
-    for i, f in enumerate(features, 1):
+    for i, f in enumerate(mand, 1):
         lines.append(f"{i}. [weight {f['weight']}] {f['name']}")
     lines.append("")
     lines.append("IMPLICIT MATCHES COUNT: if a document physically realizes a "
@@ -281,7 +288,8 @@ def benchmark_add_feature(tab_id: int, body: schemas.FeatureItem):
         raise HTTPException(400, "the current benchmark is a document — remove it "
                                  "before defining the benchmark by features")
     features = list((bm.get("features") if bm else None) or [])
-    features.append({"name": name, "weight": body.weight})
+    features.append({"name": name, "weight": body.weight,
+                     "kind": (body.kind if body.kind in ("M", "A") else "M"), "sl": body.sl})
     # preserve free-form text the user already wrote (a features benchmark with text
     # but no weighted list yet) so adding a feature never throws it away
     extra = ""
@@ -1970,6 +1978,46 @@ def _benchmark_feature_spec_for_nlm(bm: dict, limit: int = NLM_SHORTLIST_QUERY_C
 
 
 RECONCILE_MAX_DOCS = 30      # cap the disagreement set so the single call stays cheap
+
+
+@app.post("/api/tabs/{tab_id}/additional-read")
+def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
+    """➕ ADDITIONAL READ. Check the benchmark's ADDITIONAL (A) features against the top
+    candidates in ONE bulk call over their STORED DIGESTS — no full-text re-read, so it's
+    cheap (≈ one chat turn). Stores per-doc additional_scores; the UI turns those into a
+    bonus that only RAISES the score (absence never lowers it)."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    a_features = [f for f in ((bm or {}).get("features") or []) if f.get("kind") == "A"]
+    if not a_features:
+        raise HTTPException(400, "no additional (A) features — mark some benchmark features 'A' first")
+    fetched = [d for d in db.list_documents(tab_id, full=True)
+               if d["status"] == "fetched" and (d.get("digest") or "").strip()]
+    by_id = {d["id"]: d for d in fetched}
+    if body.doc_ids:                                    # the UI's exact top-N, in ranked order
+        chosen = [by_id[i] for i in body.doc_ids if i in by_id]
+    else:                                               # fall back to Claude's top_n by score
+        chosen = [by_id[i] for i in db.top_scored_documents(tab_id, body.top_n) if i in by_id]
+    if not chosen:
+        raise HTTPException(400, "no candidates with a stored digest — run a 🏆 deep-compare / "
+                                 "full read first so there's material to check against")
+    res = claude_bridge.additional_read(a_features, chosen,
+                                        model=_read_model(body.model) or claude_bridge.DIGEST_MODEL)
+    if "error" in res:
+        raise HTTPException(400, f"additional read failed: {res['error']}")
+    results = res.get("results") or {}
+    stored = 0
+    for d in chosen:
+        feats = results.get(d["number"])
+        if feats is not None:
+            db.update_document(d["id"], additional_scores=json.dumps(feats, ensure_ascii=False))
+            stored += 1
+    names = ", ".join(f["name"] for f in a_features[:6]) + (" …" if len(a_features) > 6 else "")
+    db.append_message(tab_id, "s",
+        f"➕ Additional read ({res.get('model') or 'sonnet'}) over {stored} candidate(s) for "
+        f"{len(a_features)} additional feature(s): {names}. Present/stretched features now ADD to "
+        "each doc's score (absence never lowers it) — see the 🟢/🟡 chips and the +bonus in the score.")
+    return {"ok": True, "assessed": stored, "a_features": len(a_features), "results": results}
 
 
 @app.post("/api/tabs/{tab_id}/reconcile")

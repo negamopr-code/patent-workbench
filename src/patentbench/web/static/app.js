@@ -287,8 +287,10 @@ function renderBenchmark(bm) {
     fl.title = 'Weighted target features. Weight = how decisive that feature is in the ranking.';
     for (const f of bm.features) {
       const chip = document.createElement('span');
-      chip.className = 'chip feat-chip';
-      chip.textContent = `${f.name} ·${'★'.repeat(f.weight)}`;
+      const isA = (f.kind || 'M') === 'A';
+      chip.className = 'chip feat-chip' + (isA ? ' feat-a' : '');
+      chip.textContent = (isA ? `A·SL${f.sl || 5} ` : 'M ') + `${f.name} ·${'★'.repeat(f.weight)}`;
+      chip.title = isA ? `Additional feature — bonus only (stretch level ${f.sl || 5}/10)` : 'Mandatory feature — drives the base score';
       fl.appendChild(chip);
     }
     card.appendChild(fl);
@@ -362,8 +364,29 @@ $('bm-feat-tpl').onclick = () => {
   ta.focus();
 };
 
+// M/A kind selector + SL (stretch level) input, shared by the row editor and the add box.
+// M = mandatory (drives the base score); A = additional (presence raises the score via the
+// ➕ additional read, absence never lowers it); SL 1–10 = how far the argument may stretch.
+function buildKindSl(kind = 'M', sl = 5) {
+  const ksel = document.createElement('select');
+  ksel.className = 'feat-kind';
+  ksel.title = 'M = mandatory (base score)   ·   A = additional (bonus only — never penalises)';
+  for (const k of ['M', 'A']) {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = k === 'M' ? 'M (must)' : 'A (add’l)';
+    if (k === kind) o.selected = true;
+    ksel.appendChild(o);
+  }
+  const slin = document.createElement('input');
+  slin.type = 'number'; slin.min = 1; slin.max = 10; slin.value = sl;
+  slin.className = 'feat-sl'; slin.title = 'Stretch level 1–10 (only for A): how far the argument may be stretched';
+  slin.style.width = '3.4em';
+  const sync = () => { slin.style.display = ksel.value === 'A' ? '' : 'none'; };
+  ksel.onchange = sync; sync();
+  return { ksel, slin };
+}
 /* one-by-one weighted feature rows */
-function addFeatureRow(name = '', weight = 1) {
+function addFeatureRow(name = '', weight = 1, kind = 'M', sl = 5) {
   const wrap = $('bm-feat-rows');
   const row = document.createElement('div');
   row.className = 'bm-feat-row';
@@ -379,17 +402,20 @@ function addFeatureRow(name = '', weight = 1) {
     if (w === weight) o.selected = true;
     sel.appendChild(o);
   }
+  const { ksel, slin } = buildKindSl(kind, sl);
   const del = document.createElement('button');
   del.className = 'btn small del'; del.textContent = '🗑'; del.title = 'Remove this feature';
   del.onclick = () => { row.remove(); if (!wrap.children.length) addFeatureRow(); };
-  row.append(txt, sel, del);
+  row.append(txt, sel, ksel, slin, del);
   wrap.appendChild(row);
   return txt;
 }
 function collectFeatureRows() {
   return [...document.querySelectorAll('#bm-feat-rows .bm-feat-row')]
     .map(r => ({ name: r.querySelector('.feat-name').value.trim(),
-                 weight: parseInt(r.querySelector('.feat-weight').value, 10) || 1 }))
+                 weight: parseInt(r.querySelector('.feat-weight').value, 10) || 1,
+                 kind: r.querySelector('.feat-kind').value,
+                 sl: parseInt(r.querySelector('.feat-sl').value, 10) || 5 }))
     .filter(f => f.name);
 }
 $('bm-feat-add').onclick = () => { addFeatureRow().focus(); };
@@ -416,20 +442,22 @@ function buildAddFeatureBox() {
     o.value = w; o.textContent = '★'.repeat(w) + ` (${w})`;
     sel.appendChild(o);
   }
+  const { ksel, slin } = buildKindSl('M', 5);
   const add = document.createElement('button');
   add.className = 'btn small primary'; add.textContent = 'Add';
   const submit = async () => {
     const name = txt.value.trim();
     if (!name) { txt.focus(); return; }
     const res = await api(`/api/tabs/${activeTab}/benchmark/features/add`, {
-      method: 'POST', body: JSON.stringify({ name, weight: parseInt(sel.value, 10) || 1 }) });
+      method: 'POST', body: JSON.stringify({ name, weight: parseInt(sel.value, 10) || 1,
+                                             kind: ksel.value, sl: parseInt(slin.value, 10) || 5 }) });
     if (res.error) { $('bm-status').textContent = res.error; return; }
     $('bm-status').textContent = '';
     renderBenchmark(res.benchmark);   // re-render shows the appended feature + a fresh empty input
   };
   add.onclick = submit;
   txt.onkeydown = e => { if (e.key === 'Enter') submit(); };
-  row.append(txt, sel, add);
+  row.append(txt, sel, ksel, slin, add);
   box.append(lbl, row);
   return box;
 }
@@ -445,7 +473,7 @@ async function openFeatureEditor(bm) {
   rows.innerHTML = '';
   const feats = bm.features || [];
   if (feats.length) {
-    for (const f of feats) addFeatureRow(f.name, f.weight);
+    for (const f of feats) addFeatureRow(f.name, f.weight, f.kind || 'M', f.sl || 5);
   } else {
     addFeatureRow();
     // freeform spec (no weighted rows) — pull the text so it stays editable
@@ -622,6 +650,21 @@ function isConsensus(d) { return claudeStrong(d) && nlmEndorsed(d); }
 // stale.) See renderDocs.
 let consensusBonusById = new Map();
 function consensusBonus(d) { return consensusBonusById.get(d.id) || 0; }
+// ADDITIONAL (A-feature) bonus from the ➕ additional read: each PRESENT A-feature adds a
+// weighted amount, STRETCH adds half, ABSENT adds nothing (never subtracts). Bounded so it
+// refines the ranking without letting a weak base leap a tier. Shown as '(+0.6 add’l)'.
+const ADD_UNIT = 0.3, ADD_CAP = 1.0;
+function additionalBonus(d) {
+  const a = d.additional_scores;
+  if (!Array.isArray(a)) return 0;
+  let b = 0;
+  for (const f of a) {
+    const full = ((f.weight || 1) / 5) * ADD_UNIT;
+    if (f.status === 'present') b += full;
+    else if (f.status === 'stretch') b += full * 0.5;
+  }
+  return Math.min(ADD_CAP, b);
+}
 function featureMode() {
   return !!(currentBm && currentBm.source === 'features' && (currentBm.features || []).length);
 }
@@ -658,6 +701,7 @@ function scoreSortValue(d, key) {
   return cs == null ? -1 : cs;   // 'combined' (default), base only
 }
 let lastDocs = [];
+let lastRankedDocIds = [];   // doc ids in the last rendered ranking order
 function renderDocs(allDocs) {
   lastDocs = allDocs;
   const wrap = $('docs');
@@ -758,6 +802,7 @@ function renderDocs(allDocs) {
   const nlmRankOf = d => (d.nlm_rank != null ? d.nlm_rank : 1e9);
   let docs = [...allDocs].sort((a, b) =>
     scoreSortValue(b, sortKey) - scoreSortValue(a, sortKey)
+    || additionalBonus(b) - additionalBonus(a)   // A-feature coverage refines within a base tier
     || (isConsensus(b) ? 1 : 0) - (isConsensus(a) ? 1 : 0)
     || nlmRankOf(a) - nlmRankOf(b)
     || a.id - b.id);
@@ -774,9 +819,11 @@ function renderDocs(allDocs) {
   // 1-based position among RANKED (scored) docs, so the user sees 1st / 2nd / 3rd explicitly.
   const rankIndex = new Map(); let _rp = 0;
   for (const d of docs) if (d.score != null || d.nlm_score != null) rankIndex.set(d.id, ++_rp);
+  lastRankedDocIds = docs.map(d => d.id);   // ranked order, for ➕ additional read's top-N
   for (const d of docs) {
     const el = document.createElement('div');
     el.className = 'doc';
+    el.dataset.docId = d.id;
     const row1 = document.createElement('div');
     row1.className = 'doc-row';
     if (d.status === 'fetched') {
@@ -841,12 +888,15 @@ function renderDocs(allDocs) {
       if (pos) parts.push(`<span class="rankpos">#${pos}</span>`);
       // combined ("common") score leads when both engines rated it
       if (d.score != null && d.nlm_score != null) parts.push(`<span class="combined">🥇 ${combinedScore(d).toFixed(1)}</span>`);
+      const addl = additionalBonus(d);
       if (d.score != null) {
-        // 🤝 consensus: show the rank-boosted score (NLM #1 → 8.4, #2 → 8.3 …) so the order is visible
-        parts.push(consensus ? `🤖 ${(d.score + consensusBonus(d)).toFixed(1)}/10` : `🤖 ${d.score}/10`);
+        // base + 🤝 consensus taper + ➕ additional bonus, capped at 10
+        const shown = Math.min(10, d.score + (consensus ? consensusBonus(d) : 0) + addl);
+        parts.push(`🤖 ${shown.toFixed(1)}/10`);
       }
       if (d.nlm_score != null) parts.push(`📓 ${d.nlm_score}/10`);
       if (consensus) parts.push('<span class="consensus">🤝 agree</span>');
+      if (addl > 0) parts.push(`<span class="addl">➕ +${addl.toFixed(1)} add’l</span>`);
       // Δ flags where the two engines disagree (≥2 points apart)
       if (d.score != null && d.nlm_score != null) {
         const delta = Math.abs(d.score - d.nlm_score);
@@ -859,6 +909,20 @@ function renderDocs(allDocs) {
         + (d.scored_at ? `\nClaude scored ${new Date(d.scored_at * 1000).toLocaleString()}` : '')
         + (d.nlm_scored_at ? `\nNLM scored ${new Date(d.nlm_scored_at * 1000).toLocaleString()}` : '');
       el.appendChild(sc);
+      // ➕ additional-read per-feature chips: 🟢 present / 🟡 stretch / ⚪ absent (evidence in tooltip)
+      if (Array.isArray(d.additional_scores) && d.additional_scores.length) {
+        const ar = document.createElement('div');
+        ar.className = 'addl-feats';
+        for (const f of d.additional_scores) {
+          const c = document.createElement('span');
+          const icon = f.status === 'present' ? '🟢' : f.status === 'stretch' ? '🟡' : '⚪';
+          c.className = 'chip addl-chip ' + f.status;
+          c.textContent = `${icon} ${f.name}`;
+          c.title = `${f.status.toUpperCase()} (SL${f.sl || 5}, ★${f.weight || 1})` + (f.evidence ? ` — ${f.evidence}` : '');
+          ar.appendChild(c);
+        }
+        el.appendChild(ar);
+      }
       // when + which model did the last full read (so you know what's stale)
       if (d.scored_at || d.score_model) {
         const r = document.createElement('div');
@@ -1499,6 +1563,25 @@ $('reconcile').onclick = async () => {
   setBusy(false); btn.disabled = false;
   if (res.error && !(res.messages || []).length) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
   for (const m of res.messages || []) appendMsg(m);
+};
+// ➕ Additional read: check the benchmark's A-features against the displayed top-N candidates
+// in ONE bulk sonnet pass over their stored digests. Sends the top-N doc ids in ranked order.
+$('additional-read').onclick = async () => {
+  if (!activeTab) return;
+  const N = 10;
+  const byId = new Map((lastDocs || []).map(d => [d.id, d]));
+  const ids = lastRankedDocIds                       // displayed ranking order
+    .filter(id => { const d = byId.get(id); return d && d.status === 'fetched' && d.digest_len; })
+    .slice(0, N);
+  if (!ids.length) { appendMsg({ role: 's', text: 'No candidates with a stored digest yet — run a 🏆 deep-compare / full read first.' }); return; }
+  const btn = $('additional-read'); btn.disabled = true;
+  setBusy(true, `Additional read over top ${ids.length} (one bulk sonnet pass over digests)`);
+  const res = await api(`/api/tabs/${activeTab}/additional-read`, {
+    method: 'POST', body: JSON.stringify({ doc_ids: ids }) });
+  setBusy(false); btn.disabled = false;
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  await refreshDocs();   // re-render with the new A-feature chips + bonus
+  await reloadChat();
 };
 // ⚖️ Debate finalists: NotebookLM's shortlisted finalists (in its notebook) are read
 // block-by-block by NLM (grounded) and argued by Claude (from stored digests) — a

@@ -1831,3 +1831,81 @@ def test_benchmark_add_feature_creates_when_none(client):
     assert r["ok"]
     bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
     assert bm["source"] == "features" and bm["features"][0]["name"] == "a battery"
+
+
+def test_parse_additional_maps_status_by_index():
+    """The bulk additional-read output ('=== NUM ===' blocks, 'N: STATUS — evidence' lines)
+    parses back onto each candidate's A-feature verdicts, indexed to the feature list."""
+    from patentbench import claude_bridge as cb
+    a_features = [{"name": "detachable pack", "weight": 3, "sl": 7},
+                  {"name": "fuel-gauge IC", "weight": 5, "sl": 4}]
+    text = ("=== CN117241689 ===\n"
+            "1: PRESENT — pack slides out [0030]\n"
+            "2: STRETCH — gauge implied by IC 12\n"
+            "=== EP4338615 ===\n"
+            "1: ABSENT — integrated, not removable\n"
+            "2: PRESENT — remaining-capacity meter IC 12\n")
+    out = cb.parse_additional(text, a_features)
+    assert set(out) == {"CN117241689", "EP4338615"}
+    assert out["CN117241689"][0] == {"name": "detachable pack", "weight": 3, "sl": 7,
+                                     "status": "present", "evidence": "pack slides out [0030]"}
+    assert out["CN117241689"][1]["status"] == "stretch"
+    assert out["EP4338615"][0]["status"] == "absent" and out["EP4338615"][1]["status"] == "present"
+
+
+def test_features_persist_kind_and_sl(client):
+    """Benchmark features round-trip their M/A kind + stretch level; only M features compose
+    the base benchmark text (so an A feature's absence can't move the established score)."""
+    tab = client.post("/api/tabs", json={"name": "MA"}).json()
+    tid = tab["id"]
+    r = client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "thermistor divider", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "detachable battery pack", "weight": 3, "kind": "A", "sl": 8},
+    ]}).json()
+    feats = r["benchmark"]["features"]
+    assert feats[0]["kind"] == "M" and feats[1]["kind"] == "A" and feats[1]["sl"] == 8
+    # base benchmark text contains the M feature, NOT the A feature
+    full = client.get(f"/api/tabs/{tid}/benchmark?full=1")
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert any(f["name"] == "detachable battery pack" and f["kind"] == "A" for f in bm["features"])
+
+
+def test_additional_read_endpoint(client, monkeypatch):
+    """➕ additional read: one bulk call over digests, stores per-doc additional_scores; needs
+    A-features and a digest, never re-reads full text."""
+    from patentbench import claude_bridge as cb
+    tab = client.post("/api/tabs", json={"name": "Add"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "core divider", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "detachable pack", "weight": 4, "kind": "A", "sl": 7},
+    ]})
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4338615"], "source": "image"})
+    import patentbench.db as _db
+    doc = client.get(f"/api/tabs/{tid}/documents").json()["documents"][0]
+    _db.update_document(doc["id"], digest="A remaining-capacity meter IC with a removable battery pack.",
+                        score=8, scored_at=1, score_model="opus")
+    captured = {}
+    def fake_add(a_features, docs, model=None):
+        captured["a"] = [f["name"] for f in a_features]
+        captured["n"] = [d["number"] for d in docs]
+        captured["model"] = model
+        return {"results": {"EP4338615": [{"name": "detachable pack", "weight": 4, "sl": 7,
+                                           "status": "present", "evidence": "removable pack"}]},
+                "model": "claude-sonnet-4-6"}
+    monkeypatch.setattr(cb, "additional_read", fake_add)
+    r = client.post(f"/api/tabs/{tid}/additional-read", json={}).json()
+    assert r["ok"] and r["assessed"] == 1 and r["a_features"] == 1
+    assert captured["a"] == ["detachable pack"]          # ONLY the A-feature checked
+    assert captured["n"] == ["EP4338615"]
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    asc = docs[0]["additional_scores"]
+    assert asc and asc[0]["status"] == "present" and asc[0]["name"] == "detachable pack"
+
+
+def test_additional_read_needs_a_features(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "NoA"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "only mandatory", "weight": 5, "kind": "M", "sl": 5}]})
+    assert client.post(f"/api/tabs/{tid}/additional-read", json={}).status_code == 400

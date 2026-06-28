@@ -840,6 +840,76 @@ def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
     return res
 
 
+ADDITIONAL_PROMPT = (
+    "You are checking whether each candidate patent discloses a set of ADDITIONAL features "
+    "(bonus features). These are NOT the mandatory benchmark — their ABSENCE must not count "
+    "against a document; you are only looking for whether each is PRESENT, can be reasonably "
+    "STRETCHED to be present, or is ABSENT.\n\n"
+    "Each additional feature has a STRETCH LEVEL (SL, 1–10): how generous a reading you may "
+    "give it. SL 9–10 = accept a broad/implicit realisation; SL 5 = a fair reading; SL 1–2 = "
+    "must be almost literal. Use STRETCH only when the disclosure supports it WITHIN that "
+    "feature's SL; otherwise ABSENT.\n\n"
+    "You are given each candidate's DIGEST (a faithful summary of its full text). Judge only "
+    "from the digest; if the digest is silent, answer ABSENT (do not invent).\n\n"
+    "=== ADDITIONAL FEATURES ===\n{features}\n\n"
+    "=== CANDIDATES (digests) ===\n{docs}\n\n"
+    "OUTPUT — for EVERY candidate, in this EXACT format, nothing else:\n"
+    "=== <PUBLICATION NUMBER> ===\n"
+    "<feature number>: PRESENT|STRETCH|ABSENT — <≤15 words of evidence>\n"
+    "(one line per additional feature, numbered as listed above)")
+
+
+def additional_read(a_features: list[dict], docs: list[dict], model: str | None = None) -> dict:
+    """ONE bulk pass (default sonnet) over candidates' STORED DIGESTS — no full-text re-read —
+    checking only the ADDITIONAL (A) features, honouring each feature's stretch level. Returns
+    {results: {number: [{name, weight, sl, status, evidence}]}} | {error}. Cheap: digests are a
+    few KB each and all candidates are judged in a single call."""
+    if not a_features or not docs:
+        return {"results": {}}
+    feat_lines = "\n".join(
+        f"{i}. {f['name']}  (importance {f.get('weight', 1)}/5, stretch level {f.get('sl', 5)}/10)"
+        for i, f in enumerate(a_features, 1))
+    doc_blocks = "\n\n".join(
+        f"=== {d['number']} ===\n{(d.get('digest') or '(no digest available)')[:6000]}"
+        for d in docs)
+    prompt = ADDITIONAL_PROMPT.format(features=feat_lines, docs=doc_blocks)
+    res = _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"results": parse_additional(res["answer"], a_features), "model": res.get("model")}
+
+
+_ADD_HEADER_RE = re.compile(r"^===\s*([A-Z]{1,3}\d[\dA-Z]*)\s*===\s*$", re.MULTILINE)
+_ADD_LINE_RE = re.compile(r"^\s*(\d+)\s*[:.\)]\s*(PRESENT|STRETCH|ABSENT)\b[\s—:-]*(.*)$",
+                          re.IGNORECASE)
+
+
+def parse_additional(text: str, a_features: list[dict]) -> dict:
+    """Map the bulk additional-read output back onto {number: [{name,weight,sl,status,evidence}]}.
+    Each '=== NUMBER ===' block holds 'N: STATUS — evidence' lines indexed to a_features."""
+    out: dict = {}
+    parts = _ADD_HEADER_RE.split(text or "")
+    # split → ['', num1, body1, num2, body2, …]
+    for i in range(1, len(parts) - 1, 2):
+        num = parts[i].strip()
+        body = parts[i + 1]
+        feats: list[dict] = []
+        for line in body.splitlines():
+            m = _ADD_LINE_RE.match(line)
+            if not m:
+                continue
+            idx = int(m.group(1)) - 1
+            if not (0 <= idx < len(a_features)):
+                continue
+            f = a_features[idx]
+            feats.append({"name": f.get("name", ""), "weight": int(f.get("weight", 1)),
+                          "sl": int(f.get("sl", 5)), "status": m.group(2).lower(),
+                          "evidence": m.group(3).strip()[:200]})
+        if feats:
+            out[num] = feats
+    return out
+
+
 def run_extract(prompt: str, allow_read: bool = False, model: str | None = None) -> dict:
     """One-shot extraction run (optionally with the Read tool so the model can
     open an image/file). Returns {answer, model} | {error}."""

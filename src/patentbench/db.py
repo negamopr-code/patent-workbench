@@ -122,6 +122,8 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN shortlisted INTEGER NOT NULL DEFAULT 0")
         if "nlm_rank" not in dcols:         # NLM's best-first ordering within that shortlist
             con.execute("ALTER TABLE documents ADD COLUMN nlm_rank INTEGER")
+        if "additional_scores" not in dcols:   # ➕ additional-read verdict on the A-features
+            con.execute("ALTER TABLE documents ADD COLUMN additional_scores TEXT")
         bmcols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "nlm_source_notebook" not in bmcols:   # benchmark mirrored into which notebook
             con.execute("ALTER TABLE benchmark ADD COLUMN nlm_source_notebook TEXT")
@@ -223,7 +225,7 @@ def list_documents(tab_id: int, full: bool = False) -> list[dict]:
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
             "score, score_note, scored_at, score_model, feature_scores, "
             "nlm_score, nlm_score_note, nlm_scored_at, "
-            "nlm_source_notebook, shortlisted, nlm_rank, "
+            "nlm_source_notebook, shortlisted, nlm_rank, additional_scores, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
             "length(description) AS description_len, length(digest) AS digest_len, "
             "length(verdict) AS verdict_len")
@@ -234,6 +236,7 @@ def list_documents(tab_id: int, full: bool = False) -> list[dict]:
         for r in rows:
             d = dict(r)
             d["feature_scores"] = json.loads(d["feature_scores"]) if d.get("feature_scores") else None
+            d["additional_scores"] = json.loads(d["additional_scores"]) if d.get("additional_scores") else None
             out.append(d)
         return out
 
