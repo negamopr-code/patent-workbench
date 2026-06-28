@@ -521,8 +521,8 @@ def test_nlm_shortlist_matches_candidates(client, monkeypatch):
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
     # NLM names two of the three candidates (one with a different kind code) + a stranger
     monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None: {
-        "answer": "These disclose A-B: EP4340163 (kind-insensitive), CN117241689, "
-                  "and also WO2022239372 which is not in the pool."})
+        "answer": "SHORTLIST: EP4340163 (kind-insensitive), CN117241689, "
+                  "and also WO2022239372 which is not in the pool. BEST: EP4340163."})
     r = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={}).json()
     assert r["ok"] is True
     assert set(r["matched"]) == {"EP4340163A1", "CN117241689"}    # kind-code-insensitive match
@@ -705,16 +705,27 @@ def test_pipeline_runs_all_steps_and_reports_done(client, monkeypatch):
                       "title": "feats"})
     client.post(f"/api/tabs/{tid}/documents",
                 json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
-    ids = [d["id"] for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]]
+    import patentbench.db as _db
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    ids = [d["id"] for d in docs]
+    by_num = {d["number"]: d["id"] for d in docs}
+    # Claude's #1 = CN117241689 (higher score); NLM will pick EP4340163A1 → genuine divergence
+    _db.update_document(by_num["CN117241689"], score=9, scored_at=1, score_model="claude-sonnet-4-6")
+    _db.update_document(by_num["EP4340163A1"], score=5, scored_at=1, score_model="claude-sonnet-4-6")
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
     monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-pipe", "title": t})
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda nb, ti, tx: {"ok": True})
+    deleted = []
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: deleted.append(nb) or {"ok": True})
     monkeypatch.setattr(nlm_bridge, "list_sources",
                         lambda nb, force=False: {"sources": [{"id": "s1", "title": "EP4340163A1"}]})
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: {"answer": "BEST: EP4340163A1. A) YES."})
+                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. "
+                                                        "BEST: EP4340163A1. A) YES."})
+    debated = []
     monkeypatch.setattr(claude_bridge, "debate",
-                        lambda *a, **k: {"answer": "consensus", "model": "claude-haiku-4-5"})
+                        lambda *a, **k: debated.append(1) or {"answer": "reconciled",
+                                                              "model": "claude-opus-4-8"})
     r = client.post(f"/api/tabs/{tid}/pipeline",
                     json={"title": "Best picks — Pipe", "doc_ids": ids, "include_benchmark": True}).json()
     assert r["started"] is True
@@ -731,15 +742,148 @@ def test_pipeline_runs_all_steps_and_reports_done(client, monkeypatch):
     assert cfg["notebook_id"] == "nb-pipe"          # consolidate step connected the tab
     msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
     assert any("Consolidated" in m["text"] for m in msgs)
-    assert any(m["role"] == "c" and "NotebookLM" in m["text"] for m in msgs)   # debate ran
+    assert any("diverge" in m["text"] for m in msgs)        # divergence gate fired
+    assert debated                                          # → opus reconciliation ran
+    assert any(m["role"] == "c" and "NotebookLM" in m["text"] for m in msgs)   # debate posted
 
 
-def test_pipeline_needs_doc_ids(client, monkeypatch):
+def test_pipeline_consensus_skips_debate(client, monkeypatch):
+    """When Claude's #1 and NotebookLM's #1 agree, the pipeline posts agreement and does
+    NOT spend an opus reconciliation."""
+    tab = client.post("/api/tabs", json={"name": "Agree"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
+    import patentbench.db as _db
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    ids = [d["id"] for d in docs]
+    by_num = {d["number"]: d["id"] for d in docs}
+    _db.update_document(by_num["EP4340163A1"], score=9, scored_at=1, score_model="claude-sonnet-4-6")
+    _db.update_document(by_num["CN117241689"], score=4, scored_at=1, score_model="claude-sonnet-4-6")
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-agree", "title": t})
+    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "list_sources",
+                        lambda nb, force=False: {"sources": [{"id": "s1", "title": "EP4340163A1"}]})
+    monkeypatch.setattr(nlm_bridge, "query",   # NLM agrees: EP4340163A1 is best
+                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
+    debated = []
+    monkeypatch.setattr(claude_bridge, "debate", lambda *a, **k: debated.append(1) or {"answer": "x"})
+    client.post(f"/api/tabs/{tid}/pipeline",
+                json={"title": "Agree", "doc_ids": ids, "include_benchmark": True})
+    import time as _t
+    for _ in range(50):
+        if client.get(f"/api/tabs/{tid}/pipeline/status").json().get("phase") == "done":
+            break
+        _t.sleep(0.1)
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any("Independent agreement" in m["text"] for m in msgs)
+    assert not debated                                      # no opus reconciliation when they agree
+
+
+def test_pipeline_funnel_auto_selects_top_n(client, monkeypatch):
+    """With no doc_ids, the pipeline funnels Claude's top_n best-scored candidates."""
+    tab = client.post("/api/tabs", json={"name": "Funnel"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689", "US10395648B1"], "source": "image"})
+    import patentbench.db as _db
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    by_num = {d["number"]: d["id"] for d in docs}
+    _db.update_document(by_num["EP4340163A1"], score=9, scored_at=1, score_model="claude-sonnet-4-6")
+    _db.update_document(by_num["CN117241689"], score=7, scored_at=1, score_model="claude-sonnet-4-6")
+    _db.update_document(by_num["US10395648B1"], score=2, scored_at=1, score_model="claude-sonnet-4-6")
+    copied = []
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-fn", "title": t})
+    monkeypatch.setattr(nlm_bridge, "add_source_text",
+                        lambda nb, ti, tx: copied.append(ti) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
+    monkeypatch.setattr(nlm_bridge, "query",
+                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
+    monkeypatch.setattr(claude_bridge, "debate", lambda *a, **k: {"answer": "x", "model": "claude-opus-4-8"})
+    # no doc_ids → auto-pick the top 2 by score (US10395648B1 score=2 excluded)
+    r = client.post(f"/api/tabs/{tid}/pipeline", json={"title": "Funnel", "top_n": 2}).json()
+    assert r["started"] is True and r["funnel_n"] == 2
+    import time as _t
+    for _ in range(50):
+        if client.get(f"/api/tabs/{tid}/pipeline/status").json().get("phase") == "done":
+            break
+        _t.sleep(0.1)
+    titles = " ".join(copied)
+    assert "EP4340163A1" in titles and "CN117241689" in titles   # top 2 copied
+    assert "US10395648B1" not in titles                          # the low-scorer was NOT funneled
+
+
+def test_pipeline_deletes_rollover_notebooks(client, monkeypatch):
+    """After consolidating into one notebook, the rollover notebooks the candidates were
+    spread across are deleted and their refs cleared."""
+    tab = client.post("/api/tabs", json={"name": "Roll"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
+    import patentbench.db as _db
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    ids = [d["id"] for d in docs]
+    # the candidates currently live in two OLD rollover notebooks
+    _db.update_document(ids[0], nlm_source_notebook="nb-old-A", score=9, scored_at=1, score_model="x")
+    _db.update_document(ids[1], nlm_source_notebook="nb-old-B", score=5, scored_at=1, score_model="x")
+    deleted, cleared = [], []
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-new", "title": t})
+    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: deleted.append(nb) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
+    monkeypatch.setattr(nlm_bridge, "query",
+                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
+    monkeypatch.setattr(claude_bridge, "debate", lambda *a, **k: {"answer": "x", "model": "claude-opus-4-8"})
+    client.post(f"/api/tabs/{tid}/pipeline", json={"title": "Roll", "doc_ids": ids})
+    import time as _t
+    for _ in range(50):
+        if client.get(f"/api/tabs/{tid}/pipeline/status").json().get("phase") == "done":
+            break
+        _t.sleep(0.1)
+    assert set(deleted) == {"nb-old-A", "nb-old-B"}     # both rollovers deleted
+    assert _db.tab_notebook_ids(tid) == ["nb-new"]      # only the consolidated notebook remains
+
+
+def test_pipeline_funnel_needs_scored_candidates(client, monkeypatch):
+    """No explicit finalists and nothing scored yet → 400 (run deep-compare first)."""
     tab = client.post("/api/tabs", json={"name": "PipeNo"}).json()
     tid = tab["id"]
     client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    assert client.post(f"/api/tabs/{tid}/pipeline", json={"title": "X", "doc_ids": []}).status_code == 400
+    assert client.post(f"/api/tabs/{tid}/pipeline", json={"title": "X"}).status_code == 400
+
+
+def test_shortlist_rejects_truncated_answer(client, monkeypatch):
+    """A structureless 'thinking' preamble is not cached, is retried, and its stray numbers
+    are NOT scraped — the bug that silently dropped DE202022102539."""
+    tab = client.post("/api/tabs", json={"name": "Trunc"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    calls = []
+    # mimics the live dud: names a doc in passing, announces 'next', no verdict markers
+    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None: calls.append(1) or {
+        "answer": "Confirming source availability. I'm cross-referencing the texts; EP4340163A1 "
+                  "is listed. I'm going to proceed to evaluate CN117241689 next."})
+    r = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-1"}).json()
+    assert r.get("incomplete") is True
+    assert r["matched"] == []                       # stray numbers NOT scraped as an assessment
+    assert len(calls) == 2                          # retried once before giving up
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any("truncated" in m["text"] for m in msgs)   # warned, not silently accepted
+    # and a second run must re-query (the dud was never cached)
+    r2 = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-1"}).json()
+    assert len(calls) == 4
 
 
 def test_nlm_challenge_includes_claude_top_picks(client, monkeypatch):

@@ -1324,22 +1324,32 @@ $('nlm-consolidate').onclick = () => {
   const usingShortlist = !docSelection.size && shortlisted.length > 0;
   consolidateIds = docSelection.size ? [...docSelection] : shortlisted;
   const n = consolidateIds.length;
+  // FUNNEL fallback: nothing checked and no remembered shortlist → auto-pick Claude's top-N.
+  const scored = (lastDocs || []).filter(d => d.score != null).length;
+  const funnel = !n;
   $('consolidate-title').value = `Best picks — ${currentTabName()}`;
   $('consolidate-bm').checked = true;
   $('consolidate-status').textContent = '';
+  $('consolidate-topn-row').style.display = funnel ? '' : 'none';   // N only matters in funnel mode
   const go = $('consolidate-go');
-  if (!n) {
-    $('consolidate-info').textContent = 'No best candidates yet. Run 📓 NLM shortlist first (it picks '
-      + 'and remembers the best), or tick candidates by hand, then reopen this.';
+  if (funnel && !scored) {
+    $('consolidate-info').textContent = 'No best candidates yet, and nothing is scored. Run 🏆 deep-compare '
+      + '(Claude ranks them) or 📓 NLM shortlist first, or tick candidates by hand, then reopen this.';
     go.disabled = true;
-  } else if (n > 50) {
-    $('consolidate-info').textContent = `${n} candidate(s) selected, but a NotebookLM notebook holds at `
-      + 'most 50 sources. Narrow to ≤50 (untick weaker ones, or re-run 📓 shortlist), then reopen this.';
+  } else if (funnel) {
+    const k = Math.min(scored, +($('consolidate-topn').value || 49));
+    $('consolidate-info').textContent = `🚀 Funnel: Claude's top ${k} of ${scored} scored candidate(s) `
+      + 'go into ONE new notebook (the other rollover notebooks are deleted). NotebookLM then picks the '
+      + 'best — blind to Claude’s scores — and they’re only debated if the two disagree.';
+    go.disabled = false;
+  } else if (n > 49) {
+    $('consolidate-info').textContent = `${n} candidate(s) selected, but a notebook holds 49 candidates `
+      + '+ the benchmark (50-source cap). Narrow to ≤49 (untick weaker ones), then reopen this.';
     go.disabled = true;
   } else {
     $('consolidate-info').textContent = `${n} ${usingShortlist ? 'shortlisted (best)' : 'checked'} `
-      + 'candidate(s) will be copied into a NEW notebook (it becomes this tab’s notebook). '
-      + 'Then the best + second-best are picked automatically.';
+      + 'candidate(s) will be copied into a NEW notebook (it becomes this tab’s notebook); the other '
+      + 'rollover notebooks are deleted. NotebookLM then picks the best, debated only on disagreement.';
     go.disabled = false;
   }
   $('consolidate-modal').classList.remove('hidden');
@@ -1349,13 +1359,17 @@ $('consolidate-go').onclick = async () => {
   const title = ($('consolidate-title').value || '').trim();
   if (!title) { $('consolidate-status').textContent = 'Enter a name for the notebook.'; return; }
   const ids = consolidateIds;
-  if (!ids.length) { $('consolidate-status').textContent = 'No candidates to consolidate.'; return; }
   const includeBm = $('consolidate-bm').checked;
+  // FUNNEL mode (no explicit finalists) → let the server auto-pick Claude's top_n.
+  const body = ids.length
+    ? { title, doc_ids: ids, include_benchmark: includeBm }
+    : { title, top_n: Math.max(1, Math.min(49, +($('consolidate-topn').value || 49))),
+        include_benchmark: includeBm };
   const go = $('consolidate-go'); go.disabled = true;
   // launch the resumable BACKGROUND job (consolidate → shortlist → debate). It runs on
   // the server, so closing the tab / a dropped connection no longer interrupts it.
   const res = await api(`/api/tabs/${activeTab}/pipeline`, {
-    method: 'POST', body: JSON.stringify({ title, doc_ids: ids, include_benchmark: includeBm }) });
+    method: 'POST', body: JSON.stringify(body) });
   go.disabled = false;
   if (res.error) { $('consolidate-status').textContent = `Error: ${res.error}`; return; }
   $('consolidate-modal').classList.add('hidden');

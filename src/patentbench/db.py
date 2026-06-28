@@ -263,6 +263,29 @@ def set_shortlisted(tab_id: int, doc_ids: list[int]) -> None:
                       (tab_id, *idset))
 
 
+def clear_nlm_refs(tab_id: int, notebook_id: str) -> int:
+    """Forget that any of a tab's documents / benchmark live in a notebook — used after
+    that notebook is DELETED, so tab_notebook_ids() stops listing a dead notebook (which
+    would otherwise be queried and error). Returns documents cleared."""
+    with _conn() as c:
+        cur = c.execute("UPDATE documents SET nlm_source_notebook=NULL, nlm_source_id=NULL "
+                        "WHERE tab_id=? AND nlm_source_notebook=?", (tab_id, notebook_id))
+        c.execute("UPDATE benchmark SET nlm_source_notebook=NULL "
+                  "WHERE tab_id=? AND nlm_source_notebook=?", (tab_id, notebook_id))
+        return cur.rowcount
+
+
+def top_scored_documents(tab_id: int, limit: int) -> list[int]:
+    """The tab's `limit` best-scored FETCHED candidates, highest Claude score first
+    (id as a stable tiebreak). The funnel's stage-1 output: the few worth handing to
+    NotebookLM for an independent second opinion."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id FROM documents WHERE tab_id=? AND status='fetched' AND score IS NOT NULL "
+            "ORDER BY score DESC, id ASC LIMIT ?", (tab_id, limit)).fetchall()
+        return [r["id"] for r in rows]
+
+
 def nlm_cache_get(key: str) -> str | None:
     """A previously-stored NotebookLM answer for this exact (notebook+sources+question)
     key, or None. Persisted so identical queries don't re-hit NotebookLM (quota) across

@@ -1298,6 +1298,9 @@ def _run_pipeline(tab_id: int) -> None:
                 nb = created["id"]
                 db.set_notebook_config(tab_id, nb, created["title"], [], auto_add=True)
                 st = _pipeline_set(tab_id, notebook_id=nb, notebook_title=created["title"])
+                # Capture the rollover notebooks NOW — before the copy loop repoints the finalists'
+                # refs to the new notebook (after which tab_notebook_ids would no longer list them).
+                old_notebooks = [n for n in db.tab_notebook_ids(tab_id) if n != nb]
                 if st.get("include_benchmark", True):
                     _add_benchmark_to_notebook(tab_id, nb)
                 copied = 0
@@ -1305,20 +1308,51 @@ def _run_pipeline(tab_id: int) -> None:
                     if _add_doc_to_notebook(did, nb).get("ok"):
                         copied += 1
                     _pipeline_set(tab_id, status_text=f"🧺 copying finalists… {copied}")
+                # KEEP ONLY this notebook: delete the rollover notebooks the candidates were
+                # spread across, so NotebookLM compares the funnel set in ONE place (no cross-
+                # notebook blindness / truncation) and we reclaim slots toward the ~100 cap.
+                # Full text is retained in our DB, so nothing is lost.
+                cleaned = 0
+                for old in old_notebooks:
+                    _pipeline_set(tab_id, status_text="🗑 removing rollover notebooks…")
+                    if nlm_bridge.delete_notebook(old).get("ok"):
+                        cleaned += 1
+                    db.clear_nlm_refs(tab_id, old)        # drop refs even if delete failed, so we
+                    db.nlm_cache_clear(old)               # don't re-query a now-dead notebook
                 db.append_message(tab_id, "s", f"🧺 Consolidated {copied} document(s) into "
-                                  f"«{created['title']}» and connected the tab.")
+                                  f"«{created['title']}» and connected the tab"
+                                  + (f"; 🗑 deleted {cleaned} other notebook(s)" if cleaned else "")
+                                  + ".")
             else:                                       # resume: the notebook already exists, reuse it
                 db.set_notebook_config(tab_id, nb, st.get("notebook_title") or nb, [], auto_add=True)
             st = _pipeline_set(tab_id, step="shortlist")
         if st.get("step") == "shortlist":
             _pipeline_set(tab_id, status_text="📓 picking best + second-best…")
-            nlm_shortlist(tab_id, schemas.NlmShortlistRequest(notebook_id=st.get("notebook_id")))
-            st = _pipeline_set(tab_id, step="debate")
+            sl = nlm_shortlist(tab_id, schemas.NlmShortlistRequest(notebook_id=st.get("notebook_id")))
+            nlm_top_id = (sl.get("shortlist_ids") or [None])[0]
+            st = _pipeline_set(tab_id, step="debate", nlm_top_id=nlm_top_id)
         if st.get("step") == "debate":
-            _pipeline_set(tab_id, status_text="⚖️ Claude ↔ NotebookLM debating block by block…")
-            # doc_ids=None → debate the UNION of NLM's finalists + Claude's top picks (the
-            # bidirectional set); the debate adds any of Claude's picks missing from the notebook.
-            nlm_challenge(tab_id, schemas.NlmChallengeRequest())
+            # TWO INDEPENDENT ROOTS, compared. NLM judged the funnel set with NO knowledge that
+            # Claude preselected it; Claude ranked it without NLM's input. Debate ONLY when their
+            # #1 picks diverge — agreement needs no opus reconciliation.
+            claude_top, nlm_top = st.get("claude_top_id"), st.get("nlm_top_id")
+            def _num(i):
+                d = db.get_document(i) if i else None
+                return d["number"] if d else None
+            if nlm_top and claude_top and nlm_top == claude_top:
+                _pipeline_set(tab_id, status_text="✅ both roots agree — no debate needed")
+                db.append_message(tab_id, "s",
+                    f"✅ Independent agreement: Claude (full-text ranking) and NotebookLM (grounded "
+                    f"read of the same set, blind to Claude's scores) both pick «{_num(nlm_top)}» as "
+                    "the best match. No divergence to debate.")
+            else:
+                _pipeline_set(tab_id, status_text="⚖️ roots diverge — Claude ↔ NotebookLM debating…")
+                ids = [i for i in (nlm_top, claude_top) if i]
+                db.append_message(tab_id, "s",
+                    "⚖️ The two roots diverge — Claude's best is "
+                    f"«{_num(claude_top) or '—'}», NotebookLM's is «{_num(nlm_top) or '—'}». "
+                    "Reconciling on opus.")
+                nlm_challenge(tab_id, schemas.NlmChallengeRequest(doc_ids=ids or None))
             st = _pipeline_set(tab_id, step="done")
         _pipeline_set(tab_id, step="done", status_text="✅ done", error=None)
     except Exception as exc:                            # keep the file so the user can ▶️ Resume
@@ -1347,16 +1381,22 @@ def pipeline_start(tab_id: int, body: schemas.PipelineRequest):
     bm = db.get_benchmark(tab_id)
     if not bm or bm.get("status") != "ready":
         raise HTTPException(400, "benchmark is not ready — set it first")
-    ids = body.doc_ids or []
+    # The funnel: explicit finalists if given, else AUTO-pick Claude's top_n by score. The
+    # picks go into ONE notebook so NotebookLM can give a single, independent second opinion.
+    ids = body.doc_ids or db.top_scored_documents(tab_id, body.top_n)
     if not ids:
-        raise HTTPException(400, "no finalists selected for the pipeline")
+        raise HTTPException(400, "no scored candidates to funnel — run 🏆 deep-compare first "
+                                 "so Claude has ranked them")
     if not body.title.strip():
         raise HTTPException(400, "name the consolidated notebook")
+    # Claude's #1 = highest-scored among the chosen finalists (for the divergence gate later).
+    score_of = {d["id"]: (d.get("score") or 0) for d in db.list_documents(tab_id, full=True)}
+    claude_top_id = max(ids, key=lambda i: (score_of.get(i, 0), -i))
     _pipeline_set(tab_id, step="consolidate", title=body.title.strip(), doc_ids=ids,
-                  include_benchmark=bool(body.include_benchmark), error=None,
-                  notebook_id=None, notebook_title=None, status_text="queued…")
+                  claude_top_id=claude_top_id, include_benchmark=bool(body.include_benchmark),
+                  error=None, notebook_id=None, notebook_title=None, status_text="queued…")
     threading.Thread(target=_run_pipeline, args=(tab_id,), daemon=True).start()
-    return {"started": True, "running": True}
+    return {"started": True, "running": True, "funnel_n": len(ids)}
 
 
 @app.get("/api/tabs/{tab_id}/pipeline/status")
@@ -1375,26 +1415,41 @@ def _notebook_signature(notebook_id: str) -> str:
 
 
 def _nlm_query_cached(notebook_id: str, question: str,
-                      source_ids: list[str] | None = None, force: bool = False) -> dict:
+                      source_ids: list[str] | None = None, force: bool = False,
+                      accept=None, retries: int = 0) -> dict:
     """nlm_bridge.query with a PERSISTENT answer cache keyed on
     (notebook, source-restriction, question, source-set signature). Identical queries
     return the stored answer for free — no NotebookLM call, no quota — and survive
     rebuilds (the cache lives in the /data DB). Stale automatically when sources change.
-    Only successful answers are cached. {answer, cached?} | {error}."""
+    Only successful answers are cached. {answer, cached?} | {error}.
+
+    `accept(answer) -> bool` rejects a *substantively incomplete* reply (e.g. NotebookLM
+    cut off in its 'thinking' preamble before producing the shortlist). A rejected answer
+    is NOT cached (so it can't poison future runs), is retried up to `retries` times with a
+    forced fresh query, and — if still rejected — is returned tagged {incomplete: True} so
+    the caller can warn instead of silently scraping a non-answer."""
     sig = _notebook_signature(notebook_id)
     raw = "|".join([notebook_id, ",".join(source_ids or []), sig, question])
     key = hashlib.sha256(raw.encode()).hexdigest()
     if not force:
         hit = db.nlm_cache_get(key)
-        if hit is not None:
+        if hit is not None and (accept is None or accept(hit)):
             return {"answer": hit, "cached": True}
-    res = nlm_bridge.query(notebook_id, question, source_ids=source_ids)
-    if res.get("answer"):
-        db.nlm_cache_put(key, notebook_id, question, res["answer"])
+    res = {}
+    for attempt in range(retries + 1):
+        res = nlm_bridge.query(notebook_id, question, source_ids=source_ids)
+        ans = res.get("answer")
+        if not ans:
+            return res
+        if accept is None or accept(ans):
+            db.nlm_cache_put(key, notebook_id, question, ans)
+            return res
+        # incomplete: do NOT cache; retry a fresh query if budget remains
+    res["incomplete"] = True
     return res
 
 
-def _query_tab_series(tab_id: int, question: str) -> list[dict]:
+def _query_tab_series(tab_id: int, question: str, accept=None, retries: int = 0) -> list[dict]:
     """Fan a question across EVERY notebook the tab's candidates are spread over.
     Auto-rollover splits candidates across several notebooks at the per-notebook
     source cap, so querying only the connected notebook misses every candidate in
@@ -1409,9 +1464,11 @@ def _query_tab_series(tab_id: int, question: str) -> list[dict]:
     out: list[dict] = []
     for nb in db.tab_notebook_ids(tab_id):
         sids = (cfg.get("selected_source_ids") or None) if nb == connected else None
-        res = _nlm_query_cached(nb, question, source_ids=sids)
+        res = _nlm_query_cached(nb, question, source_ids=sids, accept=accept, retries=retries)
         entry = {"notebook_id": nb, "title": titles.get(nb, nb)}
         entry["error" if "error" in res else "answer"] = res.get("error") or res["answer"]
+        if res.get("incomplete"):
+            entry["incomplete"] = True
         out.append(entry)
     return out
 
@@ -1734,6 +1791,19 @@ NLM_SHORTLIST_PROMPT = (
 NLM_SHORTLIST_QUERY_CAP = 6000   # NotebookLM rejects very long questions (~5-7k char ceiling)
 
 
+def _shortlist_answer_complete(answer: str) -> bool:
+    """True when a NotebookLM shortlist reply actually produced the structured assessment
+    the prompt demands (SHORTLIST / BEST / FEATURE MAP sections). A truncated 'thinking'
+    preamble that cuts off before the shortlist (seen live 2026-06-28: a 502-char reply
+    that named 3 docs in passing and stopped at 'proceed to evaluate … next', silently
+    dropping the other 12 sources incl. DE202022102539) reaches a DECISION for none of the
+    sources — so it carries none of these markers, and we must not treat its stray publication
+    numbers as an assessment. A genuine reply (even a terse 'BEST: X' or a 'SHORTLIST: None')
+    always reaches at least one."""
+    a = (answer or "").upper()
+    return any(m in a for m in ("SHORTLIST", "FEATURE MAP", "BEST"))
+
+
 def _shortlist_key(number: str) -> str:
     """Join key that ignores the kind-code suffix so an NLM-named 'EP4340163A1'
     matches a stored 'EP4340163' (or vice-versa) — same publication for shortlisting."""
@@ -1765,20 +1835,40 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
         # one consolidated notebook → a single global best/second-best across all of them
         titles = {n["id"]: n["title"]
                   for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
-        qres = _nlm_query_cached(body.notebook_id, question, source_ids=None)
+        qres = _nlm_query_cached(body.notebook_id, question, source_ids=None,
+                                 accept=_shortlist_answer_complete, retries=1)
         e = {"notebook_id": body.notebook_id,
              "title": titles.get(body.notebook_id, body.notebook_id)}
         e["error" if "error" in qres else "answer"] = qres.get("error") or qres["answer"]
+        if qres.get("incomplete"):
+            e["incomplete"] = True
         series = [e]
     else:
-        series = _query_tab_series(tab_id, question)
+        series = _query_tab_series(tab_id, question,
+                                   accept=_shortlist_answer_complete, retries=1)
     if not series:
         raise HTTPException(400, "no notebook connected — connect/export to a notebook first")
-    answers = [e for e in series if e.get("answer")]
+    # A truncated / structureless reply did NOT assess its notebook's sources — don't scrape
+    # its stray numbers (that's how DE202022102539 silently vanished). Warn about it instead.
+    answers = [e for e in series if e.get("answer") and not e.get("incomplete")]
+    incomplete = [e for e in series if e.get("incomplete")]
     if not answers:
+        if incomplete:                                   # every notebook returned a non-answer
+            bits = []
+            for e in incomplete:
+                nb = e.get("notebook_id")
+                n_src = sum(1 for d in cands if d.get("nlm_source_notebook") == nb)
+                bits.append(f"«{e.get('title') or nb}» ({n_src} source(s))")
+            msg = db.append_message(tab_id, "s",
+                "⚠️ NotebookLM returned a truncated / structureless answer for " + ", ".join(bits)
+                + " — those sources were NOT assessed (retried once). Re-run 📓 shortlist to try "
+                "again, or consolidate to a single notebook first.")
+            return {"ok": False, "shortlist_ids": [], "matched": [], "unmatched": [],
+                    "incomplete": True, "messages": [msg], "error": "incomplete answer"}
         errs = "; ".join(e.get("error", "?") for e in series)
         msg = db.append_message(tab_id, "s", f"NotebookLM shortlist failed: {errs}")
-        return {"ok": False, "shortlist_ids": [], "messages": [msg], "error": errs}
+        return {"ok": False, "shortlist_ids": [], "matched": [], "unmatched": [],
+                "messages": [msg], "error": errs}
 
     # union of every publication number NotebookLM named, matched to our candidates
     named: list[str] = []
@@ -1828,10 +1918,21 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
         summary = ("📓 NotebookLM named no document already in your candidate pool. See its answer "
                    "above" + (f"; numbers it mentioned: {', '.join(unmatched[:20])}" if unmatched else "")
                    + ".")
+    if incomplete:
+        # name each notebook NLM didn't finish + how many of its sources went unassessed, so a
+        # short shortlist isn't mistaken for a complete read (the silent-drop bug, made loud).
+        bits = []
+        for e in incomplete:
+            nb = e.get("notebook_id")
+            n_src = sum(1 for d in cands if d.get("nlm_source_notebook") == nb)
+            bits.append(f"«{e.get('title') or nb}» ({n_src} source(s))")
+        summary += ("\n\n⚠️ NotebookLM returned a truncated / structureless answer for "
+                    + ", ".join(bits) + " — those sources were NOT assessed (retried once). "
+                    "Re-run 📓 shortlist to try again, or consolidate to a single notebook first.")
     out.append(db.append_message(tab_id, "s", summary))
     return {"ok": True, "shortlist_ids": [d["id"] for d in matched],
             "matched": [d["number"] for d in matched], "unmatched": unmatched,
-            "total": len(cands), "messages": out}
+            "incomplete": bool(incomplete), "total": len(cands), "messages": out}
 
 
 def _benchmark_feature_spec_for_nlm(bm: dict, limit: int = NLM_SHORTLIST_QUERY_CAP) -> str:
