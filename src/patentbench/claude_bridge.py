@@ -26,12 +26,14 @@ MODELS = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haik
 # decisive ranking only (it weighs hardest on the subscription session limit).
 CHAT_MODEL = os.environ.get("CLAUDE_CHAT_MODEL", "claude-sonnet-4-6")
 EXTRACT_MODEL = os.environ.get("CLAUDE_EXTRACT_MODEL", "claude-haiku-4-5")
-# ALL document reading (page transcription, photo number-OCR, digests, deep-map
-# full-text reads) defaults to the MOST AFFORDABLE model — the user picks a
-# stronger one per task via the UI's separate "reading model" dropdown when
-# quality demands it. Misread-digit risk on cheap OCR is mitigated by the
-# two-pass disagreement check, which flags inconsistent numbers as uncertain.
-READ_MODEL = os.environ.get("PB_READ_MODEL", "claude-haiku-4-5")
+# The UI's "reading model" dropdown default. It assesses each candidate in
+# deep-compare (a RANKING decision) and also transcribes pages, so it defaults to
+# SONNET, not the cheapest model: haiku was caught inverting the candidate ranking
+# (2026-06-27 forensics — see DIGEST_MODEL below), and the doctrine that came out
+# of it is "bulk-read on sonnet, final reduce on opus". The user can still pick
+# haiku per-run from the dropdown for cheap bulk transcription; photo number-OCR
+# is decoupled onto OCR_MODEL regardless. Override with PB_READ_MODEL.
+READ_MODEL = os.environ.get("PB_READ_MODEL", "claude-sonnet-4-6")
 # Pulling patent NUMBERS off a photo is adversarial: one misread digit silently
 # routes to a real-but-WRONG patent, and the two-pass disagreement check is no
 # safety net when the model can't read the image at all — it just flags EVERY
@@ -47,7 +49,13 @@ SKILLS_DIR = os.environ.get("CLAUDE_SKILLS_DIR", os.path.expanduser("~/.claude/s
 
 # Model that reads each candidate's FULL text: at fetch time it writes the
 # stored digest, and in deep-compare it judges one candidate vs the benchmark.
-DIGEST_MODEL = os.environ.get("PB_DIGEST_MODEL", "claude-haiku-4-5")
+# Defaults to SONNET, not the cheapest model: this read is a RANKING decision, and
+# haiku was caught inverting it (2026-06-27 DB forensics) — it scored generic
+# keyword-matches 7/10 while the architecturally-correct winners landed 4-6/10,
+# a distinction NLM's full read + opus debate caught. Bulk page transcription
+# stays cheap on READ_MODEL (volume dominates, context self-corrects); the
+# analytical read does not, so quality wins here. Override with PB_DIGEST_MODEL.
+DIGEST_MODEL = os.environ.get("PB_DIGEST_MODEL", "claude-sonnet-4-6")
 DIGEST_TIMEOUT = float(os.environ.get("PB_DIGEST_TIMEOUT", "300"))
 # The reduce phase compiles EVERY candidate's verdict in one call — far heavier
 # than a normal chat turn — so it gets its own, much longer timeout. Its prompt

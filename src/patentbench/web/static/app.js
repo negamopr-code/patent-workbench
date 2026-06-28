@@ -66,7 +66,7 @@ const READ_SELECT_IDS = ['bm-read-model', 'cand-read-model'];
 const readSelects = () => READ_SELECT_IDS.map($).filter(Boolean);
 function readModelValue() {
   const s = readSelects()[0];
-  return s ? s.value : (skillsMeta.default_read_model || 'claude-haiku-4-5');
+  return s ? s.value : (skillsMeta.default_read_model || 'claude-sonnet-4-6');
 }
 function setReadModel(v) { for (const s of readSelects()) s.value = v; }
 // Reading-model strength: LOWER index in the server's MODELS list = stronger.
@@ -525,7 +525,7 @@ function loadPrefs() {
   try { p = JSON.parse(localStorage.getItem(prefsKey()) || '{}'); } catch {}
   if (p.model) $('model').value = p.model;
   else $('model').value = skillsMeta.default_model;
-  setReadModel(p.readModel || skillsMeta.default_read_model || 'claude-haiku-4-5');
+  setReadModel(p.readModel || skillsMeta.default_read_model || 'claude-sonnet-4-6');
   const want = new Set(p.skills || defaultSkills());
   document.querySelectorAll('#skills input').forEach(i => { i.checked = want.has(i.value); });
   $('use-docs').checked = p.useDocs !== false;
@@ -553,7 +553,7 @@ async function loadSkills() {
     }
   }
   sel.value = skillsMeta.default_model;
-  setReadModel(skillsMeta.default_read_model || 'claude-haiku-4-5');
+  setReadModel(skillsMeta.default_read_model || 'claude-sonnet-4-6');
   const fmt = $('answer-format');
   fmt.innerHTML = '';
   for (const f of skillsMeta.answer_formats || [{ key: '', label: 'Default answer' }]) {
