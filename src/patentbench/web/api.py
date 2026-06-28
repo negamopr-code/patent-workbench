@@ -994,6 +994,182 @@ def notebook_add_selected(tab_id: int, body: schemas.NotebookAddSelected):
             "notebook_id": nb, "notebook_title": titles.get(nb, nb)}
 
 
+def _source_number(title: str) -> str:
+    """The patent number a notebook source title starts with — titles are written as
+    '<NUMBER> — <name>' (or '🎯 BENCHMARK — …'). '' when none is present."""
+    m = re.match(r"^\s*([A-Z]{2}\d+[A-Z]?\d*)", title or "")
+    return m.group(1) if m else ""
+
+
+@app.post("/api/tabs/{tab_id}/notebook/resync")
+def notebook_resync(tab_id: int, body: schemas.NotebookResync):
+    """Reconcile the app's record of which candidates are in NotebookLM with NLM's
+    ACTUAL sources. Scans the tab's notebooks (or an explicit/whole-account set), maps
+    each source title to a candidate (kind-code-insensitive), and updates
+    documents.nlm_source_notebook / nlm_source_id. Surfaces candidates that were in NLM
+    but untracked, and DUPLICATES (one candidate in >1 notebook) so they can be deleted
+    to free the 50-source cap. Read-only against NLM (no AI quota)."""
+    _tab_or_404(tab_id)
+    ok, why = nlm_bridge.available()
+    if not ok:
+        raise HTTPException(400, f"NotebookLM unavailable: {why}")
+    if body.scan_all:
+        nb_ids = [n["id"] for n in (nlm_bridge.list_notebooks().get("notebooks") or [])]
+    elif body.notebook_ids:
+        nb_ids = list(dict.fromkeys(body.notebook_ids))
+    else:
+        nb_ids = db.tab_notebook_ids(tab_id)
+    account = {n["id"]: n["title"]
+               for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+    titles = dict(account)
+    cands = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    by_key = {}
+    for d in cands:                                   # first candidate per key wins
+        by_key.setdefault(_shortlist_key(d["number"]), d)
+    # key → list of {notebook_id, source_id} where a matching source physically exists
+    locations: dict[str, list[dict]] = {}
+    scan_errors, scanned_ok = [], set()
+    for nb in nb_ids:
+        res = nlm_bridge.list_sources(nb, force=True)
+        if res.get("error"):
+            scan_errors.append(f"{titles.get(nb, nb)}: {str(res['error'])[:80]}")
+            continue
+        scanned_ok.add(nb)
+        for s in res.get("sources") or []:
+            key = _shortlist_key(_source_number(s.get("title") or ""))
+            if key and key in by_key:
+                locations.setdefault(key, []).append({"notebook_id": nb, "source_id": s.get("id")})
+    # update each candidate's tracked home (keep an existing valid home, else first found)
+    retracked = 0
+    for key, locs in locations.items():
+        d = by_key[key]
+        homes = [l["notebook_id"] for l in locs]
+        cur = d.get("nlm_source_notebook")
+        home = cur if cur in homes else locs[0]["notebook_id"]
+        sid = next((l["source_id"] for l in locs if l["notebook_id"] == home), None)
+        if d.get("nlm_source_notebook") != home or d.get("nlm_source_id") != sid:
+            db.update_document(d["id"], nlm_source_notebook=home, nlm_source_id=sid)
+            retracked += 1
+    # Clear stale tracking ONLY when it's safe: the tracked notebook is gone from the
+    # account entirely (deleted), or it was scanned cleanly yet no longer holds the
+    # candidate. A transient scan error never clears (avoids false "not in NLM").
+    cleared = 0
+    for d in cands:
+        nb = d.get("nlm_source_notebook")
+        if not nb:
+            continue
+        gone = nb not in account
+        scanned_clean = nb in scanned_ok and _shortlist_key(d["number"]) not in locations
+        if gone or scanned_clean:
+            db.update_document(d["id"], nlm_source_notebook=None, nlm_source_id=None)
+            cleared += 1
+    duplicates = [
+        {"number": by_key[k]["number"],
+         "locations": [{"notebook_id": l["notebook_id"],
+                        "notebook_title": titles.get(l["notebook_id"], l["notebook_id"]),
+                        "source_id": l["source_id"]} for l in locs]}
+        for k, locs in locations.items() if len(locs) > 1]
+    in_nlm = sum(1 for d in db.list_documents(tab_id)
+                 if d["status"] == "fetched" and d.get("nlm_source_notebook"))
+    dup_copies = sum(len(d["locations"]) - 1 for d in duplicates)
+    summary = (f"♻️ Resynced with NotebookLM across {len(nb_ids)} notebook(s): "
+               f"{in_nlm} of {len(cands)} candidate(s) are in NLM "
+               f"({retracked} re-tracked, {cleared} cleared). "
+               + (f"{len(duplicates)} candidate(s) are DUPLICATED across notebooks "
+                  f"({dup_copies} extra copy/copies — delete them to free the 50-source cap). "
+                  if duplicates else "No duplicates found. ")
+               + ("; ".join(scan_errors) if scan_errors else ""))
+    db.append_message(tab_id, "s", summary)
+    return {"ok": True, "scanned": len(nb_ids), "in_nlm": in_nlm, "total": len(cands),
+            "retracked": retracked, "cleared": cleared, "duplicates": duplicates,
+            "dup_copies": dup_copies, "errors": scan_errors}
+
+
+def _notebook_free(nb_id: str) -> int:
+    """Free source slots in a notebook right now (SOURCE_LIMIT − live source count)."""
+    res = nlm_bridge.list_sources(nb_id, force=True)
+    if res.get("error"):
+        return 0
+    return max(0, nlm_bridge.SOURCE_LIMIT - len(res.get("sources") or []))
+
+
+@app.post("/api/tabs/{tab_id}/notebook/distribute")
+def notebook_distribute(tab_id: int, body: schemas.NotebookDistribute):
+    """Auto-split candidates across several notebooks' FREE space: fill the first
+    notebook to its 50-source cap, spill the rest into the next, and so on — using
+    notebooks that already have room instead of creating new ones (which fails at the
+    ~100-notebook account cap). Default targets = the tab's own notebooks with space
+    (most-free first); pass notebook_ids for a manual ordered split."""
+    _tab_or_404(tab_id)
+    ok, why = nlm_bridge.available()
+    if not ok:
+        raise HTTPException(400, f"NotebookLM unavailable: {why}")
+    cands = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    if body.doc_ids:
+        want = set(body.doc_ids)
+        docs = [d for d in cands if d["id"] in want]
+    else:
+        docs = [d for d in cands if not d.get("nlm_source_notebook")]   # the not-in-NLM set
+    docs.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)        # best first if space runs out
+    titles = {n["id"]: n["title"]
+              for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+    if body.notebook_ids:
+        nb_ids = [n for n in dict.fromkeys(body.notebook_ids) if n in titles]
+    else:                                          # tab's notebooks that have room, most-free first
+        nb_ids = sorted((n for n in db.tab_notebook_ids(tab_id)),
+                        key=_notebook_free, reverse=True)
+        nb_ids = [n for n in nb_ids if _notebook_free(n) > 0]
+    if not nb_ids:
+        raise HTTPException(400, "no notebook with free space — 🗑 delete duplicate sources "
+                            "(♻️ Resync finds them) or delete a notebook, then retry")
+    remaining = list(docs)
+    placements, errors = [], []
+    for nb in nb_ids:
+        added_here = 0
+        if body.include_benchmark and not placements:    # benchmark into the first target only
+            _add_benchmark_to_notebook(tab_id, nb)
+        while remaining:
+            d = remaining[0]
+            res = _add_doc_to_notebook(d["id"], nb)
+            if res.get("full"):
+                break                                    # this notebook is full → next one
+            remaining.pop(0)                             # consumed (added, or skipped as already-in)
+            if res.get("ok"):
+                added_here += 1
+            elif res.get("error"):
+                errors.append(f"{d['number']}: {res['error']}")
+        if added_here:
+            placements.append({"notebook_id": nb, "notebook_title": titles.get(nb, nb),
+                               "added": added_here})
+    placed = sum(p["added"] for p in placements)
+    db.append_message(
+        tab_id, "s",
+        f"📚 Distributed {placed} candidate(s) across {len(placements)} notebook(s): "
+        + (", ".join(f"{p['added']}→«{p['notebook_title']}»" for p in placements) or "none")
+        + (f"; {len(remaining)} still not placed (all notebooks full — delete duplicates to free space)"
+           if remaining else "")
+        + (f"; errors: {'; '.join(errors[:3])}" if errors else "") + ".")
+    return {"ok": True, "placed": placed, "placements": placements,
+            "remaining": len(remaining), "errors": errors[:5]}
+
+
+@app.post("/api/tabs/{tab_id}/notebook/source-delete")
+def notebook_source_delete(tab_id: int, body: schemas.NotebookSourceDelete):
+    """Permanently delete chosen sources from a notebook (dedup / free space), then
+    clear the app's tracking for any candidate whose tracked source was deleted."""
+    _tab_or_404(tab_id)
+    res = nlm_bridge.delete_source(body.source_ids, notebook_id=body.notebook_id)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    deleted = set(body.source_ids)
+    cleared = 0
+    for d in db.list_documents(tab_id, full=True):
+        if d.get("nlm_source_id") in deleted:
+            db.update_document(d["id"], nlm_source_notebook=None, nlm_source_id=None)
+            cleared += 1
+    return {"ok": True, "deleted": res.get("deleted", 0), "cleared": cleared}
+
+
 @app.post("/api/tabs/{tab_id}/notebook/consolidate")
 def notebook_consolidate(tab_id: int, body: schemas.NotebookConsolidate):
     """Create ONE new notebook (the name the user chose) and copy a chosen set of the
@@ -1630,9 +1806,18 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
                              f"benchmark's full feature combination? (ranked best + per-feature map)]")]
     out.append(db.append_message(tab_id, "c", _series_answer_text(answers),
                                  model="notebooklm", participants=participants))
-    summary = (f"📓 NotebookLM shortlisted {len(matched)} of {len(cands)} candidate(s)"
+    # COVERAGE: NLM can only name documents that are SOURCES in its notebooks. Candidates
+    # not yet exported are invisible to this shortlist — disclose that so a small/biased
+    # shortlist isn't mistaken for "the best of all candidates".
+    in_nlm = sum(1 for d in cands if d.get("nlm_source_notebook"))
+    not_in_nlm = len(cands) - in_nlm
+    coverage = (f"Coverage: {in_nlm} of {len(cands)} candidate(s) are NLM sources"
+                + (f"; {not_in_nlm} are NOT in NLM and were invisible to this shortlist — "
+                   "📭 filter + 📓➕ add them to a notebook to include them"
+                   if not_in_nlm else ""))
+    summary = (f"📓 NotebookLM shortlisted {len(matched)} candidate(s)"
                + (f" — best first: {', '.join(d['number'] for d in matched)}" if matched else "")
-               + ". The answer above ranks the best + second-best with a per-feature "
+               + f". ({coverage}.) The answer above ranks the best + second-best with a per-feature "
                "YES/PARTIAL/NO map. Review them (auto-checked on the right), then 🤖 Verify "
                "shortlist to run the precise opus read on just these.")
     if unmatched:
@@ -1920,6 +2105,25 @@ def _has_assessment(d: dict) -> bool:
     return bool((d.get("verdict") or "").strip()) or d.get("score") is not None
 
 
+def _model_rank(m: str | None) -> int:
+    """Reading-model strength: LOWER index in MODELS = stronger. Unknown/None →
+    weakest, so an explicit upgrade re-reads such candidates."""
+    try:
+        return claude_bridge.MODELS.index(m)
+    except (ValueError, TypeError):
+        return len(claude_bridge.MODELS)
+
+
+def _assessed_at_least(d: dict, read_model: str) -> bool:
+    """True if this candidate already has a full-text assessment from `read_model`
+    OR a stronger one. This is what makes Continue MODEL-AWARE: an interrupted
+    upgrade-read (e.g. sonnet over 221 candidates, killed at the token limit after
+    160) resumes on exactly the leftovers — the ones still on a weaker model — across
+    as many budget windows as it takes, never re-reading sonnet's 160 and never
+    downgrading a stronger (opus) read."""
+    return _has_assessment(d) and _model_rank(d.get("score_model")) <= _model_rank(read_model)
+
+
 def _stored_assessment(d: dict) -> str:
     """The candidate's reusable full-text assessment for the reduce/ranking. Uses the
     rich stored verdict when present; for a legacy read (score but no verdict)
@@ -2092,10 +2296,15 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
         docs = list(all_docs)
     # READING happens only for candidates that still need it; the RANKING always
     # reuses the whole corpus of stored assessments (see _run_claude_read). Continue
-    # = read only the un-assessed; Deep-read all / selected = (re-)read the targeted
-    # set fresh. When nothing needs reading but assessments exist, RE-RANK from them
-    # (zero reads) — work done anywhere is reused everywhere.
-    to_read = [d for d in docs if not _has_assessment(d)] if body.skip_scored else list(docs)
+    # (skip_scored) is MODEL-AWARE: it reads only candidates not yet assessed by the
+    # chosen 📖 reading model or a stronger one, so an interrupted upgrade-read (e.g.
+    # sonnet over 221, killed at the token limit) resumes on exactly the leftovers
+    # without re-reading what the strong model already did. Deep-read all / selected =
+    # (re-)read the targeted set fresh. When nothing needs reading but assessments
+    # exist, RE-RANK from them (zero reads) — work done anywhere is reused everywhere.
+    read_model = _read_model(body.reading_model) or claude_bridge.DIGEST_MODEL
+    to_read = ([d for d in docs if not _assessed_at_least(d, read_model)]
+               if body.skip_scored else list(docs))
     corpus = [d for d in all_docs if _has_assessment(d)]
     if not to_read and not corpus:
         raise HTTPException(400, "no fetched candidate documents"
@@ -2105,13 +2314,13 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
     target_ids = [d["id"] for d in to_read]
     model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
     question = (body.question or "").strip() or DEEP_DEFAULT_QUESTION
-    read_model = _read_model(body.reading_model) or claude_bridge.DIGEST_MODEL
     to_read.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)
     if to_read:
         scope = (f"{len(to_read)} of {len(all_docs)}"
                  if len(to_read) != len(all_docs) else f"all {len(to_read)}")
         head = (f"[Deep {'read · continue' if body.skip_scored else 'compare'} — {scope} "
-                f"candidates at full text: {', '.join(d['number'] for d in to_read[:30])}]")
+                f"candidates at full text ({read_model}): "
+                f"{', '.join(d['number'] for d in to_read[:30])}]")
     else:                                          # reduce-only: re-rank from stored
         scope = f"all {len(all_docs)}"
         head = (f"[Re-rank — compiling the stored full-text assessments of "

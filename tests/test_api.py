@@ -372,6 +372,37 @@ def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch)
     assert after["CN114853847"]["score_model"] == "claude-sonnet-4-6"   # records which model read it
 
 
+def test_continue_is_model_aware_upgrades_weaker_reads(client, monkeypatch):
+    """The interrupted-sonnet-over-221 case: Continue with a STRONGER reading model
+    re-reads candidates still on a weaker model (haiku) but skips ones already read by
+    that model or stronger (sonnet/opus). This is what resumes an upgrade-read on just
+    the leftovers across token-budget windows without re-reading the strong-read ones."""
+    tab = client.post("/api/tabs", json={"name": "Upgrade"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"text": "EP3667902A1 CN114853847B CN114547092 CN117241689"})
+    docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    # prior batch: one read by sonnet (done at this level), one by opus (stronger),
+    # one by haiku (WEAKER — must be upgraded). The 4th is unread.
+    db.update_document(docs["EP3667902A1"]["id"], score=8, scored_at=1, score_model="claude-sonnet-4-6")
+    db.update_document(docs["CN114853847"]["id"], score=7, scored_at=1, score_model="claude-opus-4-8")
+    db.update_document(docs["CN114547092"]["id"], score=3, scored_at=1, score_model="claude-haiku-4-5")
+    read = []
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None, features=None: read.append(d["number"]) or {"verdict": f"MATCH SCORE: 6 for {d['number']}"})
+    monkeypatch.setattr(claude_bridge, "deep_reduce", lambda *a, **k: {"answer": "ranking"})
+    client.post(f"/api/tabs/{tid}/deep-compare",
+                json={"skip_scored": True, "reading_model": "claude-sonnet-4-6"})
+    _wait_read(client, tid)
+    # the haiku-read one is upgraded, the unread one is read; sonnet/opus ones skipped
+    assert set(read) == {"CN114547092", "CN117241689"}
+    after = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert after["EP3667902A1"]["score"] == 8           # sonnet read untouched
+    assert after["CN114853847"]["score"] == 7           # opus read untouched (no downgrade)
+    assert after["CN114547092"]["score_model"] == "claude-sonnet-4-6"   # upgraded to sonnet
+
+
 def test_rerank_reuses_stored_reads_without_rereading(client, monkeypatch):
     """The core demand: once read ANYWHERE, an assessment is reused EVERYWHERE. A
     Continue/re-rank with everything already read must do ZERO reads yet rank the
@@ -399,6 +430,81 @@ def test_rerank_reuses_stored_reads_without_rereading(client, monkeypatch):
     assert nums == {"EP3667902A1", "CN114547092"}       # BOTH ranked (legacy one included)
     msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
     assert any(m["role"] == "q" and "Re-rank" in m["text"] for m in msgs)
+
+
+def test_notebook_resync_retracks_and_finds_duplicates(client, monkeypatch):
+    """Resync reconciles app↔NLM: a candidate physically in a notebook but untracked
+    gets re-tracked, and a candidate present in TWO notebooks is reported as a duplicate."""
+    tab = client.post("/api/tabs", json={"name": "Resync"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/notebook",
+               json={"notebook_id": "nb-a", "notebook_title": "A", "source_ids": []})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114853847B CN114547092"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {"notebooks": [
+        {"id": "nb-a", "title": "A", "sources": 2}, {"id": "nb-b", "title": "B", "sources": 1}]})
+    # EP3667902 is in BOTH notebooks (duplicate); CN114853847 only in B; CN114547092 in none
+    srcs = {
+        "nb-a": [{"id": "sa1", "title": "EP3667902A1 — foo"}],
+        "nb-b": [{"id": "sb1", "title": "EP3667902 — foo (copy)"},
+                 {"id": "sb2", "title": "CN114853847B — bar"}],
+    }
+    monkeypatch.setattr(nlm_bridge, "list_sources",
+                        lambda nb, force=False: {"sources": srcs.get(nb, [])})
+    # scan both notebooks explicitly
+    r = client.post(f"/api/tabs/{tid}/notebook/resync",
+                    json={"notebook_ids": ["nb-a", "nb-b"]}).json()
+    assert r["ok"] and r["in_nlm"] == 2          # EP3667902 + CN114853847 now tracked
+    docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert docs["EP3667902A1"]["nlm_source_notebook"] in ("nb-a", "nb-b")
+    assert docs["CN114853847"]["nlm_source_notebook"] == "nb-b"
+    assert docs["CN114547092"]["nlm_source_notebook"] is None     # genuinely not in NLM
+    dups = {d["number"]: d for d in r["duplicates"]}
+    assert "EP3667902A1" in dups and len(dups["EP3667902A1"]["locations"]) == 2
+
+
+def test_notebook_distribute_fills_across_notebooks(client, monkeypatch):
+    """Auto-split fills the first notebook to its cap, then spills the rest into the next."""
+    tab = client.post("/api/tabs", json={"name": "Split"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114853847B CN114547092 CN117241689"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {"notebooks": [
+        {"id": "nb-a", "title": "A", "sources": 0}, {"id": "nb-b", "title": "B", "sources": 0}]})
+    store, cap = {"nb-a": 0, "nb-b": 0}, {"nb-a": 2, "nb-b": 5}
+    def fake_add(nb, title, text):
+        if store[nb] >= cap[nb]:
+            return {"error": "full", "full": True}
+        store[nb] += 1
+        return {"ok": True}
+    monkeypatch.setattr(nlm_bridge, "add_source_text", fake_add)
+    ids = [d["id"] for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]]
+    r = client.post(f"/api/tabs/{tid}/notebook/distribute",
+                    json={"doc_ids": ids, "notebook_ids": ["nb-a", "nb-b"]}).json()
+    assert r["ok"] and r["placed"] == 4 and r["remaining"] == 0
+    placed = {p["notebook_id"]: p["added"] for p in r["placements"]}
+    assert placed == {"nb-a": 2, "nb-b": 2}          # filled A to cap (2), spilled 2 into B
+    docs = {d["number"]: d["nlm_source_notebook"]
+            for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert sum(1 for v in docs.values() if v == "nb-a") == 2
+    assert sum(1 for v in docs.values() if v == "nb-b") == 2
+
+
+def test_notebook_source_delete_clears_tracking(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "Del"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1"})
+    doc = client.get(f"/api/tabs/{tid}/documents").json()["documents"][0]
+    db.update_document(doc["id"], nlm_source_notebook="nb-x", nlm_source_id="src-9")
+    deleted = {}
+    monkeypatch.setattr(nlm_bridge, "delete_source",
+                        lambda ids, notebook_id=None: deleted.update(ids=ids, nb=notebook_id) or {"ok": True, "deleted": len(ids)})
+    r = client.post(f"/api/tabs/{tid}/notebook/source-delete",
+                    json={"notebook_id": "nb-x", "source_ids": ["src-9"]}).json()
+    assert r["ok"] and r["deleted"] == 1 and r["cleared"] == 1
+    assert deleted == {"ids": ["src-9"], "nb": "nb-x"}
+    after = client.get(f"/api/tabs/{tid}/documents").json()["documents"][0]
+    assert after["nlm_source_notebook"] is None      # tracking cleared after deletion
 
 
 def test_nlm_shortlist_matches_candidates(client, monkeypatch):
@@ -430,6 +536,11 @@ def test_nlm_shortlist_matches_candidates(client, monkeypatch):
     docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
     sl = {d["number"]: d["shortlisted"] for d in docs}
     assert sl["EP4340163A1"] == 1 and sl["CN117241689"] == 1 and sl["US10395648B1"] == 0
+    # coverage is disclosed: none of these candidates are NLM sources here, so the
+    # summary must say so rather than implying it ranked over the whole pool
+    summ = [m for m in msgs if m["role"] == "s" and "Coverage" in m["text"]]
+    assert summ and "0 of 3 candidate(s) are NLM sources" in summ[0]["text"]
+    assert "3 are NOT in NLM" in summ[0]["text"]
 
 
 def test_nlm_shortlist_ranks_best_with_feature_map(client, monkeypatch):

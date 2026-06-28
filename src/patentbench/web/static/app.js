@@ -38,6 +38,21 @@ let docSelection = new Set();   // candidate ids picked for a scoped deep compar
 let currentBm = null;           // last-rendered benchmark (for weighted feature ranking)
 let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
+// id → title for EVERY NotebookLM notebook, so a candidate's per-doc badge can name
+// the exact notebook it lives in (incl. rollover siblings, not just the connected one).
+// Loaded lazily (server-cached) and re-rendered into the docs when it arrives.
+let nbTitleById = {};
+async function loadNbTitles() {
+  try {
+    const res = await api('/api/notebooks');
+    if (res && res.notebooks) {
+      nbTitleById = {};
+      for (const n of res.notebooks) nbTitleById[n.id] = n.title;
+      if (lastDocs.length) renderDocs(lastDocs);   // backfill the badges now that titles are known
+    }
+  } catch (_) { /* notebooks may be unavailable; badge falls back to the short id */ }
+}
+const nbTitle = id => nbTitleById[id] || (id ? id.slice(0, 8) + '…' : '');
 // When opening the notebook modal to add SPECIFIC documents (the per-row 📓➕),
 // addPrefill holds {ids:Set, label} so the picker pre-checks exactly those and
 // shows a "choose a destination" hint. null = normal open (pre-check from the
@@ -54,6 +69,13 @@ function readModelValue() {
   return s ? s.value : (skillsMeta.default_read_model || 'claude-haiku-4-5');
 }
 function setReadModel(v) { for (const s of readSelects()) s.value = v; }
+// Reading-model strength: LOWER index in the server's MODELS list = stronger.
+// Unknown / not-yet-read → weakest, so an upgrade re-surfaces it as "still to read".
+function modelRank(m) {
+  const models = skillsMeta.models || [];
+  const i = models.indexOf(m);
+  return i < 0 ? models.length : i;
+}
 
 /* ---------- health ---------- */
 async function loadHealth() {
@@ -189,6 +211,7 @@ async function selectTab(id) {
   renderDocs(st.documents || []);
   renderChat(st.messages || []);
   renderNbChip(st.notebook);
+  loadNbTitles();                 // fill in per-doc "in which notebook" badges (non-blocking)
   scheduleDocsPoll(st.documents || []);
   pollRate();                     // resume showing progress if an NLM rating job is in flight
   pollRead();                     // resume showing progress if a Claude deep-read is in flight
@@ -558,7 +581,10 @@ async function loadSkills() {
     lessonSel.appendChild(o);
   }
   sel.onchange = savePrefs;
-  for (const s of readSelects()) s.onchange = () => { setReadModel(s.value); savePrefs(); };
+  for (const s of readSelects()) s.onchange = () => {
+    setReadModel(s.value); savePrefs();
+    if (lastDocs.length) renderDocs(lastDocs);   // refresh the model-aware Continue count
+  };
   $('use-docs').onchange = savePrefs;
   $('ask-nb').onchange = savePrefs;
   $('full-analysis').onchange = savePrefs;
@@ -629,31 +655,63 @@ function renderDocs(allDocs) {
   const disagree = allDocs.filter(d => d.score != null && d.nlm_score != null && Math.abs(d.score - d.nlm_score) >= 2).length;
   const rcl = $('reconcile');
   if (rcl) { rcl.classList.toggle('hidden', !disagree); rcl.textContent = `🔍 Why the gap? (${disagree})`; }
-  // "Continue / Re-rank": read the leftovers if any, else just re-rank the WHOLE
-  // corpus from the already-stored full-text assessments (zero re-reading).
-  const isRead = d => d.status === 'fetched' && (d.verdict_len || d.score != null);
-  const unread = allDocs.filter(d => d.status === 'fetched' && !isRead(d)).length;
-  const assessed = allDocs.filter(isRead).length;
+  // "Continue / Re-rank" is MODEL-AWARE: a candidate counts as done only if it was
+  // read by the currently-chosen 📖 model OR a stronger one. So raising the reading
+  // model (e.g. haiku → sonnet) re-surfaces the weaker-read ones as "left", letting an
+  // interrupted sonnet read of all 221 resume on just the leftovers — never re-reading
+  // what sonnet already did, never downgrading an opus read. If nothing is left at the
+  // chosen level, re-rank the WHOLE corpus from stored assessments (zero re-reading).
+  const rm = readModelValue();
+  const hasRead = d => d.status === 'fetched' && (d.verdict_len || d.score != null);
+  const readAtLevel = d => hasRead(d) && modelRank(d.score_model) <= modelRank(rm);
+  const unread = allDocs.filter(d => d.status === 'fetched' && !readAtLevel(d)).length;
+  const assessed = allDocs.filter(hasRead).length;
   const cont = $('claude-continue');
   if (cont) {
     cont.classList.toggle('hidden', !(unread || assessed));
-    cont.textContent = unread ? `▶️ Continue deep-read (${unread} left)`
+    cont.textContent = unread ? `▶️ Continue ${rm.replace('claude-', '')} read (${unread} left)`
                               : `📊 Re-rank ${assessed} stored`;
   }
   if (!unfetched && docsFilter === 'unfetched') docsFilter = 'all';
+  // NLM coverage: fetched candidates that are NOT a source in any notebook — these are
+  // invisible to the 📓 NLM shortlist, so surface + bulk-add them.
+  const notInNlm = allDocs.filter(d => d.status === 'fetched' && !d.nlm_source_notebook);
+  const inNlm = (counts.fetched || 0) - notInNlm.length;
+  if (!notInNlm.length && docsFilter === 'no-nlm') docsFilter = 'all';
   if (allDocs.length) {
     const bar = document.createElement('div');
     bar.className = 'docs-summary';
     bar.innerHTML =
       `<span class="chip ok" title="fetched & ready">✓ ${counts.fetched || 0}</span>`
       + (counts.pending ? `<span class="chip warn" title="still fetching">⏳ ${counts.pending}</span>` : '')
-      + (counts.error ? `<span class="chip err" title="failed to fetch — check the number/kind code">⚠ ${counts.error}</span>` : '');
+      + (counts.error ? `<span class="chip err" title="failed to fetch — check the number/kind code">⚠ ${counts.error}</span>` : '')
+      + (counts.fetched ? `<span class="chip" title="fetched candidates that ARE a source in some NotebookLM notebook">📓 ${inNlm} in NLM</span>` : '');
     if (unfetched) {
       const t = document.createElement('button');
       t.className = 'btn small';
       t.textContent = docsFilter === 'unfetched' ? '↩ show all' : `🔎 show ${unfetched} not-fetched`;
       t.onclick = () => { docsFilter = docsFilter === 'unfetched' ? 'all' : 'unfetched'; renderDocs(allDocs); };
       bar.appendChild(t);
+    }
+    if (notInNlm.length) {
+      const t = document.createElement('button');
+      t.className = 'btn small';
+      t.textContent = docsFilter === 'no-nlm' ? '↩ show all' : `📭 show ${notInNlm.length} not in NLM`;
+      t.title = 'These fetched candidates are NOT a source in any NotebookLM notebook, so the 📓 NLM shortlist cannot see them. Filter to them, then add to a notebook.';
+      t.onclick = () => { docsFilter = docsFilter === 'no-nlm' ? 'all' : 'no-nlm'; renderDocs(allDocs); };
+      bar.appendChild(t);
+      const add = document.createElement('button');
+      add.className = 'btn small';
+      add.textContent = `📓➕ add ${notInNlm.length} to a notebook`;
+      add.title = 'Open the notebook picker pre-loaded with every candidate not yet in NLM — choose the destination notebook (or create one) and add them in one go.';
+      add.onclick = () => openAddToNotebook(notInNlm.map(d => d.id), `${notInNlm.length} candidate(s) not in NLM`);
+      bar.appendChild(add);
+      const split = document.createElement('button');
+      split.className = 'btn small';
+      split.textContent = `📚 auto-split ${notInNlm.length} across free notebooks`;
+      split.title = 'Fill the not-in-NLM candidates into your notebooks that still have room (most-free first), spilling into the next as each fills — no need to pick one destination. For a manual split (e.g. 40+37), use 📓➕ and the per-notebook picker instead.';
+      split.onclick = () => autoSplitNotInNlm(notInNlm.map(d => d.id));
+      bar.appendChild(split);
     }
     // sort the palmares — feature mode adds the weighted key (and defaults to it)
     const fmode = featureMode();
@@ -680,6 +738,7 @@ function renderDocs(allDocs) {
   let docs = [...allDocs].sort((a, b) =>
     scoreSortValue(b, sortKey) - scoreSortValue(a, sortKey) || a.id - b.id);
   if (docsFilter === 'unfetched') docs = docs.filter(d => d.status !== 'fetched');
+  if (docsFilter === 'no-nlm') docs = docs.filter(d => d.status === 'fetched' && !d.nlm_source_notebook);
   for (const d of docs) {
     const el = document.createElement('div');
     el.className = 'doc';
@@ -705,6 +764,19 @@ function renderDocs(allDocs) {
     if (d.error) st.title = d.error;
     row1.appendChild(st);
     if (d.status === 'fetched') {
+      // NLM membership badge: which exact notebook this candidate is a source in (so
+      // you can see at a glance what the 📓 shortlist can/can't see), or "not in NLM".
+      const nbm = document.createElement('span');
+      if (d.nlm_source_notebook) {
+        nbm.className = 'chip nlm-in';
+        nbm.textContent = `📓 ${nbTitle(d.nlm_source_notebook)}`;
+        nbm.title = `In NotebookLM notebook: ${nbTitleById[d.nlm_source_notebook] || d.nlm_source_notebook}`;
+      } else {
+        nbm.className = 'chip nlm-out';
+        nbm.textContent = '📭 not in NLM';
+        nbm.title = 'Not a source in any NotebookLM notebook — the 📓 NLM shortlist cannot see this candidate. Use 📓➕ to add it.';
+      }
+      row1.appendChild(nbm);
       const addNb = document.createElement('button');
       addNb.className = 'btn small'; addNb.textContent = '📓➕';
       addNb.title = 'Add this candidate to a NotebookLM notebook — pick which one (or create one)';
@@ -790,8 +862,7 @@ function renderDocs(allDocs) {
       sz.className = 'sizes';
       const fmt = n => !n ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
       sz.textContent = `abstract ${fmt(d.abstract_len)} · claims ${fmt(d.claims_len)} · description ${fmt(d.description_len)} chars · ` +
-        (d.digest_len ? 'full-text digest ✓' : 'digesting full text…') +
-        (d.nlm_source_notebook ? ' · 📓 in notebook' : '');
+        (d.digest_len ? 'full-text digest ✓' : 'digesting full text…');
       sz.title = d.digest_len
         ? 'Stored text sizes; a cheap model has read the FULL document and stored a digest the chat always sees'
         : 'Stored text sizes; the full-text digest is still being generated';
@@ -883,6 +954,21 @@ function updateFocusHint() {
   } else {
     hint.classList.add('hidden');
   }
+}
+
+// Auto-split: fill the not-in-NLM candidates across notebooks that already have room.
+async function autoSplitNotInNlm(ids) {
+  if (!ids.length) return;
+  if (!confirm(`Auto-split ${ids.length} candidate(s) across your notebooks that have free space `
+    + `(most-free first, spilling over as each fills)?`)) return;
+  const r = await api(`/api/tabs/${activeTab}/notebook/distribute`,
+    { method: 'POST', body: JSON.stringify({ doc_ids: ids }) });
+  if (r.error && !r.ok) { alert(`Couldn't distribute: ${r.error}`); return; }
+  const where = (r.placements || []).map(p => `${p.added} → «${p.notebook_title}»`).join('\n') || 'none';
+  alert(`Placed ${r.placed} candidate(s):\n${where}`
+    + (r.remaining ? `\n\n${r.remaining} didn't fit — all notebooks are full. ♻️ Resync + 🗑 delete duplicate sources to free space, then retry.` : '')
+    + ((r.errors || []).length ? `\n\nErrors: ${r.errors.join('; ')}` : ''));
+  await refreshDocs(); reloadChat(); loadNbTitles();
 }
 
 async function refreshDocs() {
@@ -1094,12 +1180,14 @@ async function runDeepCompare(idsArg, skipScored, readModelOverride) {
   let scope = ids.length ? `the ${ids.length} SELECTED candidate(s)` : 'EVERY candidate';
   let rerankOnly = false;
   if (skipScored) {
-    const isRead = d => d.status === 'fetched' && (d.verdict_len || d.score != null);
-    const todo = lastDocs.filter(d => d.status === 'fetched' && !isRead(d)).length;
-    const have = lastDocs.filter(isRead).length;
+    // model-aware: "to do" = candidates not yet read by `readModel` or a stronger one
+    const hasRead = d => d.status === 'fetched' && (d.verdict_len || d.score != null);
+    const readAtLevel = d => hasRead(d) && modelRank(d.score_model) <= modelRank(readModel);
+    const todo = lastDocs.filter(d => d.status === 'fetched' && !readAtLevel(d)).length;
+    const have = lastDocs.filter(hasRead).length;
     if (!todo && !have) { alert('No candidate has been full-read yet. Use 🤖 Claude deep-read all first.'); return; }
     rerankOnly = !todo;
-    scope = todo ? `the ${todo} candidate(s) NOT yet full-read (most promising first)`
+    scope = todo ? `the ${todo} candidate(s) not yet read by ${short(readModel)} (most promising first)`
                  : `all ${have} already-read candidate(s) — RE-RANK from stored assessments, no re-reading`;
   }
   const ask = rerankOnly
@@ -1555,7 +1643,8 @@ async function loadNbModal(force = false, selectId = null) {
     r.onchange = () => chooseNotebook(nb, current);
     label.appendChild(r);
     label.appendChild(document.createTextNode(
-      ` ${nb.title}` + (nb.sources != null ? ` (${nb.sources} sources)` : '')));
+      ` ${nb.title}` + (nb.sources != null
+        ? ` (${nb.sources}/50${nb.sources >= 50 ? ' — FULL' : ` · ${50 - nb.sources} free`})` : '')));
     row.appendChild(label);
     const del = document.createElement('button');
     del.className = 'btn small del'; del.textContent = '🗑';
@@ -1614,7 +1703,9 @@ function renderAddPicker() {
   const target = nbState.chosen;
   wrap.classList.toggle('hidden', !target);
   if (!target) return;
-  $('nb-add-target-name').textContent = `📓 ${target.title}`;
+  const free = Math.max(0, 50 - (target.sources || 0));
+  $('nb-add-target-name').textContent = `📓 ${target.title} (${free} free slot${free === 1 ? '' : 's'})`;
+  $('nb-add-free').textContent = free ? `${free} free` : 'FULL';
   $('nb-add-bm').checked = !addPrefill;             // benchmark off for a single-doc quick add
   $('nb-add-status').textContent = addPrefill
     ? `Pick the destination notebook above (or create one), then click “Add selected” to add ${addPrefill.label}.`
@@ -1628,6 +1719,7 @@ function renderAddPicker() {
     const cb = document.createElement('input');
     cb.type = 'checkbox'; cb.value = String(d.id);
     const inNb = d.nlm_source_notebook === target.id;
+    cb.dataset.innb = inNb ? '1' : '0';             // fill-free skips already-in docs
     // pre-check the requested docs (per-row 📓➕) or the candidate-list selection; never ones already in
     cb.checked = !inNb && (addPrefill ? addPrefill.ids.has(d.id) : docSelection.has(d.id));
     cb.onchange = updateAddCount;
@@ -1645,6 +1737,17 @@ function updateAddCount() {
 $('nb-add-bm').onchange = updateAddCount;
 $('nb-add-all').onclick = () => {
   document.querySelectorAll('#nb-add-list input').forEach(i => i.checked = true); updateAddCount();
+};
+$('nb-add-fillfree').onclick = () => {
+  // manual split: check exactly as many not-yet-added candidates as fit in this notebook
+  const free = Math.max(0, 50 - ((nbState.chosen && nbState.chosen.sources) || 0));
+  let n = 0;
+  document.querySelectorAll('#nb-add-list input').forEach(i => {
+    const take = i.dataset.innb === '0' && n < free;
+    i.checked = take;
+    if (take) n++;
+  });
+  updateAddCount();
 };
 $('nb-add-clear').onclick = () => {
   document.querySelectorAll('#nb-add-list input').forEach(i => i.checked = false); updateAddCount();
@@ -1690,7 +1793,12 @@ async function runAddToNotebook(payload, setStatus) {
     if (!confirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
     const created = await api(`/api/tabs/${activeTab}/notebook/create`, {
       method: 'POST', body: JSON.stringify({ title: nextSeriesTitle(title) }) });
-    if (created.error) { setStatus(created.error); break; }
+    if (created.error) {
+      setStatus(`Couldn't create a follow-up notebook: ${created.error}. Your account is likely at `
+        + `the ~100-notebook cap — 🗑 delete unused notebooks (or sources) to free space, then retry.`);
+      await refreshDocs(); loadNbTitles();
+      return { ...res, notebookId, createError: created.error };
+    }
     renderNbChip(created.notebook);
     notebookId = created.notebook.notebook_id;
     payload.notebook_id = notebookId;             // retarget the rest to the new notebook
@@ -1698,14 +1806,21 @@ async function runAddToNotebook(payload, setStatus) {
       { method: 'POST', body: JSON.stringify(payload) });
     notebookId = res.notebook_id || notebookId;
   }
-  setStatus(res.error
-    ? `Error: ${res.error}`
-    : (res.added
-        ? `Done: ${res.added} added to «${res.notebook_title || ''}»`
-        : `Nothing new to add — already in «${res.notebook_title || ''}»`)
-      + (res.remaining ? `, ${res.remaining} remaining` : '')
-      + ((res.errors || []).length ? ` — errors: ${res.errors.join('; ')}` : ''));
+  // Distinguish the FULL case from "already there" — a full notebook with added=0 used to
+  // read "nothing new to add", which looked like a silent no-op.
+  let status;
+  if (res.error) status = `Error: ${res.error}`;
+  else if (res.added) status = `Done: ${res.added} added to «${res.notebook_title || ''}»`
+    + (res.remaining ? `, ${res.remaining} remaining` : '');
+  else if (res.full) status = `Not added — «${res.notebook_title || ''}» is FULL (50/50 sources).`
+    + (res.remaining ? ` ${res.remaining} still not in NLM.` : '');
+  else status = `Nothing new to add — already in «${res.notebook_title || ''}»`;
+  if (res.full) status += ` Free space first: 🗑 delete duplicate sources or unused notebooks `
+    + `(account is at the ~100-notebook cap), then add them.`;
+  if ((res.errors || []).length) status += ` — errors: ${res.errors.join('; ')}`;
+  setStatus(status);
   await refreshDocs();
+  loadNbTitles();                                   // a rollover notebook may be new → refresh badge names
   return { ...res, notebookId };
 }
 
@@ -1724,6 +1839,8 @@ async function chooseNotebook(nb, current) {
   wrap.innerHTML = '';
   if (res.error) { wrap.textContent = `Error: ${res.error}`; return; }
   for (const s of nbState.sources) {
+    const row = document.createElement('div');
+    row.className = 'src-row';
     const label = document.createElement('label');
     const cb = document.createElement('input');
     cb.type = 'checkbox'; cb.value = s.id;
@@ -1734,7 +1851,21 @@ async function chooseNotebook(nb, current) {
     };
     label.appendChild(cb);
     label.appendChild(document.createTextNode(' ' + s.title));
-    wrap.appendChild(label);
+    row.appendChild(label);
+    const del = document.createElement('button');
+    del.className = 'btn small del'; del.textContent = '🗑';
+    del.title = 'Delete this source permanently from the notebook (frees a slot toward the 50-source cap)';
+    del.onclick = async () => {
+      if (!confirm(`Delete source «${s.title}» permanently from «${nb.title}»?`)) return;
+      del.disabled = true; del.textContent = '⏳';
+      const r = await api(`/api/tabs/${activeTab}/notebook/source-delete`,
+        { method: 'POST', body: JSON.stringify({ notebook_id: nb.id, source_ids: [s.id] }) });
+      if (r.error) { alert(`Delete failed: ${r.error}`); del.disabled = false; del.textContent = '🗑'; return; }
+      await loadNbModal(true, nb.id);      // rebuild list (fresh count) + reselect → reloads sources
+      await refreshDocs();                 // a deleted source may flip a candidate to 📭 not in NLM
+    };
+    row.appendChild(del);
+    wrap.appendChild(row);
   }
   updateSrcCount();
 }
@@ -1752,6 +1883,57 @@ $('src-none').onclick = () => {
   nbState.selected = new Set();
   document.querySelectorAll('#nb-sources input').forEach(i => i.checked = false);
   updateSrcCount();
+};
+$('nb-resync').onclick = async () => {
+  const btn = $('nb-resync'); const rep = $('nb-resync-report');
+  btn.disabled = true; const label = btn.textContent; btn.textContent = '♻️ Resyncing…';
+  rep.textContent = 'Reading the notebooks’ real sources and reconciling…';
+  const r = await api(`/api/tabs/${activeTab}/notebook/resync`, { method: 'POST', body: JSON.stringify({}) });
+  btn.disabled = false; btn.textContent = label;
+  if (r.error && !r.ok) { rep.textContent = `Error: ${r.error}`; return; }
+  rep.innerHTML = '';
+  const line = document.createElement('div');
+  line.textContent = `✓ ${r.in_nlm}/${r.total} candidate(s) in NLM `
+    + `(${r.retracked} re-tracked, ${r.cleared} cleared) across ${r.scanned} notebook(s).`;
+  rep.appendChild(line);
+  if ((r.duplicates || []).length) {
+    const h = document.createElement('div');
+    h.className = 'strong';
+    h.textContent = `⚠ ${r.duplicates.length} duplicated candidate(s), ${r.dup_copies} extra copy/copies — delete extras to free space:`;
+    rep.appendChild(h);
+    for (const d of r.duplicates) {
+      const row = document.createElement('div'); row.className = 'dup-row';
+      row.appendChild(document.createTextNode(`${d.number}: in `));
+      // keep the first copy, offer to delete each of the others
+      d.locations.forEach((loc, i) => {
+        const tag = document.createElement('span'); tag.className = 'chip';
+        tag.textContent = nbTitleById[loc.notebook_id] || loc.notebook_title || loc.notebook_id;
+        row.appendChild(tag);
+        if (i > 0) {
+          const del = document.createElement('button');
+          del.className = 'btn small del'; del.textContent = '🗑';
+          del.title = `Delete this copy of ${d.number} from «${loc.notebook_title}»`;
+          del.onclick = async () => {
+            if (!confirm(`Delete the copy of ${d.number} in «${loc.notebook_title}»?`)) return;
+            del.disabled = true; del.textContent = '⏳';
+            const dr = await api(`/api/tabs/${activeTab}/notebook/source-delete`,
+              { method: 'POST', body: JSON.stringify({ notebook_id: loc.notebook_id, source_ids: [loc.source_id] }) });
+            if (dr.error) { alert(`Delete failed: ${dr.error}`); del.disabled = false; del.textContent = '🗑'; return; }
+            del.textContent = '✓ deleted'; tag.style.textDecoration = 'line-through';
+          };
+          row.appendChild(del);
+        }
+      });
+      rep.appendChild(row);
+    }
+  }
+  if ((r.errors || []).length) {
+    const e = document.createElement('div'); e.className = 'muted';
+    e.textContent = 'Scan issues: ' + r.errors.join('; ');
+    rep.appendChild(e);
+  }
+  await loadNbModal(true);   // refresh source counts
+  refreshDocs();             // re-tracked candidates now show their notebook badge
 };
 $('nb-import').onclick = async () => {
   if (!confirm('Import the notebook’s sources into this tab? Patent numbers become ' +

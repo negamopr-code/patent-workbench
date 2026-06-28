@@ -109,7 +109,7 @@
 
     <div id="rate-bar" class="rate-bar">
       <button id="claude-rate-all" class="btn small" title="Claude reads EVERY candidate in FULL against the benchmark and (re)scores them, most-promising first. Re-reads everything — use Continue to only read what's left.">🤖 Claude deep-read all</button>
-      <button id="claude-continue" class="btn small hidden" title="Continue after a token-limit interruption: Claude full-reads ONLY the candidates not yet read this batch, most-promising first. Skips everything already read.">▶️ Continue deep-read</button>
+      <button id="claude-continue" class="btn small hidden" title="Continue after a token-limit interruption — MODEL-AWARE: Claude full-reads ONLY the candidates not yet read by the chosen 📖 reading model (or a stronger one), most-promising first. Raise the 📖 model (e.g. haiku → sonnet) to resume an upgrade-read on just the leftovers; never re-reads what the strong model already did. Repeat across budget windows until none are left, then it ranks.">▶️ Continue deep-read</button>
       <button id="claude-pause" class="btn small hidden" title="Pause the running assessment: it stops launching new candidates and lets in-flight ones finish (their scores are saved). Switch the 📖 reading model, then ▶️ Continue to assess the rest.">⏸ Pause</button>
       <span id="read-status" class="muted"></span>
       <button id="nlm-consolidate" class="btn small" title="Copy ONLY the checked (best) candidates into ONE new NotebookLM notebook you name, then connect this tab to it — so 📓 NLM shortlist can rank a single global winner across all of them. Tick the best ones first (📓 NLM shortlist auto-checks them); a notebook holds max 50 sources.">🧺 Consolidate best → 1 notebook</button>
@@ -179,7 +179,9 @@
       <div class="row">
         <button id="nb-add-all" class="btn small">Check all</button>
         <button id="nb-add-clear" class="btn small">Uncheck all</button>
+        <button id="nb-add-fillfree" class="btn small" title="Check exactly as many not-yet-added candidates as fit in this notebook's free slots — for a manual split (add this many here, the rest to another notebook).">✓ check up to free</button>
         <span id="nb-add-count" class="chip"></span>
+        <span id="nb-add-free" class="chip"></span>
       </div>
       <div id="nb-add-list" class="nb-sources"></div>
       <div class="row">
@@ -208,7 +210,9 @@
       text documents.</p>
     <div class="row">
       <button id="nb-import" class="btn small">📥 Import from notebook</button>
+      <button id="nb-resync" class="btn small" title="Reconcile the app with NotebookLM's real sources: scans this tab's notebooks, re-tracks candidates that are already in NLM, and lists DUPLICATES (a candidate in more than one notebook) so you can delete them to free space.">♻️ Resync membership</button>
     </div>
+    <div id="nb-resync-report" class="muted"></div>
     <div class="row right">
       <button id="nb-disconnect" class="btn small danger">Disconnect</button>
       <button id="nb-save" class="btn primary">Save</button>

@@ -99,6 +99,15 @@ textarea, select, input[type="text"] {
 }
 .chip.ok { color: var(--ok); border-color: var(--ok); }
 .chip.err { color: var(--err); border-color: var(--err); }
+/* notebook source rows (delete button alongside the select-for-query checkbox) */
+.src-row { display: flex; align-items: center; gap: 6px; }
+.src-row label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dup-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
+#nb-resync-report { margin: 4px 0; max-height: 240px; overflow: auto; }
+/* per-candidate NotebookLM membership badge */
+.chip.nlm-in { color: var(--ok); border-color: var(--ok); max-width: 16ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.chip.nlm-out { color: var(--warn); border-color: var(--warn); }
 
 /* benchmark pane */
 .pane-input #bm-set { margin-top: 8px; width: 100%; }

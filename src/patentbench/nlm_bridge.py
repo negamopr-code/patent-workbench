@@ -229,6 +229,28 @@ def add_source_text(notebook_id: str, title: str, text: str) -> dict:
     return {"ok": True}
 
 
+def delete_source(source_ids: list[str], notebook_id: str | None = None) -> dict:
+    """Permanently delete one or more sources (dedup / free the 50-source cap):
+    {ok, deleted} | {error}. notebook_id, when given, drops that notebook's source
+    cache so a re-list reflects the deletion immediately."""
+    ok, why = available()
+    if not ok:
+        return {"error": why}
+    ids = [s for s in (source_ids or []) if s]
+    if not ids:
+        return {"ok": True, "deleted": 0}
+    cmd = [NLM_BIN, "source", "delete", *ids, "-y"]
+    try:
+        proc = _run(cmd, LIST_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {"error": "nlm source delete: timeout"}
+    if proc.returncode != 0:
+        return {"error": (proc.stderr or proc.stdout).strip()[:400] or "source delete failed"}
+    if notebook_id:
+        _sources_cache.pop(notebook_id, None)
+    return {"ok": True, "deleted": len(ids)}
+
+
 def source_content(source_id: str) -> dict:
     """Raw text content of ONE source inside a notebook (no AI processing):
     {content} | {error}. Used to import a non-patent source into the workbench."""

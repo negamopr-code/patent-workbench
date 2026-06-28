@@ -68,6 +68,30 @@ class NotebookAddSelected(BaseModel):
     notebook_id: str | None = None
 
 
+class NotebookResync(BaseModel):
+    """Reconcile app↔NLM source membership. By default scans the tab's own notebooks
+    (connected + rollover siblings); notebook_ids overrides with an explicit set, and
+    scan_all scans EVERY notebook in the account (slower, finds stray placements)."""
+    notebook_ids: list[str] | None = None
+    scan_all: bool = False
+
+
+class NotebookSourceDelete(BaseModel):
+    """Permanently delete sources from a notebook (dedup / free the 50-source cap)."""
+    notebook_id: str = Field(min_length=1)
+    source_ids: list[str] = Field(min_length=1)
+
+
+class NotebookDistribute(BaseModel):
+    """Fill candidates ACROSS several notebooks' free space (auto-split). doc_ids empty
+    = every fetched candidate not yet in NLM. notebook_ids None = the tab's own
+    notebooks that have room (most-free first); pass an explicit ordered list to control
+    which notebooks receive them and in what order (manual 40+37-style splits)."""
+    doc_ids: list[int] = []
+    notebook_ids: list[str] | None = None
+    include_benchmark: bool = False
+
+
 # A pasted patent excerpt / long instruction is a legitimate question — cap it
 # generously (the prompt builder clips per-turn history downstream) rather than
 # rejecting a long message with an opaque 422.
