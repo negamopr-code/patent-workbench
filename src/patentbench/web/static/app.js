@@ -745,12 +745,19 @@ function renderDocs(allDocs) {
     wrap.appendChild(bar);
   }
 
-  // ranking ("palmares"): chosen score first, ties/unscored after (by insertion)
+  // ranking ("palmares"): chosen score first, ties broken by NLM's best-first order
+  // (nlm_rank 1,2,3…) so docs the engines BOTH rate 8 still get a clear 1/2/3, then by id.
   const sortKey = (!docsSortTouched && featureMode()) ? 'weighted' : docsSort;
+  const nlmRankOf = d => (d.nlm_rank != null ? d.nlm_rank : 1e9);
   let docs = [...allDocs].sort((a, b) =>
-    scoreSortValue(b, sortKey) - scoreSortValue(a, sortKey) || a.id - b.id);
+    scoreSortValue(b, sortKey) - scoreSortValue(a, sortKey)
+    || nlmRankOf(a) - nlmRankOf(b)
+    || a.id - b.id);
   if (docsFilter === 'unfetched') docs = docs.filter(d => d.status !== 'fetched');
   if (docsFilter === 'no-nlm') docs = docs.filter(d => d.status === 'fetched' && !d.nlm_source_notebook);
+  // 1-based position among RANKED (scored) docs, so the user sees 1st / 2nd / 3rd explicitly.
+  const rankIndex = new Map(); let _rp = 0;
+  for (const d of docs) if (d.score != null || d.nlm_score != null) rankIndex.set(d.id, ++_rp);
   for (const d of docs) {
     const el = document.createElement('div');
     el.className = 'doc';
@@ -814,6 +821,8 @@ function renderDocs(allDocs) {
       sc.className = 'score';
       const parts = [];
       const consensus = isConsensus(d);
+      const pos = rankIndex.get(d.id);            // ordinal position in the ranking
+      if (pos) parts.push(`<span class="rankpos">#${pos}</span>`);
       // combined ("common") score leads when both engines rated it
       if (d.score != null && d.nlm_score != null) parts.push(`<span class="combined">🥇 ${combinedScore(d).toFixed(1)}</span>`);
       if (d.score != null) {

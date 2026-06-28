@@ -536,6 +536,9 @@ def test_nlm_shortlist_matches_candidates(client, monkeypatch):
     docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
     sl = {d["number"]: d["shortlisted"] for d in docs}
     assert sl["EP4340163A1"] == 1 and sl["CN117241689"] == 1 and sl["US10395648B1"] == 0
+    # NLM's best-first ORDER is persisted as nlm_rank (1,2…) → the consensus tie-breaker
+    rk = {d["number"]: d["nlm_rank"] for d in docs}
+    assert rk["EP4340163A1"] == 1 and rk["CN117241689"] == 2 and rk["US10395648B1"] is None
     # coverage is disclosed: none of these candidates are NLM sources here, so the
     # summary must say so rather than implying it ranked over the whole pool
     summ = [m for m in msgs if m["role"] == "s" and "Coverage" in m["text"]]

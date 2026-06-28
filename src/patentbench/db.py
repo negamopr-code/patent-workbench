@@ -120,6 +120,8 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN nlm_scored_at INTEGER")
         if "shortlisted" not in dcols:      # last 📓 NLM shortlist's picks — persists the
             con.execute("ALTER TABLE documents ADD COLUMN shortlisted INTEGER NOT NULL DEFAULT 0")
+        if "nlm_rank" not in dcols:         # NLM's best-first ordering within that shortlist
+            con.execute("ALTER TABLE documents ADD COLUMN nlm_rank INTEGER")
         bmcols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "nlm_source_notebook" not in bmcols:   # benchmark mirrored into which notebook
             con.execute("ALTER TABLE benchmark ADD COLUMN nlm_source_notebook TEXT")
@@ -221,7 +223,7 @@ def list_documents(tab_id: int, full: bool = False) -> list[dict]:
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
             "score, score_note, scored_at, score_model, feature_scores, "
             "nlm_score, nlm_score_note, nlm_scored_at, "
-            "nlm_source_notebook, shortlisted, "
+            "nlm_source_notebook, shortlisted, nlm_rank, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
             "length(description) AS description_len, length(digest) AS digest_len, "
             "length(verdict) AS verdict_len")
@@ -251,16 +253,16 @@ def update_document(doc_id: int, **fields) -> None:
 
 
 def set_shortlisted(tab_id: int, doc_ids: list[int]) -> None:
-    """Persist the latest 📓 NLM shortlist's picks for a tab: mark these doc ids
-    shortlisted=1 and clear the flag on all others, so the picks survive page reloads /
-    tab switches (transient checkboxes don't) and 🧺 Consolidate can reuse them."""
-    idset = set(doc_ids)
+    """Persist the latest 📓 NLM shortlist's picks for a tab, IN ORDER: doc_ids is best-first
+    (BEST, SECOND-BEST, then the rest NLM named), so we store nlm_rank = 1,2,3… It marks these
+    ids shortlisted=1 and clears the flag (and rank) on all others, so the picks AND NLM's
+    ordering survive reloads / tab switches and feed the consensus tie-break."""
     with _conn() as c:
-        c.execute("UPDATE documents SET shortlisted=0 WHERE tab_id=? AND shortlisted=1", (tab_id,))
-        if idset:
-            qs = ",".join("?" * len(idset))
-            c.execute(f"UPDATE documents SET shortlisted=1 WHERE tab_id=? AND id IN ({qs})",
-                      (tab_id, *idset))
+        c.execute("UPDATE documents SET shortlisted=0, nlm_rank=NULL "
+                  "WHERE tab_id=? AND (shortlisted=1 OR nlm_rank IS NOT NULL)", (tab_id,))
+        for rank, did in enumerate(doc_ids, 1):     # best-first → rank 1, 2, 3…
+            c.execute("UPDATE documents SET shortlisted=1, nlm_rank=? WHERE tab_id=? AND id=?",
+                      (rank, tab_id, did))
 
 
 def clear_nlm_refs(tab_id: int, notebook_id: str) -> int:
