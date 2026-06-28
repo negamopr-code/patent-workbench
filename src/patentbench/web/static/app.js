@@ -1318,13 +1318,11 @@ $('verify-shortlist').onclick = () => {
 // looked like "nothing happens"). Best-only by design.
 $('nlm-consolidate').onclick = () => {
   if (!activeTab) return;
-  // use the checked candidates if any, else fall back to the PERSISTED shortlist picks
-  // (📓 NLM shortlist remembers them, so no need to re-check after a reload / tab switch)
-  const shortlisted = (lastDocs || []).filter(d => d.shortlisted).map(d => d.id);
-  const usingShortlist = !docSelection.size && shortlisted.length > 0;
-  consolidateIds = docSelection.size ? [...docSelection] : shortlisted;
+  // ONLY explicit checkboxes mean "consolidate exactly these". With nothing checked we ALWAYS
+  // funnel Claude's top-N — we do NOT fall back to the persisted shortlist (that silently
+  // shrank the set to the 2-4 remembered picks instead of the 49 the user wanted).
+  consolidateIds = docSelection.size ? [...docSelection] : [];
   const n = consolidateIds.length;
-  // FUNNEL fallback: nothing checked and no remembered shortlist → auto-pick Claude's top-N.
   const scored = (lastDocs || []).filter(d => d.score != null).length;
   const funnel = !n;
   $('consolidate-title').value = `Best picks — ${currentTabName()}`;
@@ -1333,23 +1331,22 @@ $('nlm-consolidate').onclick = () => {
   $('consolidate-topn-row').style.display = funnel ? '' : 'none';   // N only matters in funnel mode
   const go = $('consolidate-go');
   if (funnel && !scored) {
-    $('consolidate-info').textContent = 'No best candidates yet, and nothing is scored. Run 🏆 deep-compare '
-      + '(Claude ranks them) or 📓 NLM shortlist first, or tick candidates by hand, then reopen this.';
+    $('consolidate-info').textContent = 'Nothing is scored yet. Run 🏆 deep-compare (Claude ranks them) '
+      + 'first, or tick candidates by hand, then reopen this.';
     go.disabled = true;
   } else if (funnel) {
     const k = Math.min(scored, +($('consolidate-topn').value || 49));
     $('consolidate-info').textContent = `🚀 Funnel: Claude's top ${k} of ${scored} scored candidate(s) `
-      + 'go into ONE new notebook (the other rollover notebooks are deleted). NotebookLM then picks the '
-      + 'best — blind to Claude’s scores — and they’re only debated if the two disagree.';
+      + 'go into ONE new notebook (the other rollover notebooks are deleted). '
+      + 'Use 📥 to just put them in NotebookLM and stop, or the primary button to also pick the best.';
     go.disabled = false;
   } else if (n > 49) {
-    $('consolidate-info').textContent = `${n} candidate(s) selected, but a notebook holds 49 candidates `
-      + '+ the benchmark (50-source cap). Narrow to ≤49 (untick weaker ones), then reopen this.';
+    $('consolidate-info').textContent = `${n} candidate(s) checked, but a notebook holds 49 candidates `
+      + '+ the benchmark (50-source cap). Untick down to ≤49, then reopen this.';
     go.disabled = true;
   } else {
-    $('consolidate-info').textContent = `${n} ${usingShortlist ? 'shortlisted (best)' : 'checked'} `
-      + 'candidate(s) will be copied into a NEW notebook (it becomes this tab’s notebook); the other '
-      + 'rollover notebooks are deleted. NotebookLM then picks the best, debated only on disagreement.';
+    $('consolidate-info').textContent = `${n} checked candidate(s) will be copied into a NEW notebook; `
+      + 'the other rollover notebooks are deleted. Use 📥 to stop there, or the primary button to pick the best.';
     go.disabled = false;
   }
   $('consolidate-modal').classList.remove('hidden');
