@@ -615,11 +615,13 @@ const CONSENSUS_MIN = 7, CONSENSUS_TOP = 0.4, CONSENSUS_STEP = 0.1, CONSENSUS_FL
 function nlmEndorsed(d) { return d.shortlisted === 1 || (d.nlm_score != null && d.nlm_score >= CONSENSUS_MIN); }
 function claudeStrong(d) { return d.score != null && d.score >= CONSENSUS_MIN; }
 function isConsensus(d) { return claudeStrong(d) && nlmEndorsed(d); }
-function consensusBonus(d) {
-  if (!isConsensus(d)) return 0;
-  const r = (d.nlm_rank != null ? d.nlm_rank : 99);   // unranked-but-agreed → floor bonus
-  return Math.max(CONSENSUS_FLOOR, CONSENSUS_TOP - (r - 1) * CONSENSUS_STEP);
-}
+// The consensus bonus is assigned by a doc's POSITION among consensus docs in the ranked
+// list (1st → +0.4, 2nd → +0.3 …, floored at +0.1) — computed live in renderDocs as
+// consensusBonusById. This separates them even when nlm_rank isn't populated yet, and
+// becomes NLM-meaningful once a shortlist sets the order. (Not raw nlm_rank, which goes
+// stale.) See renderDocs.
+let consensusBonusById = new Map();
+function consensusBonus(d) { return consensusBonusById.get(d.id) || 0; }
 function featureMode() {
   return !!(currentBm && currentBm.source === 'features' && (currentBm.features || []).length);
 }
@@ -651,10 +653,9 @@ function scoreSortValue(d, key) {
   }
   if (key === 'nlm') return d.nlm_score ?? -1;
   if (key === 'delta') return (d.score != null && d.nlm_score != null) ? Math.abs(d.score - d.nlm_score) : -1;
-  // Claude + combined keys get the consensus bonus, so an agreed 8 outranks a solo 8.
-  if (key === 'claude') return (d.score ?? -1) + (d.score != null ? consensusBonus(d) : 0);
+  if (key === 'claude') return d.score ?? -1;   // base only; consensus handled as a secondary sort + display taper
   const cs = combinedScore(d);
-  return cs == null ? -1 : cs + consensusBonus(d);   // 'combined' (default)
+  return cs == null ? -1 : cs;   // 'combined' (default), base only
 }
 let lastDocs = [];
 function renderDocs(allDocs) {
@@ -750,14 +751,24 @@ function renderDocs(allDocs) {
     wrap.appendChild(bar);
   }
 
-  // ranking ("palmares"): chosen score first, ties broken by NLM's best-first order
-  // (nlm_rank 1,2,3…) so docs the engines BOTH rate 8 still get a clear 1/2/3, then by id.
+  // ranking ("palmares"): base score first; among equal base, CONSENSUS docs lead, then by
+  // NLM's best-first order (nlm_rank), then id. Base score excludes the consensus taper so
+  // there's no circularity (the taper is a display/position effect computed below).
   const sortKey = (!docsSortTouched && featureMode()) ? 'weighted' : docsSort;
   const nlmRankOf = d => (d.nlm_rank != null ? d.nlm_rank : 1e9);
   let docs = [...allDocs].sort((a, b) =>
     scoreSortValue(b, sortKey) - scoreSortValue(a, sortKey)
+    || (isConsensus(b) ? 1 : 0) - (isConsensus(a) ? 1 : 0)
     || nlmRankOf(a) - nlmRankOf(b)
     || a.id - b.id);
+  // tapered consensus bonus by POSITION among consensus docs (1st → +0.4 … floor +0.1) — so
+  // they always separate (8.4/8.3/8.2…), ordered by NLM rank once a shortlist sets it.
+  consensusBonusById = new Map();
+  let _ci = 0;
+  for (const d of docs) if (isConsensus(d)) {
+    consensusBonusById.set(d.id, Math.max(CONSENSUS_FLOOR, CONSENSUS_TOP - _ci * CONSENSUS_STEP));
+    _ci++;
+  }
   if (docsFilter === 'unfetched') docs = docs.filter(d => d.status !== 'fetched');
   if (docsFilter === 'no-nlm') docs = docs.filter(d => d.status === 'fetched' && !d.nlm_source_notebook);
   // 1-based position among RANKED (scored) docs, so the user sees 1st / 2nd / 3rd explicitly.
