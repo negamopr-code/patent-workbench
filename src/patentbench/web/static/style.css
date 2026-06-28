@@ -198,6 +198,7 @@ textarea, select, input[type="text"] {
 .funnel-bar #funnel-status { font-size: 12px; }
 #claude-pause { color: var(--err); }
 .doc .score .combined { color: var(--accent); font-weight: 700; }
+.doc .score .consensus { color: #0a7d28; font-weight: 700; background: #dcfce7; border-radius: 4px; padding: 0 5px; }
 .doc .score .delta { color: var(--muted); font-weight: 600; }
 .doc .score .delta.big { color: var(--warn); }
 .doc .score .score-note { color: var(--muted); font-weight: 400; }

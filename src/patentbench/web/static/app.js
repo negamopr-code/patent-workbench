@@ -605,6 +605,16 @@ function combinedScore(d) {
   if (d.score != null && d.nlm_score != null) return (d.score + d.nlm_score) / 2;
   return d.score ?? d.nlm_score ?? null;
 }
+// CONSENSUS: both engines independently rate it a strong match. NLM's endorsement = it
+// named the doc in the shortlist (shortlisted) OR gave it a high per-candidate nlm_score;
+// Claude's = a high full-text score. When they AGREE, the doc earns a small ranking bonus
+// (+CONSENSUS_BONUS) so among ties (e.g. seven docs at 8/10) the ones both engines back
+// sort first — surfaced as a 🤝 sticker and a boosted score (8 → 8.2).
+const CONSENSUS_MIN = 7, CONSENSUS_BONUS = 0.2;
+function nlmEndorsed(d) { return d.shortlisted === 1 || (d.nlm_score != null && d.nlm_score >= CONSENSUS_MIN); }
+function claudeStrong(d) { return d.score != null && d.score >= CONSENSUS_MIN; }
+function isConsensus(d) { return claudeStrong(d) && nlmEndorsed(d); }
+function consensusBonus(d) { return isConsensus(d) ? CONSENSUS_BONUS : 0; }
 function featureMode() {
   return !!(currentBm && currentBm.source === 'features' && (currentBm.features || []).length);
 }
@@ -636,8 +646,10 @@ function scoreSortValue(d, key) {
   }
   if (key === 'nlm') return d.nlm_score ?? -1;
   if (key === 'delta') return (d.score != null && d.nlm_score != null) ? Math.abs(d.score - d.nlm_score) : -1;
-  if (key === 'claude') return d.score ?? -1;
-  return combinedScore(d) ?? -1;   // 'combined' (default)
+  // Claude + combined keys get the consensus bonus, so an agreed 8 outranks a solo 8.
+  if (key === 'claude') return (d.score ?? -1) + (d.score != null ? consensusBonus(d) : 0);
+  const cs = combinedScore(d);
+  return cs == null ? -1 : cs + consensusBonus(d);   // 'combined' (default)
 }
 let lastDocs = [];
 function renderDocs(allDocs) {
@@ -801,10 +813,15 @@ function renderDocs(allDocs) {
       const sc = document.createElement('div');
       sc.className = 'score';
       const parts = [];
+      const consensus = isConsensus(d);
       // combined ("common") score leads when both engines rated it
       if (d.score != null && d.nlm_score != null) parts.push(`<span class="combined">🥇 ${combinedScore(d).toFixed(1)}</span>`);
-      if (d.score != null) parts.push(`🤖 ${d.score}/10`);
+      if (d.score != null) {
+        // 🤝 consensus: show the boosted score (8 → 8.2) so the tie-break is visible
+        parts.push(consensus ? `🤖 ${(d.score + CONSENSUS_BONUS).toFixed(1)}/10` : `🤖 ${d.score}/10`);
+      }
       if (d.nlm_score != null) parts.push(`📓 ${d.nlm_score}/10`);
+      if (consensus) parts.push('<span class="consensus">🤝 agree</span>');
       // Δ flags where the two engines disagree (≥2 points apart)
       if (d.score != null && d.nlm_score != null) {
         const delta = Math.abs(d.score - d.nlm_score);
