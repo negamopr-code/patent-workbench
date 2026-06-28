@@ -146,6 +146,7 @@ class PipelineRequest(BaseModel):
     doc_ids: list[int] | None = None       # explicit finalists; None → auto-pick Claude's top_n
     top_n: int = Field(default=49, ge=1, le=49)   # funnel size when doc_ids is None (49+benchmark=50-cap)
     include_benchmark: bool = True
+    consolidate_only: bool = False         # stop after copying the 49 in — no shortlist, no NLM query
     resume: bool = False
 
 

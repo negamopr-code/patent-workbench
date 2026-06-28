@@ -904,6 +904,44 @@ def test_pipeline_funnel_needs_scored_candidates(client, monkeypatch):
     assert client.post(f"/api/tabs/{tid}/pipeline", json={"title": "X"}).status_code == 400
 
 
+def test_pipeline_consolidate_only_stops_before_query(client, monkeypatch):
+    """consolidate_only=True copies the finalists into one notebook and STOPS — no NLM
+    shortlist query, no debate. The user drives those steps manually afterwards."""
+    tab = client.post("/api/tabs", json={"name": "Only"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
+    import patentbench.db as _db
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    by_num = {d["number"]: d["id"] for d in docs}
+    _db.update_document(by_num["EP4340163A1"], score=9, scored_at=1, score_model="x")
+    _db.update_document(by_num["CN117241689"], score=4, scored_at=1, score_model="x")
+    copied = []
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-only", "title": t})
+    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda nb, ti, tx: copied.append(ti) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
+    queried = []
+    monkeypatch.setattr(nlm_bridge, "query", lambda *a, **k: queried.append(1) or {"answer": "x"})
+    debated = []
+    monkeypatch.setattr(claude_bridge, "debate", lambda *a, **k: debated.append(1) or {"answer": "x"})
+    r = client.post(f"/api/tabs/{tid}/pipeline",
+                    json={"title": "Only", "top_n": 49, "consolidate_only": True}).json()
+    assert r["started"] is True
+    import time as _t
+    for _ in range(50):
+        if client.get(f"/api/tabs/{tid}/pipeline/status").json().get("phase") == "done":
+            break
+        _t.sleep(0.1)
+    assert copied                                # documents were put into the notebook
+    assert not queried                           # but NLM was NEVER queried
+    assert not debated                           # and no debate ran
+    msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    assert any("nothing was queried" in m["text"] for m in msgs)
+
+
 def test_wait_sources_ready_blocks_until_ingested(monkeypatch):
     """The ingestion gate returns only once EVERY source reports content — not while any is
     still 'empty' (un-processed). It probes via source_content (no chat quota)."""

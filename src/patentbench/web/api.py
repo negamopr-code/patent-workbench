@@ -1325,6 +1325,12 @@ def _run_pipeline(tab_id: int) -> None:
                                   + ".")
             else:                                       # resume: the notebook already exists, reuse it
                 db.set_notebook_config(tab_id, nb, st.get("notebook_title") or nb, [], auto_add=True)
+            if st.get("consolidate_only"):              # STOP here — caller wants the docs in NLM only
+                db.append_message(tab_id, "s", "📥 The documents are in NotebookLM — nothing was "
+                                  "queried. Click 📓 NLM shortlist or ⚖️ Debate when you're ready.")
+                _pipeline_set(tab_id, step="done", status_text="✅ documents in NotebookLM (no query)",
+                              error=None)
+                return
             st = _pipeline_set(tab_id, step="shortlist")
         if st.get("step") == "shortlist":
             # WAIT for NotebookLM to finish ingesting the freshly-copied sources before the ONE
@@ -1406,6 +1412,7 @@ def pipeline_start(tab_id: int, body: schemas.PipelineRequest):
     claude_top_id = max(ids, key=lambda i: (score_of.get(i, 0), -i))
     _pipeline_set(tab_id, step="consolidate", title=body.title.strip(), doc_ids=ids,
                   claude_top_id=claude_top_id, include_benchmark=bool(body.include_benchmark),
+                  consolidate_only=bool(body.consolidate_only),
                   error=None, notebook_id=None, notebook_title=None, status_text="queued…")
     threading.Thread(target=_run_pipeline, args=(tab_id,), daemon=True).start()
     return {"started": True, "running": True, "funnel_n": len(ids)}

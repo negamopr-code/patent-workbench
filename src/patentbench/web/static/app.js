@@ -1355,26 +1355,29 @@ $('nlm-consolidate').onclick = () => {
   $('consolidate-modal').classList.remove('hidden');
 };
 $('consolidate-cancel').onclick = () => $('consolidate-modal').classList.add('hidden');
-$('consolidate-go').onclick = async () => {
+// Launch the resumable BACKGROUND job. consolidateOnly=true → copy the docs into ONE
+// notebook and STOP (no shortlist, no debate, no NLM query); false → full funnel.
+async function launchConsolidate(consolidateOnly) {
   const title = ($('consolidate-title').value || '').trim();
   if (!title) { $('consolidate-status').textContent = 'Enter a name for the notebook.'; return; }
   const ids = consolidateIds;
   const includeBm = $('consolidate-bm').checked;
   // FUNNEL mode (no explicit finalists) → let the server auto-pick Claude's top_n.
   const body = ids.length
-    ? { title, doc_ids: ids, include_benchmark: includeBm }
+    ? { title, doc_ids: ids, include_benchmark: includeBm, consolidate_only: consolidateOnly }
     : { title, top_n: Math.max(1, Math.min(49, +($('consolidate-topn').value || 49))),
-        include_benchmark: includeBm };
-  const go = $('consolidate-go'); go.disabled = true;
-  // launch the resumable BACKGROUND job (consolidate → shortlist → debate). It runs on
-  // the server, so closing the tab / a dropped connection no longer interrupts it.
+        include_benchmark: includeBm, consolidate_only: consolidateOnly };
+  const btns = [$('consolidate-go'), $('consolidate-only')];
+  btns.forEach(b => b.disabled = true);
   const res = await api(`/api/tabs/${activeTab}/pipeline`, {
     method: 'POST', body: JSON.stringify(body) });
-  go.disabled = false;
+  btns.forEach(b => b.disabled = false);
   if (res.error) { $('consolidate-status').textContent = `Error: ${res.error}`; return; }
   $('consolidate-modal').classList.add('hidden');
   pollPipeline();
-};
+}
+$('consolidate-go').onclick = () => launchConsolidate(false);
+$('consolidate-only').onclick = () => launchConsolidate(true);
 
 /* ---------- consolidate→shortlist→debate background job (crash-resilient) ---------- */
 let pipelinePoll = null;
