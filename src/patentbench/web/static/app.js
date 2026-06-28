@@ -730,9 +730,19 @@ function renderDocs(allDocs) {
   const assessed = allDocs.filter(hasRead).length;
   const cont = $('claude-continue');
   if (cont) {
+    const rmShort = rm.replace('claude-', '');
     cont.classList.toggle('hidden', !(unread || assessed));
-    cont.textContent = unread ? `▶️ Continue ${rm.replace('claude-', '')} read (${unread} left)`
-                              : `📊 Re-rank ${assessed} stored`;
+    // Always reads as "▶️ Continue" so it's clearly the RESUME button (never the restart). With
+    // leftovers it reads only those; with none, it re-ranks from stored (0 tokens).
+    cont.textContent = unread ? `▶️ Continue read (${unread} left)`
+                              : `▶️ Continue · re-rank ${assessed} (none left)`;
+    cont.title = unread
+      ? `RESUME without restarting: full-reads ONLY the ${unread} candidate(s) not yet read by `
+        + `${rmShort} or a stronger model — never re-reads what's done, never restarts the whole corpus.`
+      : `Every candidate is already read by ${rmShort} or stronger, so there's nothing new to read — `
+        + `this re-ranks from the stored reads (0 tokens). To deliberately RE-READ specific docs `
+        + `(e.g. switch the top opus picks to ${rmShort}), CHECK them and click 🏆 Deep compare — `
+        + `it reads only the checked ones, not all ${assessed}.`;
   }
   if (!unfetched && docsFilter === 'unfetched') docsFilter = 'all';
   // NLM coverage: fetched candidates that are NOT a source in any notebook — these are
