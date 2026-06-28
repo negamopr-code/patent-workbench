@@ -1291,6 +1291,19 @@ def _run_pipeline(tab_id: int) -> None:
         if st.get("step") == "consolidate":
             nb = st.get("notebook_id")
             if not nb:                                  # fresh: create + copy (idempotent on resume)
+                # DELETE the tab's rollover notebooks FIRST, then create the consolidated one.
+                # The funnel is net-negative on notebook count (−many +1), so freeing the slots
+                # up front means the create can't fail at the ~100-notebook account cap (which is
+                # exactly when you most need to consolidate). Safe to delete before copying: the
+                # copy below re-uploads each finalist from our STORED full text, not from the old
+                # NLM source. Refs/caches are cleared so a now-dead notebook is never re-queried.
+                cleaned = 0
+                for old in db.tab_notebook_ids(tab_id):
+                    _pipeline_set(tab_id, status_text="🗑 freeing slots: removing rollover notebooks…")
+                    if nlm_bridge.delete_notebook(old).get("ok"):
+                        cleaned += 1
+                    db.clear_nlm_refs(tab_id, old)
+                    db.nlm_cache_clear(old)
                 _pipeline_set(tab_id, status_text="🧺 creating notebook & copying finalists…")
                 created = nlm_bridge.create_notebook(st["title"])
                 if not created.get("id"):
@@ -1298,9 +1311,6 @@ def _run_pipeline(tab_id: int) -> None:
                 nb = created["id"]
                 db.set_notebook_config(tab_id, nb, created["title"], [], auto_add=True)
                 st = _pipeline_set(tab_id, notebook_id=nb, notebook_title=created["title"])
-                # Capture the rollover notebooks NOW — before the copy loop repoints the finalists'
-                # refs to the new notebook (after which tab_notebook_ids would no longer list them).
-                old_notebooks = [n for n in db.tab_notebook_ids(tab_id) if n != nb]
                 if st.get("include_benchmark", True):
                     _add_benchmark_to_notebook(tab_id, nb)
                 copied = 0
@@ -1308,20 +1318,9 @@ def _run_pipeline(tab_id: int) -> None:
                     if _add_doc_to_notebook(did, nb).get("ok"):
                         copied += 1
                     _pipeline_set(tab_id, status_text=f"🧺 copying finalists… {copied}")
-                # KEEP ONLY this notebook: delete the rollover notebooks the candidates were
-                # spread across, so NotebookLM compares the funnel set in ONE place (no cross-
-                # notebook blindness / truncation) and we reclaim slots toward the ~100 cap.
-                # Full text is retained in our DB, so nothing is lost.
-                cleaned = 0
-                for old in old_notebooks:
-                    _pipeline_set(tab_id, status_text="🗑 removing rollover notebooks…")
-                    if nlm_bridge.delete_notebook(old).get("ok"):
-                        cleaned += 1
-                    db.clear_nlm_refs(tab_id, old)        # drop refs even if delete failed, so we
-                    db.nlm_cache_clear(old)               # don't re-query a now-dead notebook
                 db.append_message(tab_id, "s", f"🧺 Consolidated {copied} document(s) into "
                                   f"«{created['title']}» and connected the tab"
-                                  + (f"; 🗑 deleted {cleaned} other notebook(s)" if cleaned else "")
+                                  + (f"; 🗑 deleted {cleaned} other notebook(s) to free slots" if cleaned else "")
                                   + ".")
             else:                                       # resume: the notebook already exists, reuse it
                 db.set_notebook_config(tab_id, nb, st.get("notebook_title") or nb, [], auto_add=True)
