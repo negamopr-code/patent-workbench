@@ -607,14 +607,19 @@ function combinedScore(d) {
 }
 // CONSENSUS: both engines independently rate it a strong match. NLM's endorsement = it
 // named the doc in the shortlist (shortlisted) OR gave it a high per-candidate nlm_score;
-// Claude's = a high full-text score. When they AGREE, the doc earns a small ranking bonus
-// (+CONSENSUS_BONUS) so among ties (e.g. seven docs at 8/10) the ones both engines back
-// sort first — surfaced as a 🤝 sticker and a boosted score (8 → 8.2).
-const CONSENSUS_MIN = 7, CONSENSUS_BONUS = 0.2;
+// Claude's = a high full-text score. When they AGREE, the doc earns a bonus that TAPERS by
+// NLM's best-first rank, so the score itself separates the ties: NLM's #1 → +0.4 (8 → 8.4),
+// #2 → +0.3, #3 → +0.2, #4 → +0.1, floored at +0.1. The cap (<0.5) keeps base score dominant
+// — a consensus 8 never overtakes a genuine 8.5/9. Surfaced as a 🤝 sticker + the boosted score.
+const CONSENSUS_MIN = 7, CONSENSUS_TOP = 0.4, CONSENSUS_STEP = 0.1, CONSENSUS_FLOOR = 0.1;
 function nlmEndorsed(d) { return d.shortlisted === 1 || (d.nlm_score != null && d.nlm_score >= CONSENSUS_MIN); }
 function claudeStrong(d) { return d.score != null && d.score >= CONSENSUS_MIN; }
 function isConsensus(d) { return claudeStrong(d) && nlmEndorsed(d); }
-function consensusBonus(d) { return isConsensus(d) ? CONSENSUS_BONUS : 0; }
+function consensusBonus(d) {
+  if (!isConsensus(d)) return 0;
+  const r = (d.nlm_rank != null ? d.nlm_rank : 99);   // unranked-but-agreed → floor bonus
+  return Math.max(CONSENSUS_FLOOR, CONSENSUS_TOP - (r - 1) * CONSENSUS_STEP);
+}
 function featureMode() {
   return !!(currentBm && currentBm.source === 'features' && (currentBm.features || []).length);
 }
@@ -826,8 +831,8 @@ function renderDocs(allDocs) {
       // combined ("common") score leads when both engines rated it
       if (d.score != null && d.nlm_score != null) parts.push(`<span class="combined">🥇 ${combinedScore(d).toFixed(1)}</span>`);
       if (d.score != null) {
-        // 🤝 consensus: show the boosted score (8 → 8.2) so the tie-break is visible
-        parts.push(consensus ? `🤖 ${(d.score + CONSENSUS_BONUS).toFixed(1)}/10` : `🤖 ${d.score}/10`);
+        // 🤝 consensus: show the rank-boosted score (NLM #1 → 8.4, #2 → 8.3 …) so the order is visible
+        parts.push(consensus ? `🤖 ${(d.score + consensusBonus(d)).toFixed(1)}/10` : `🤖 ${d.score}/10`);
       }
       if (d.nlm_score != null) parts.push(`📓 ${d.nlm_score}/10`);
       if (consensus) parts.push('<span class="consensus">🤝 agree</span>');
