@@ -323,3 +323,4 @@ textarea, select, input[type="text"] {
 }
 
 .doc .score { font-size: 12px; color: var(--accent2); margin: 3px 0; font-weight: 600; }
+.doc .read-meta .stale-flag { color: var(--warn); font-weight: 600; }

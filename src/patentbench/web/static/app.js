@@ -724,8 +724,12 @@ function renderDocs(allDocs) {
   // what sonnet already did, never downgrading an opus read. If nothing is left at the
   // chosen level, re-rank the WHOLE corpus from stored assessments (zero re-reading).
   const rm = readModelValue();
+  const bmAt = (currentBm && currentBm.updated_at) || 0;     // last benchmark change
   const hasRead = d => d.status === 'fetched' && (d.verdict_len || d.score != null);
-  const readAtLevel = d => hasRead(d) && modelRank(d.score_model) <= modelRank(rm);
+  // a read counts as current only if it's NEWER than the last benchmark change (else it's
+  // stale — it never saw a feature you added — and must be re-read regardless of model).
+  const fresh = d => (d.scored_at || 0) >= bmAt;
+  const readAtLevel = d => hasRead(d) && fresh(d) && modelRank(d.score_model) <= modelRank(rm);
   const unread = allDocs.filter(d => d.status === 'fetched' && !readAtLevel(d)).length;
   const assessed = allDocs.filter(hasRead).length;
   const cont = $('claude-continue');
@@ -939,6 +943,13 @@ function renderDocs(allDocs) {
         r.className = 'read-meta';
         const when = d.scored_at ? new Date(d.scored_at * 1000).toLocaleString() : '—';
         r.textContent = `🤖 full-read ${when}` + (d.score_model ? ` · ${d.score_model.replace('claude-', '')}` : '');
+        if (bmAt && (d.scored_at || 0) < bmAt) {        // read predates the current benchmark
+          const s = document.createElement('span');
+          s.className = 'stale-flag';
+          s.textContent = ' ⏳ stale (benchmark changed)';
+          s.title = 'This read predates your last benchmark change — it never checked the feature(s) you added since. ▶️ Continue re-reads it.';
+          r.appendChild(s);
+        }
         el.appendChild(r);
       }
     } else if (d.status === 'fetched') {

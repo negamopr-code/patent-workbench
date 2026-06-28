@@ -2324,14 +2324,20 @@ def _model_rank(m: str | None) -> int:
         return len(claude_bridge.MODELS)
 
 
-def _assessed_at_least(d: dict, read_model: str) -> bool:
-    """True if this candidate already has a full-text assessment from `read_model`
-    OR a stronger one. This is what makes Continue MODEL-AWARE: an interrupted
-    upgrade-read (e.g. sonnet over 221 candidates, killed at the token limit after
-    160) resumes on exactly the leftovers — the ones still on a weaker model — across
-    as many budget windows as it takes, never re-reading sonnet's 160 and never
-    downgrading a stronger (opus) read."""
-    return _has_assessment(d) and _model_rank(d.get("score_model")) <= _model_rank(read_model)
+def _assessed_at_least(d: dict, read_model: str, since: float = 0) -> bool:
+    """True if this candidate already has a CURRENT full-text assessment from `read_model`
+    OR a stronger one. Two gates:
+    - model: never re-read what a stronger model already did (no downgrade) — this makes
+      Continue resume an interrupted upgrade-read on exactly the leftovers.
+    - freshness: the read must be NEWER than `since` (the benchmark's last change). A read
+      done against an OLDER benchmark is STALE — it never checked a feature added afterwards —
+      so staleness beats model strength and it IS re-read, even if that means a weaker model
+      re-reads a once-opus doc. (since=0 → freshness gate off, e.g. selected re-reads.)"""
+    if not _has_assessment(d):
+        return False
+    if since and (d.get("scored_at") or 0) < since:        # read predates the benchmark change
+        return False
+    return _model_rank(d.get("score_model")) <= _model_rank(read_model)
 
 
 def _stored_assessment(d: dict) -> str:
@@ -2513,7 +2519,10 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
     # (re-)read the targeted set fresh. When nothing needs reading but assessments
     # exist, RE-RANK from them (zero reads) — work done anywhere is reused everywhere.
     read_model = _read_model(body.reading_model) or claude_bridge.DIGEST_MODEL
-    to_read = ([d for d in docs if not _assessed_at_least(d, read_model)]
+    # reads older than the benchmark's last change are STALE (they predate any feature you
+    # added) → Continue re-reads them regardless of which model did them.
+    bm_at = (db.get_benchmark(tab_id) or {}).get("updated_at") or 0
+    to_read = ([d for d in docs if not _assessed_at_least(d, read_model, since=bm_at)]
                if body.skip_scored else list(docs))
     corpus = [d for d in all_docs if _has_assessment(d)]
     if not to_read and not corpus:

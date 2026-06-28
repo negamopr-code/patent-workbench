@@ -357,7 +357,7 @@ def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch)
                 json={"numbers": ["EP3667902A1", "CN114853847B"], "source": "image"})
     docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
     # pretend one was already full-read in a prior (interrupted) batch
-    db.update_document(docs["EP3667902A1"]["id"], score=7, score_note="old", scored_at=1, score_model="claude-opus-4-8")
+    db.update_document(docs["EP3667902A1"]["id"], score=7, score_note="old", scored_at=9_999_999_999, score_model="claude-opus-4-8")
     read = []
     monkeypatch.setattr(claude_bridge, "deep_map",
                         lambda bm, d, model=None, features=None: (read.append(d["number"]), {"verdict": f"MATCH SCORE: 5 for {d['number']}"})[1])
@@ -385,9 +385,9 @@ def test_continue_is_model_aware_upgrades_weaker_reads(client, monkeypatch):
     docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
     # prior batch: one read by sonnet (done at this level), one by opus (stronger),
     # one by haiku (WEAKER — must be upgraded). The 4th is unread.
-    db.update_document(docs["EP3667902A1"]["id"], score=8, scored_at=1, score_model="claude-sonnet-4-6")
-    db.update_document(docs["CN114853847"]["id"], score=7, scored_at=1, score_model="claude-opus-4-8")
-    db.update_document(docs["CN114547092"]["id"], score=3, scored_at=1, score_model="claude-haiku-4-5")
+    db.update_document(docs["EP3667902A1"]["id"], score=8, scored_at=9_999_999_999, score_model="claude-sonnet-4-6")
+    db.update_document(docs["CN114853847"]["id"], score=7, scored_at=9_999_999_999, score_model="claude-opus-4-8")
+    db.update_document(docs["CN114547092"]["id"], score=3, scored_at=9_999_999_999, score_model="claude-haiku-4-5")
     read = []
     monkeypatch.setattr(claude_bridge, "deep_map",
                         lambda bm, d, model=None, features=None: read.append(d["number"]) or {"verdict": f"MATCH SCORE: 6 for {d['number']}"})
@@ -414,9 +414,9 @@ def test_rerank_reuses_stored_reads_without_rereading(client, monkeypatch):
     docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
     # one fully-read (verdict stored), one LEGACY read (score only, verdict NULL)
     db.update_document(docs["EP3667902A1"]["id"], verdict="MATCH SCORE: 8\n[0012]: foo",
-                       score=8, scored_at=1, score_model="claude-sonnet-4-6")
+                       score=8, scored_at=9_999_999_999, score_model="claude-sonnet-4-6")
     db.update_document(docs["CN114547092"]["id"], score=4, score_note="legacy note",
-                       scored_at=1, score_model="claude-opus-4-8")
+                       scored_at=9_999_999_999, score_model="claude-opus-4-8")
     reads, ranked = [], {}
     monkeypatch.setattr(claude_bridge, "deep_map",
                         lambda bm, d, model=None, features=None: reads.append(d["number"]) or {"verdict": "x"})
@@ -1943,3 +1943,37 @@ def test_digest_rescore_endpoint_no_reread(client, monkeypatch):
     assert r["ok"] and r["updated"] == 1 and seen["n"] == ["EP4338615"]
     d = client.get(f"/api/tabs/{tid}/documents").json()["documents"][0]
     assert d["score"] == 7.0 and d["score_model"].endswith("·digest")   # tagged digest-based
+
+
+def test_assessed_freshness_gate():
+    """A read OLDER than the benchmark's last change is stale → counts as NOT assessed, so
+    Continue re-reads it regardless of model strength; a newer read is kept."""
+    from patentbench.web import api
+    d = {"score": 8, "scored_at": 100, "score_model": "claude-opus-4-8", "verdict": "x"}
+    assert api._assessed_at_least(d, "claude-sonnet-4-6", since=0) is True     # no benchmark change
+    assert api._assessed_at_least(d, "claude-sonnet-4-6", since=50) is True    # read after the change
+    assert api._assessed_at_least(d, "claude-sonnet-4-6", since=200) is False  # read BEFORE the change → stale
+
+
+def test_continue_rereads_stale_after_benchmark_change(client, monkeypatch):
+    """Adding a feature (benchmark change) makes a prior opus read STALE → Continue re-reads
+    it even though opus is 'stronger' than the current model. Staleness beats model strength."""
+    tab = client.post("/api/tabs", json={"name": "Stale"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "thermistor divider", "weight": 5, "kind": "M", "sl": 5}]})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114547092"})
+    docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    # both opus-read in the PAST (epoch) — before the benchmark we will now change
+    db.update_document(docs["EP3667902A1"]["id"], verdict="v", score=8, scored_at=1, score_model="claude-opus-4-8")
+    db.update_document(docs["CN114547092"]["id"], verdict="v", score=7, scored_at=1, score_model="claude-opus-4-8")
+    # add a feature → benchmark.updated_at bumps to now, so both reads are stale
+    client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                json={"name": "battery gauge", "weight": 4, "kind": "M", "sl": 5})
+    read = []
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None, features=None: read.append(d["number"]) or {"verdict": "x"})
+    monkeypatch.setattr(claude_bridge, "deep_reduce", lambda *a, **k: {"answer": "r"})
+    client.post(f"/api/tabs/{tid}/deep-compare", json={"skip_scored": True, "reading_model": "claude-sonnet-4-6"})
+    _wait_read(client, tid)
+    assert set(read) == {"EP3667902A1", "CN114547092"}   # BOTH stale opus reads re-read on sonnet
