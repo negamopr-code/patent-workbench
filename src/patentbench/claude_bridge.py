@@ -910,6 +910,57 @@ def parse_additional(text: str, a_features: list[dict]) -> dict:
     return out
 
 
+DIGEST_RESCORE_PROMPT = (
+    "Re-score each candidate patent against the BENCHMARK below, using ONLY the candidate's "
+    "stored DIGEST (a faithful summary of its full text) — do NOT ask for or assume full text. "
+    "This is a fast re-check after a benchmark change; judge from the digest. If the digest is "
+    "silent on a benchmark element, treat it as not shown (do not invent).\n\n"
+    "{benchmark}\n\n"
+    "=== CANDIDATES (digests) ===\n{docs}\n\n"
+    "OUTPUT — for EVERY candidate, in this EXACT format, nothing else:\n"
+    "=== <PUBLICATION NUMBER> ===\n"
+    "SCORE: <0-10>\n"
+    "WHY: <≤20 words: the decisive matched/missing benchmark elements>")
+
+
+def digest_rescore(benchmark: dict, docs: list[dict], model: str | None = None) -> dict:
+    """Fast re-score (default sonnet) of candidates against the CURRENT benchmark using their
+    STORED DIGESTS — one bulk call, NO full-text re-read. For when the benchmark changed and the
+    user wants updated scores cheaply. Returns {results: {number: {score, note}}} | {error}."""
+    if not docs:
+        return {"results": {}}
+    bm_block = _benchmark_block(benchmark)
+    doc_blocks = "\n\n".join(
+        f"=== {d['number']} ===\n{(d.get('digest') or '(no digest available)')[:6000]}"
+        for d in docs)
+    prompt = DIGEST_RESCORE_PROMPT.format(benchmark="BENCHMARK:\n\n" + bm_block, docs=doc_blocks)
+    res = _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"results": parse_digest_rescore(res["answer"]), "model": res.get("model")}
+
+
+_RESCORE_SCORE_RE = re.compile(r"SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+_RESCORE_WHY_RE = re.compile(r"WHY:\s*(.+)", re.IGNORECASE)
+
+
+def parse_digest_rescore(text: str) -> dict:
+    """Map the bulk digest-rescore output ('=== NUM ===' blocks with SCORE/WHY) back onto
+    {number: {score, note}}."""
+    out: dict = {}
+    parts = _ADD_HEADER_RE.split(text or "")
+    for i in range(1, len(parts) - 1, 2):
+        num = parts[i].strip()
+        body = parts[i + 1]
+        m = _RESCORE_SCORE_RE.search(body)
+        if not m:
+            continue
+        w = _RESCORE_WHY_RE.search(body)
+        out[num] = {"score": min(10.0, max(0.0, float(m.group(1)))),
+                    "note": (w.group(1).strip()[:200] if w else "")}
+    return out
+
+
 def run_extract(prompt: str, allow_read: bool = False, model: str | None = None) -> dict:
     """One-shot extraction run (optionally with the Read tool so the model can
     open an image/file). Returns {answer, model} | {error}."""

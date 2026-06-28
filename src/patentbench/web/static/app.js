@@ -1564,6 +1564,26 @@ $('reconcile').onclick = async () => {
   if (res.error && !(res.messages || []).length) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
   for (const m of res.messages || []) appendMsg(m);
 };
+// ♻️ Re-check: re-score the displayed top-N against the CURRENT benchmark from stored digests
+// (no full-text re-read). For after a benchmark tweak — cheap, never downgrades via a slow read.
+$('digest-rescore').onclick = async () => {
+  if (!activeTab) return;
+  const N = 49;
+  const byId = new Map((lastDocs || []).map(d => [d.id, d]));
+  const ids = lastRankedDocIds
+    .filter(id => { const d = byId.get(id); return d && d.status === 'fetched' && d.digest_len; })
+    .slice(0, N);
+  if (!ids.length) { appendMsg({ role: 's', text: 'No candidates with a stored digest yet — run a 🏆 deep-compare / full read once first.' }); return; }
+  if (!confirm(`Re-check the top ${ids.length} against the current benchmark from their digests?\n\nONE bulk pass, no full-text re-read. Scores get tagged ·digest.`)) return;
+  const btn = $('digest-rescore'); btn.disabled = true;
+  setBusy(true, `Re-checking top ${ids.length} from digests (no re-read)`);
+  const res = await api(`/api/tabs/${activeTab}/digest-rescore`, {
+    method: 'POST', body: JSON.stringify({ doc_ids: ids }) });
+  setBusy(false); btn.disabled = false;
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  await refreshDocs();
+  await reloadChat();
+};
 // ➕ Additional read: check the benchmark's A-features against the displayed top-N candidates
 // in ONE bulk sonnet pass over their stored digests. Sends the top-N doc ids in ranked order.
 $('additional-read').onclick = async () => {

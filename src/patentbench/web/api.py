@@ -1980,6 +1980,48 @@ def _benchmark_feature_spec_for_nlm(bm: dict, limit: int = NLM_SHORTLIST_QUERY_C
 RECONCILE_MAX_DOCS = 30      # cap the disagreement set so the single call stays cheap
 
 
+@app.post("/api/tabs/{tab_id}/digest-rescore")
+def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest):
+    """♻️ RE-CHECK. After a benchmark change, re-score the top candidates against the CURRENT
+    benchmark from their STORED DIGESTS in ONE bulk call — no full-text re-read, no downgrade
+    from a slow full pass. Updates score/score_note (score_model tagged '·digest' so it's clear
+    these are the cheap digest-based scores, not a fresh full read)."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("status") != "ready":
+        raise HTTPException(400, "benchmark is not ready — set it first")
+    fetched = [d for d in db.list_documents(tab_id, full=True)
+               if d["status"] == "fetched" and (d.get("digest") or "").strip()]
+    by_id = {d["id"]: d for d in fetched}
+    if body.doc_ids:
+        chosen = [by_id[i] for i in body.doc_ids if i in by_id]
+    else:
+        chosen = [by_id[i] for i in db.top_scored_documents(tab_id, body.top_n) if i in by_id]
+        if not chosen:                                  # nothing scored yet → any fetched-with-digest
+            chosen = fetched[:body.top_n]
+    if not chosen:
+        raise HTTPException(400, "no candidates with a stored digest — run a 🏆 deep-compare / "
+                                 "full read once so there are digests to re-check against")
+    model = _read_model(body.model) or claude_bridge.DIGEST_MODEL
+    res = claude_bridge.digest_rescore(bm, chosen, model=model)
+    if "error" in res:
+        raise HTTPException(400, f"re-check failed: {res['error']}")
+    results = res.get("results") or {}
+    now = int(time.time())
+    updated = 0
+    for d in chosen:
+        r = results.get(d["number"])
+        if r and r.get("score") is not None:
+            db.update_document(d["id"], score=r["score"], score_note=r.get("note") or None,
+                               scored_at=now, score_model=f"{res.get('model') or model}·digest")
+            updated += 1
+    db.append_message(tab_id, "s",
+        f"♻️ Re-checked {updated} candidate(s) against the current benchmark from their stored "
+        f"digests ({res.get('model') or model}) — NO full-text re-read. Scores are tagged ·digest "
+        "(cheap re-check); run a 🏆 full deep-compare when you want the rigorous opus read back.")
+    return {"ok": True, "updated": updated, "results": results}
+
+
 @app.post("/api/tabs/{tab_id}/additional-read")
 def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
     """➕ ADDITIONAL READ. Check the benchmark's ADDITIONAL (A) features against the top

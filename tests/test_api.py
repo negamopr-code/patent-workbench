@@ -1909,3 +1909,37 @@ def test_additional_read_needs_a_features(client, monkeypatch):
     client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
         {"name": "only mandatory", "weight": 5, "kind": "M", "sl": 5}]})
     assert client.post(f"/api/tabs/{tid}/additional-read", json={}).status_code == 400
+
+
+def test_parse_digest_rescore():
+    from patentbench import claude_bridge as cb
+    text = ("=== CN117321873 ===\nSCORE: 8\nWHY: gauge divider + independent paths\n"
+            "=== EP4212037 ===\nSCORE: 6.5\nWHY: divider but no battery gauge\n")
+    out = cb.parse_digest_rescore(text)
+    assert out["CN117321873"]["score"] == 8.0 and "independent" in out["CN117321873"]["note"]
+    assert out["EP4212037"]["score"] == 6.5
+
+
+def test_digest_rescore_endpoint_no_reread(client, monkeypatch):
+    """♻️ re-check updates scores from digests in one bulk call, tags them ·digest, and never
+    touches full text."""
+    from patentbench import claude_bridge as cb
+    tab = client.post("/api/tabs", json={"name": "Re"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "thermistor divider", "weight": 5, "kind": "M", "sl": 5}]})
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4338615"], "source": "image"})
+    import patentbench.db as _db
+    doc = client.get(f"/api/tabs/{tid}/documents").json()["documents"][0]
+    _db.update_document(doc["id"], digest="thermistor + resistor voltage divider read by gauge",
+                        score=8, scored_at=1, score_model="claude-opus-4-8")
+    seen = {}
+    def fake_rescore(bm, docs, model=None):
+        seen["n"] = [d["number"] for d in docs]; seen["model"] = model
+        return {"results": {"EP4338615": {"score": 7.0, "note": "divider present"}},
+                "model": "claude-sonnet-4-6"}
+    monkeypatch.setattr(cb, "digest_rescore", fake_rescore)
+    r = client.post(f"/api/tabs/{tid}/digest-rescore", json={}).json()
+    assert r["ok"] and r["updated"] == 1 and seen["n"] == ["EP4338615"]
+    d = client.get(f"/api/tabs/{tid}/documents").json()["documents"][0]
+    assert d["score"] == 7.0 and d["score_model"].endswith("·digest")   # tagged digest-based

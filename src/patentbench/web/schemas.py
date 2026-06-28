@@ -155,6 +155,15 @@ class PipelineRequest(BaseModel):
     resume: bool = False
 
 
+class DigestRescoreRequest(BaseModel):
+    """♻️ Re-check: re-score the top candidates against the CURRENT benchmark from their stored
+    digests in ONE bulk pass — no full-text re-read. doc_ids = the UI's ranked top-N; else top_n
+    by current score."""
+    doc_ids: list[int] | None = None
+    top_n: int = Field(default=49, ge=1, le=50)
+    model: str | None = None
+
+
 class AdditionalReadRequest(BaseModel):
     """➕ Additional read: check the benchmark's ADDITIONAL (A) features against the top
     candidates' stored digests in ONE bulk pass (no full-text re-read). doc_ids = the exact
