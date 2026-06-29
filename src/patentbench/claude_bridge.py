@@ -961,6 +961,68 @@ def parse_digest_rescore(text: str) -> dict:
     return out
 
 
+COMBI_MOTIVATION_PROMPT = (
+    "You assess whether PAIRS of patent references are genuinely COMBINABLE (obviousness-style) to "
+    "reach the BENCHMARK invention below. For each pair, reference A and reference B TOGETHER disclose "
+    "the benchmark's mandatory features — each supplies the part the other lacks. A pair is only "
+    "useful if a skilled person would have a REAL motivation/reason to combine them: same or adjacent "
+    "technical field, compatible structures, or an explicit teaching/suggestion pointing to the "
+    "combination. Features merely 'adding up' is NOT enough — if combining is far-fetched, say NO.\n\n"
+    "{benchmark}\n\n"
+    "=== REFERENCE PAIRS (judge from the digests) ===\n{pairs}\n\n"
+    "OUTPUT — for EVERY pair, in this EXACT format, nothing else:\n"
+    "=== <PAIR NUMBER> ===\n"
+    "COMBINABLE: <YES or NO>\n"
+    "WHY: <≤25 words: the concrete motivation to combine, or the obstacle if NO>")
+
+
+def combi_motivation(benchmark: dict, pairs: list[dict], model: str | None = None) -> dict:
+    """ONE bulk pass (default sonnet) judging, for each candidate PAIR, whether the two references
+    are genuinely combinable (real motivation to combine) to reach the benchmark. `pairs` =
+    [{a:{number,digest}, b:{number,digest}, a_features:[names], b_features:[names]}]. Returns
+    {results: {pair_index_str: {combinable, reason}}, model} | {error}. Cheap: digests only, one call."""
+    if not pairs:
+        return {"results": {}}
+    bm_block = _benchmark_block(benchmark)
+    blocks = []
+    for i, p in enumerate(pairs, 1):
+        a, b = p["a"], p["b"]
+        blocks.append(
+            f"=== {i} ===\n"
+            f"REFERENCE A = {a['number']} — supplies: {', '.join(p.get('a_features') or []) or '—'}\n"
+            f"{(a.get('digest') or '(no digest available)')[:3000]}\n\n"
+            f"REFERENCE B = {b['number']} — supplies: {', '.join(p.get('b_features') or []) or '—'}\n"
+            f"{(b.get('digest') or '(no digest available)')[:3000]}")
+    prompt = COMBI_MOTIVATION_PROMPT.format(benchmark="BENCHMARK:\n\n" + bm_block,
+                                            pairs="\n\n".join(blocks))
+    res = _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"results": parse_combi_motivation(res["answer"]), "model": res.get("model")}
+
+
+_COMBI_IDX_RE = re.compile(r"^===\s*(\d+)\s*===\s*$", re.MULTILINE)
+_COMBI_YN_RE = re.compile(r"COMBINABLE:\s*(YES|NO)", re.IGNORECASE)
+_COMBI_WHY_RE = re.compile(r"WHY:\s*(.+)", re.IGNORECASE)
+
+
+def parse_combi_motivation(text: str) -> dict:
+    """Map the bulk combi output ('=== N ===' blocks with COMBINABLE/WHY) back onto
+    {pair_index_str: {combinable: bool, reason}}."""
+    out: dict = {}
+    parts = _COMBI_IDX_RE.split(text or "")
+    for i in range(1, len(parts) - 1, 2):
+        idx = parts[i].strip()
+        body = parts[i + 1]
+        m = _COMBI_YN_RE.search(body)
+        if not m:
+            continue
+        w = _COMBI_WHY_RE.search(body)
+        out[idx] = {"combinable": m.group(1).upper() == "YES",
+                    "reason": (w.group(1).strip()[:240] if w else "")}
+    return out
+
+
 def run_extract(prompt: str, allow_read: bool = False, model: str | None = None) -> dict:
     """One-shot extraction run (optionally with the Read tool so the model can
     open an image/file). Returns {answer, model} | {error}."""

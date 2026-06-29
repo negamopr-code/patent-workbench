@@ -36,6 +36,9 @@ let readPoll = null;
 let readWasRunning = false;
 let docSelection = new Set();   // candidate ids picked for a scoped deep compare
 let currentBm = null;           // last-rendered benchmark (for weighted feature ranking)
+let combiResult = null;         // last computed { pairs, mand, add, ... } for 🧩 Combi (null = not run)
+let combiMotivations = {};      // persisted pair verdicts: 'loId-hiId' → {combinable, reason, model}
+let bestPartnerById = new Map();// docId → its best complementary partner pair (inline hint)
 let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
 // id → title for EVERY NotebookLM notebook, so a candidate's per-doc badge can name
@@ -207,6 +210,8 @@ async function selectTab(id) {
   const st = await api(`/api/tabs/${id}/state`);
   if (activeTab !== id) return;   // a newer selectTab() won the race — don't clobber its render
   if (st.error) { alert(st.error); return; }
+  combiMotivations = st.combi_motivations || {};
+  combiResult = null;                       // recompute combos per tab on demand
   renderBenchmark(st.benchmark);
   renderDocs(st.documents || []);
   renderChat(st.messages || []);
@@ -288,9 +293,11 @@ function renderBenchmark(bm) {
     for (const f of bm.features) {
       const chip = document.createElement('span');
       const isA = (f.kind || 'M') === 'A';
-      chip.className = 'chip feat-chip' + (isA ? ' feat-a' : '');
+      chip.className = 'chip feat-chip clickable' + (isA ? ' feat-a' : '');
       chip.textContent = (isA ? `A·SL${f.sl || 5} ` : 'M ') + `${f.name} ·${'★'.repeat(f.weight)}`;
-      chip.title = isA ? `Additional feature — bonus only (stretch level ${f.sl || 5}/10)` : 'Mandatory feature — drives the base score';
+      chip.title = (isA ? `Additional feature — bonus only (stretch level ${f.sl || 5}/10)` : 'Mandatory feature — drives the base score')
+        + '\n\nClick → every document with this feature + full comments';
+      chip.onclick = () => openFeatureModal(f.name, f.weight, f.kind || 'M', null);
       fl.appendChild(chip);
     }
     card.appendChild(fl);
@@ -385,14 +392,23 @@ function buildKindSl(kind = 'M', sl = 5) {
   ksel.onchange = sync; sync();
   return { ksel, slin };
 }
+/* grow a textarea to fit its content (capped by the CSS max-height) */
+function autoGrow(ta) {
+  const fit = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+  ta.addEventListener('input', fit);
+  // run once content is in the DOM so scrollHeight is measurable
+  setTimeout(fit, 0);
+  return ta;
+}
 /* one-by-one weighted feature rows */
 function addFeatureRow(name = '', weight = 1, kind = 'M', sl = 5) {
   const wrap = $('bm-feat-rows');
   const row = document.createElement('div');
   row.className = 'bm-feat-row';
-  const txt = document.createElement('input');
-  txt.type = 'text'; txt.className = 'feat-name'; txt.maxLength = 500; txt.value = name;
-  txt.placeholder = 'A feature a matching document must disclose…';
+  const txt = document.createElement('textarea');
+  txt.className = 'feat-name'; txt.rows = 2; txt.maxLength = 4000; txt.value = name;
+  txt.placeholder = 'A feature a matching document must disclose… (paste freely — multi-line OK)';
+  autoGrow(txt);
   const sel = document.createElement('select');
   sel.className = 'feat-weight';
   sel.title = 'Importance weight — decisive when candidates tie on points';
@@ -406,7 +422,12 @@ function addFeatureRow(name = '', weight = 1, kind = 'M', sl = 5) {
   const del = document.createElement('button');
   del.className = 'btn small del'; del.textContent = '🗑'; del.title = 'Remove this feature';
   del.onclick = () => { row.remove(); if (!wrap.children.length) addFeatureRow(); };
-  row.append(txt, sel, ksel, slin, del);
+  // textarea on its own full-width line; weight/kind/delete stacked BELOW it so a
+  // narrow pane never squeezes the text box into an unwritable sliver.
+  const controls = document.createElement('div');
+  controls.className = 'feat-controls';
+  controls.append(sel, ksel, slin, del);
+  row.append(txt, controls);
   wrap.appendChild(row);
   return txt;
 }
@@ -431,9 +452,10 @@ function buildAddFeatureBox() {
   lbl.className = 'muted'; lbl.textContent = '➕ Add a feature to this benchmark:';
   const row = document.createElement('div');
   row.className = 'bm-feat-row';
-  const txt = document.createElement('input');
-  txt.type = 'text'; txt.maxLength = 500; txt.className = 'feat-name add-feat-name';
-  txt.placeholder = 'A feature a matching document must disclose…';
+  const txt = document.createElement('textarea');
+  txt.rows = 2; txt.maxLength = 4000; txt.className = 'feat-name add-feat-name';
+  txt.placeholder = 'A feature a matching document must disclose… (paste freely — multi-line OK, Ctrl+Enter to add)';
+  autoGrow(txt);
   const sel = document.createElement('select');
   sel.className = 'feat-weight';
   sel.title = 'Importance weight — decisive when candidates tie on points';
@@ -456,8 +478,13 @@ function buildAddFeatureBox() {
     renderBenchmark(res.benchmark);   // re-render shows the appended feature + a fresh empty input
   };
   add.onclick = submit;
-  txt.onkeydown = e => { if (e.key === 'Enter') submit(); };
-  row.append(txt, sel, ksel, slin, add);
+  // plain Enter = newline (features can be multi-line); Ctrl/⌘+Enter submits
+  txt.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); } };
+  // textarea full-width on top, controls below — stays writable in a narrow pane
+  const controls = document.createElement('div');
+  controls.className = 'feat-controls';
+  controls.append(sel, ksel, slin, add);
+  row.append(txt, controls);
   box.append(lbl, row);
   return box;
 }
@@ -687,6 +714,161 @@ function featureStats(d) {
   }
   return { weighted, matched, total, count: feats.length };
 }
+
+/* ---------- 🧩 Combi: two documents that TOGETHER cover the benchmark ---------- */
+const _SRANK = { yes: 2, partial: 1, no: 0 };
+function _bestStatus(a, b) { return _SRANK[a] >= _SRANK[b] ? a : b; }
+function _statusOf(d, name, kind) { const e = docFeatureEntry(d, name, kind); return e ? e.status : 'no'; }
+function combiKey(aId, bId) { const [lo, hi] = [aId, bId].sort((x, y) => x - y); return `${lo}-${hi}`; }
+// Compute, in code (free, no model call), every genuine 2-document combination from the
+// stored per-feature verdicts. A pair is "complete" when the UNION fully discloses (YES)
+// every MANDATORY feature, and only counts if BOTH docs uniquely contribute a mandatory YES
+// the other lacks (a real combination, not one doc subsuming the other). Single-doc ratings
+// are never touched — this only derives a separate combined rating.
+function computeCombis() {
+  const feats = (currentBm && currentBm.features) || [];
+  const mand = feats.filter(f => (f.kind || 'M') !== 'A');
+  const add = feats.filter(f => (f.kind || 'M') === 'A');
+  bestPartnerById = new Map();
+  if (!featureMode() || !mand.length) return { pairs: [], mand, add, ready: false };
+  const docs = lastDocs.filter(d => d.status === 'fetched' && Array.isArray(d.feature_scores));
+  const totalMandW = mand.reduce((s, f) => s + (f.weight || 1), 0);
+  const totalAddW = add.reduce((s, f) => s + (f.weight || 1), 0);
+  const pairs = [];
+  for (let i = 0; i < docs.length; i++) {
+    for (let j = i + 1; j < docs.length; j++) {
+      const A = docs[i], B = docs[j];
+      let mandW = 0, mandCov = 0, complete = true;
+      const contribA = [], contribB = [];
+      for (const f of mand) {
+        const sa = _statusOf(A, f.name, 'M'), sb = _statusOf(B, f.name, 'M');
+        const u = _bestStatus(sa, sb);
+        if (u === 'yes') { mandW += (f.weight || 1); mandCov++; } else complete = false;
+        if (u === 'partial') mandW += (f.weight || 1) * 0.5;
+        if (sa === 'yes' && sb !== 'yes') contribA.push(f.name);
+        else if (sb === 'yes' && sa !== 'yes') contribB.push(f.name);
+      }
+      if (!contribA.length || !contribB.length) continue;   // not a genuine combination
+      let addW = 0, addCov = 0;
+      for (const f of add) {
+        const u = _bestStatus(_statusOf(A, f.name, 'A'), _statusOf(B, f.name, 'A'));
+        if (u === 'yes') { addW += (f.weight || 1); addCov++; } else if (u === 'partial') addW += (f.weight || 1) * 0.5;
+      }
+      pairs.push({ a: A, b: B, complete, mandW, mandCov, mandTotal: mand.length, totalMandW,
+        addW, addCov, addTotal: add.length, totalAddW, combinedRating: mandW + addW,
+        contribA, contribB });
+    }
+  }
+  pairs.sort((x, y) => (y.complete - x.complete) || (y.mandW - x.mandW) || (y.addW - x.addW)
+    || (((combinedScore(y.a) || 0) + (combinedScore(y.b) || 0)) - ((combinedScore(x.a) || 0) + (combinedScore(x.b) || 0))));
+  // best partner per document (complete pairs win), for the inline hint on each doc row
+  for (const p of pairs) {
+    for (const [self, other] of [[p.a, p.b], [p.b, p.a]]) {
+      const cur = bestPartnerById.get(self.id);
+      if (!cur || (p.complete && !cur.complete) || (p.complete === cur.complete && p.combinedRating > cur.combinedRating)) {
+        bestPartnerById.set(self.id, { partner: other, complete: p.complete, combinedRating: p.combinedRating,
+          mandCov: p.mandCov, mandTotal: p.mandTotal, addCov: p.addCov, addTotal: p.addTotal });
+      }
+    }
+  }
+  return { pairs, mand, add, totalMandW, totalAddW, ready: true };
+}
+
+function runCombi() {
+  combiResult = computeCombis();
+  if (!combiResult.ready) {
+    $('combi-panel').classList.remove('hidden');
+    $('combi-panel').innerHTML = '<div class="muted">🧩 Combi needs a <b>feature-combination benchmark</b> with at least one mandatory feature, and candidates that have been deep-read (so per-feature verdicts exist).</div>';
+    return;
+  }
+  renderCombiPanel();
+  renderDocs(lastDocs);   // re-render so each row shows its best-partner hint
+}
+
+function renderCombiPanel() {
+  const panel = $('combi-panel');
+  panel.classList.remove('hidden');
+  panel.innerHTML = '';
+  const r = combiResult;
+  const complete = r.pairs.filter(p => p.complete);
+  const top = (complete.length ? complete : r.pairs).slice(0, 12);
+  const head = document.createElement('div');
+  head.className = 'combi-head';
+  head.innerHTML = `<b>🧩 Best combinations</b> — two documents that together cover the benchmark `
+    + `<span class="muted">(${complete.length} cover ALL ${r.mand.length} mandatory; combined rating is a separate hint — single scores unchanged)</span>`;
+  panel.appendChild(head);
+  const actions = document.createElement('div');
+  actions.className = 'combi-actions';
+  const judge = document.createElement('button');
+  judge.className = 'btn small'; judge.id = 'combi-judge';
+  judge.textContent = '⚖️ Check combinability (LLM)';
+  judge.title = 'One cheap bulk pass over the top pairs’ digests: is each pair genuinely combinable (real motivation to combine)?';
+  judge.onclick = () => judgeCombinability(top);
+  actions.appendChild(judge);
+  const close = document.createElement('button');
+  close.className = 'btn small'; close.textContent = 'hide';
+  close.onclick = () => { panel.classList.add('hidden'); combiResult = null; bestPartnerById = new Map(); renderDocs(lastDocs); };
+  actions.appendChild(close);
+  panel.appendChild(actions);
+  if (!top.length) {
+    const none = document.createElement('div'); none.className = 'muted';
+    none.textContent = 'No genuine 2-document combination found (no pair where each adds a mandatory feature the other lacks).';
+    panel.appendChild(none);
+    return;
+  }
+  for (const p of top) combiRow(p, panel);
+}
+
+function combiRow(p, panel) {
+  const row = document.createElement('div');
+  row.className = 'combi-row' + (p.complete ? ' complete' : '');
+  const title = document.createElement('div');
+  title.className = 'combi-pair';
+  for (const d of [p.a, p.b]) {
+    const a = document.createElement('a');
+    a.className = 'combi-doc'; a.textContent = d.number || d.title || ('#' + d.id);
+    a.title = 'Jump to this document'; a.onclick = () => scrollToDoc(d.id);
+    title.appendChild(a);
+    if (d === p.a) { const plus = document.createElement('span'); plus.className = 'combi-plus'; plus.textContent = ' + '; title.appendChild(plus); }
+  }
+  const rating = document.createElement('span');
+  rating.className = 'combi-rating';
+  rating.textContent = `⚖ ${p.combinedRating.toFixed(1)}/${(p.totalMandW + p.totalAddW)}`;
+  rating.title = 'Combined rating of the pair: Σ weight of mandatory features the union covers + additional coverage. Separate from each doc’s own score.';
+  title.appendChild(rating);
+  row.appendChild(title);
+  const cov = document.createElement('div');
+  cov.className = 'combi-cov muted';
+  cov.innerHTML = (p.complete ? '✓ covers ALL mandatory' : `~ covers ${p.mandCov}/${p.mandTotal} mandatory`)
+    + (p.addTotal ? ` · ${p.addCov}/${p.addTotal} additional` : '');
+  row.appendChild(cov);
+  const split = document.createElement('div');
+  split.className = 'combi-split muted';
+  split.innerHTML = `<span>${p.a.number || ('#' + p.a.id)} adds: ${p.contribA.join('; ') || '—'}</span>`
+    + `<span>${p.b.number || ('#' + p.b.id)} adds: ${p.contribB.join('; ') || '—'}</span>`;
+  row.appendChild(split);
+  const v = combiMotivations[combiKey(p.a.id, p.b.id)];
+  if (v) {
+    const mv = document.createElement('div');
+    mv.className = 'combi-motiv ' + (v.combinable ? 'ok' : 'no');
+    mv.textContent = (v.combinable ? '✅ combinable — ' : '🚫 not combinable — ') + (v.reason || '');
+    row.appendChild(mv);
+  }
+  panel.appendChild(row);
+}
+
+async function judgeCombinability(pairs) {
+  const btn = $('combi-judge');
+  if (btn) { btn.disabled = true; btn.textContent = '⚖️ judging…'; }
+  const payload = { pairs: pairs.map(p => ({ a_id: p.a.id, b_id: p.b.id,
+    a_features: p.contribA, b_features: p.contribB })) };
+  const res = await api(`/api/tabs/${activeTab}/combi/motivation`,
+    { method: 'POST', body: JSON.stringify(payload) });
+  if (res.error) { if (btn) { btn.disabled = false; btn.textContent = '⚖️ Check combinability (LLM)'; } alert(res.error); return; }
+  Object.assign(combiMotivations, res.results || {});
+  renderCombiPanel();
+}
+
 function scoreSortValue(d, key) {
   if (key === 'weighted') {
     const fst = featureStats(d);
@@ -930,9 +1112,11 @@ function renderDocs(allDocs) {
         for (const f of d.additional_scores) {
           const c = document.createElement('span');
           const icon = f.status === 'present' ? '🟢' : f.status === 'stretch' ? '🟡' : '⚪';
-          c.className = 'chip addl-chip ' + f.status;
+          c.className = 'chip addl-chip clickable ' + f.status;
           c.textContent = `${icon} ${f.name}`;
-          c.title = `${f.status.toUpperCase()} (SL${f.sl || 5}, ★${f.weight || 1})` + (f.evidence ? ` — ${f.evidence}` : '');
+          c.title = `${f.status.toUpperCase()} (SL${f.sl || 5}, ★${f.weight || 1})`
+            + (f.evidence ? ` — ${f.evidence}` : '') + '\n\nClick → every document with this feature + full comments';
+          c.onclick = () => openFeatureModal(f.name, f.weight, 'A', d.id);
           ar.appendChild(c);
         }
         el.appendChild(ar);
@@ -976,13 +1160,28 @@ function renderDocs(allDocs) {
       const mark = { yes: '✓', partial: '~', no: '✗' };
       for (const f of (d.feature_scores || [])) {
         const c = document.createElement('span');
-        c.className = 'chip feat-mark ' + f.status;
+        c.className = 'chip feat-mark clickable ' + f.status;
         c.textContent = `${mark[f.status] || '?'} ${f.name} ·${'★'.repeat(f.weight || 1)}`;
-        if (f.note) c.title = f.note;
+        c.title = (f.note ? f.note + '\n\n' : '') + 'Click → every document with this feature + full comments';
+        c.onclick = () => openFeatureModal(f.name, f.weight, 'M', d.id);
         chips.appendChild(c);
       }
       fw.appendChild(chips);
       el.appendChild(fw);
+    }
+    // 🧩 inline combi hint: this doc's best complementary partner (only after 🧩 Combi was run)
+    const bp = bestPartnerById.get(d.id);
+    if (bp) {
+      const ch = document.createElement('div');
+      ch.className = 'combi-hint' + (bp.complete ? ' complete' : '');
+      const partLabel = bp.partner.number || bp.partner.title || ('#' + bp.partner.id);
+      ch.innerHTML = `🧩 + <a class="combi-doc">${partLabel}</a> → `
+        + (bp.complete ? 'all main' : `${bp.mandCov}/${bp.mandTotal} main`)
+        + (bp.addTotal ? ` + ${bp.addCov}/${bp.addTotal} add` : '')
+        + ` · combi <b>${bp.combinedRating.toFixed(1)}</b>`;
+      ch.title = 'Best document to COMBINE with this one to cover the benchmark. Combined rating is a separate hint — it does not change either document’s own score. Click the number to jump.';
+      ch.querySelector('.combi-doc').onclick = () => scrollToDoc(bp.partner.id);
+      el.appendChild(ch);
     }
     if (d.status === 'fetched') {
       const sz = document.createElement('div');
@@ -1624,6 +1823,9 @@ $('additional-read').onclick = async () => {
   await refreshDocs();   // re-render with the new A-feature chips + bonus
   await reloadChat();
 };
+// 🧩 Combi — compute (free, in code) the best 2-document combinations from the stored
+// per-feature read verdicts, show the panel + each doc's best-partner hint.
+$('combi').onclick = () => { if (activeTab) runCombi(); };
 // ⚖️ Debate finalists: NotebookLM's shortlisted finalists (in its notebook) are read
 // block-by-block by NLM (grounded) and argued by Claude (from stored digests) — a
 // bidirectional reconciliation, one prompt per side. docIds = explicit set (e.g. the
@@ -1701,6 +1903,88 @@ function openViewer(title, doc) {
   $('view-modal').classList.remove('hidden');
 }
 $('view-close').onclick = () => $('view-modal').classList.add('hidden');
+
+/* ---------- feature cross-reference + full comment modal ---------- */
+// A candidate's verdict for one feature, normalised across mandatory (feature_scores,
+// .note) and additional (additional_scores, .evidence) feature kinds.
+const ADDL_STATUS = { present: 'yes', stretch: 'partial', absent: 'no' };  // A-feature → uniform
+function docFeatureEntry(d, name, kind) {
+  const arr = kind === 'A' ? d.additional_scores : d.feature_scores;
+  if (!Array.isArray(arr)) return null;
+  const e = arr.find(x => x.name === name);
+  if (!e) return null;
+  const status = kind === 'A' ? (ADDL_STATUS[e.status] || 'no') : e.status;
+  return { status, note: e.note || e.evidence || '', weight: e.weight || 1, sl: e.sl };
+}
+function scrollToDoc(id) {
+  const card = document.querySelector(`.doc[data-doc-id="${id}"]`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  card.classList.add('doc-flash');
+  setTimeout(() => card.classList.remove('doc-flash'), 1600);
+}
+// Click any feature chip → every document's verdict on THAT feature, with the FULL note
+// (no truncated tooltip). clickedDocId highlights the row you came from.
+function openFeatureModal(name, weight, kind, clickedDocId = null) {
+  $('feat-modal-title').textContent = `🧩 ${name}`;
+  $('feat-modal-sub').textContent =
+    `${kind === 'A' ? 'Additional' : 'Mandatory'} feature · weight ★${weight || 1} — every document below, full comments`;
+  const body = $('feat-modal-body');
+  body.innerHTML = '';
+  const rows = [];
+  for (const d of lastDocs) {
+    const e = docFeatureEntry(d, name, kind);
+    if (e) rows.push({ d, e });
+  }
+  const order = { yes: 0, partial: 1, no: 2 };
+  rows.sort((a, b) => (order[a.e.status] ?? 3) - (order[b.e.status] ?? 3)
+    || ((combinedScore(b.d) ?? 0) - (combinedScore(a.d) ?? 0)));
+  const counts = { yes: 0, partial: 0, no: 0 };
+  for (const r of rows) counts[r.e.status] = (counts[r.e.status] || 0) + 1;
+  const sum = document.createElement('div');
+  sum.className = 'feat-modal-counts';
+  sum.innerHTML = `<span class="feat-mark yes">✓ ${counts.yes} disclose</span>`
+    + `<span class="feat-mark partial">~ ${counts.partial} partial</span>`
+    + `<span class="feat-mark no">✗ ${counts.no} no</span>`;
+  body.appendChild(sum);
+  const mark = { yes: '✓', partial: '~', no: '✗' };
+  let shown = 0;
+  for (const { d, e } of rows) {
+    if (e.status === 'no') continue;          // list docs that HAVE it (yes/partial); 'no' is in the counts
+    shown++;
+    const row = document.createElement('div');
+    row.className = 'feat-doc-row ' + e.status + (d.id === clickedDocId ? ' current' : '');
+    const head = document.createElement('div');
+    head.className = 'feat-doc-head';
+    const num = document.createElement('a');
+    num.className = 'feat-doc-num';
+    num.textContent = `${mark[e.status] || '?'} ${d.number || d.title || ('#' + d.id)}`;
+    num.title = 'Jump to this document';
+    num.onclick = () => { $('feat-modal').classList.add('hidden'); scrollToDoc(d.id); };
+    head.appendChild(num);
+    if (d.id === clickedDocId) {
+      const here = document.createElement('span');
+      here.className = 'chip'; here.textContent = 'this doc';
+      head.appendChild(here);
+    }
+    row.appendChild(head);
+    if (e.note) {
+      const note = document.createElement('div');
+      note.className = 'feat-doc-note';
+      note.textContent = e.note;               // FULL comment, wrapped — the readable version
+      row.appendChild(note);
+    }
+    body.appendChild(row);
+  }
+  if (!shown) {
+    const none = document.createElement('div');
+    none.className = 'muted'; none.textContent = 'No document discloses this feature yet.';
+    body.appendChild(none);
+  }
+  $('feat-modal').classList.remove('hidden');
+}
+$('feat-modal-close').onclick = () => $('feat-modal').classList.add('hidden');
+$('feat-modal').onclick = e => { if (e.target === $('feat-modal')) $('feat-modal').classList.add('hidden'); };
 
 /* ---------- lesson modal ---------- */
 function openLessonModal(answerText) {
@@ -2201,6 +2485,52 @@ for (const key of Object.keys(PANE_OF)) {
   });
 }
 applyLayout();
+
+/* ---------- draggable pane widths (regulate the width of the panes) ---------- */
+const COL_VAR = { bm: '--col-bm', docs: '--col-docs' };
+const COL_DEFAULT = { bm: 300, docs: 440 };
+const COL_MIN = { bm: 180, docs: 240 };
+const COL_MAX = { bm: 1200, docs: 1200 };
+let cols = {};
+try { cols = JSON.parse(localStorage.getItem('pb-cols') || '{}'); } catch {}
+function applyCols() {
+  const main = $('main');
+  for (const key of Object.keys(COL_VAR)) {
+    if (cols[key]) main.style.setProperty(COL_VAR[key], cols[key] + 'px');
+    else main.style.removeProperty(COL_VAR[key]);
+  }
+}
+applyCols();
+for (const handle of document.querySelectorAll('.resizer')) {
+  const key = handle.dataset.resize;
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = cols[key] || COL_DEFAULT[key];
+    handle.classList.add('dragging');
+    document.body.classList.add('col-resizing');
+    const onMove = ev => {
+      const w = Math.max(COL_MIN[key], Math.min(COL_MAX[key], startW + (ev.clientX - startX)));
+      cols[key] = Math.round(w);
+      $('main').style.setProperty(COL_VAR[key], cols[key] + 'px');
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      handle.classList.remove('dragging');
+      document.body.classList.remove('col-resizing');
+      localStorage.setItem('pb-cols', JSON.stringify(cols));
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  // double-click a divider to reset that pane to its default width
+  handle.addEventListener('dblclick', () => {
+    delete cols[key];
+    localStorage.setItem('pb-cols', JSON.stringify(cols));
+    applyCols();
+  });
+}
 
 /* ---------- boot ---------- */
 (async () => {

@@ -31,7 +31,7 @@ class FeatureItem(BaseModel):
     # One target feature added "one by one" with its own importance weight (1–5,
     # default 1). The weight feeds the candidate ranking: the primary rank key is
     # the sum of the weights a candidate discloses, broken by how many it matches.
-    name: str = Field(min_length=1, max_length=500)
+    name: str = Field(min_length=1, max_length=4000)
     weight: int = Field(default=1, ge=1, le=5)
     # kind: "M" = mandatory/fundamental (drives the base score); "A" = additional (presence
     # raises the score, absence never lowers it). sl = stretch level 1-10 for A features:
@@ -170,6 +170,22 @@ class AdditionalReadRequest(BaseModel):
     set (the UI sends its top-N in ranked order); None → top_n by Claude score."""
     doc_ids: list[int] | None = None
     top_n: int = Field(default=10, ge=1, le=50)
+    model: str | None = None
+
+
+class CombiPair(BaseModel):
+    """One candidate PAIR the UI asks to judge for combinability. a_features / b_features =
+    the mandatory feature names each reference uniquely supplies (for the LLM's context)."""
+    a_id: int
+    b_id: int
+    a_features: list[str] = Field(default_factory=list)
+    b_features: list[str] = Field(default_factory=list)
+
+
+class CombiMotivationRequest(BaseModel):
+    """🧩 Combi: judge whether each given document PAIR is genuinely combinable (motivation to
+    combine) to cover the benchmark. The UI sends its top complete pairs; one bulk LLM pass."""
+    pairs: list[CombiPair] = Field(default_factory=list)
     model: str | None = None
 
 

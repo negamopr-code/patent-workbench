@@ -47,12 +47,25 @@ h4 { font-size: 13px; margin: 10px 0 6px; }
 .tab-add:hover { color: var(--accent); border-color: var(--accent); }
 
 .main {
-  flex: 1; display: grid; grid-template-columns: 300px 440px 1fr;
-  gap: 10px; padding: 10px; min-height: 0;
+  flex: 1; display: grid;
+  /* tracks 2 & 4 are draggable resizers acting as the gutters; widths are
+     user-adjustable via the --col-* variables (drag handles + localStorage). */
+  grid-template-columns: var(--col-bm, 300px) 10px var(--col-docs, 440px) 10px 1fr;
+  padding: 10px; min-height: 0;
 }
-.main.bm-collapsed { grid-template-columns: 38px 440px 1fr; }
-.main.cand-collapsed { grid-template-columns: 300px 38px 1fr; }
-.main.bm-collapsed.cand-collapsed { grid-template-columns: 38px 38px 1fr; }
+/* collapse just pins the variable (— !important beats the dragged inline value) */
+.main.bm-collapsed { --col-bm: 38px !important; }
+.main.cand-collapsed { --col-docs: 38px !important; }
+
+/* draggable column dividers */
+.resizer {
+  cursor: col-resize; align-self: stretch; margin: 0 2px;
+  border-radius: 4px; background: transparent; transition: background .12s;
+}
+.resizer:hover, .resizer.dragging { background: var(--accent); }
+.main.bm-collapsed .resizer[data-resize="bm"],
+.main.cand-collapsed .resizer[data-resize="docs"] { pointer-events: none; opacity: 0; }
+body.col-resizing { cursor: col-resize; user-select: none; }
 
 /* collapsible panes */
 .pane-head { display: flex; align-items: center; gap: 6px; }
@@ -141,11 +154,23 @@ textarea, select, input[type="text"] {
 .bm-feat-actions { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
 .bm-feat-actions .primary { margin-left: auto; }
 
-/* one-by-one weighted feature rows */
+/* one-by-one weighted feature rows — STACKED: a full-width text box on top, the
+   weight / kind / delete controls on a row below it. Stacking keeps the text box
+   writable even when the pane is narrow (a horizontal row squeezed it to a sliver). */
 .bm-feat-rows-wrap { margin: 6px 0; }
-.bm-feat-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
-.bm-feat-row .feat-name { flex: 1; margin-bottom: 0; }
-.bm-feat-row .feat-weight { width: auto; flex: 0 0 auto; }
+.bm-feat-row { display: flex; flex-direction: column; gap: 6px; align-items: stretch; margin-bottom: 12px; }
+/* the feature text is a real multi-line box you can paste into (override the tall
+   150px .bm-features textarea default); it grows as you type and is drag-resizable */
+.bm-feat-row textarea.feat-name {
+  width: 100%; box-sizing: border-box; margin-bottom: 0;
+  min-height: 3.4em; max-height: 240px;
+  line-height: 1.35; resize: vertical; font-family: inherit; font-size: inherit;
+}
+.feat-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.feat-controls .feat-weight, .feat-controls select, .feat-controls .feat-sl {
+  width: auto; flex: 0 0 auto; margin-bottom: 0;
+}
+.feat-controls .del { margin-left: auto; }
 .bm-feat-freeform { margin: 8px 0; }
 .bm-feat-freeform summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 .bm-feat-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
@@ -162,6 +187,43 @@ textarea, select, input[type="text"] {
 .feat-mark.yes { color: var(--ok); border-color: var(--ok); }
 .feat-mark.partial { color: var(--warn, #c90); border-color: var(--warn, #c90); }
 .feat-mark.no { color: var(--muted); opacity: 0.7; }
+.chip.clickable { cursor: pointer; }
+.chip.clickable:hover { border-color: var(--accent); filter: brightness(1.25); }
+
+/* feature cross-reference modal (every document with a given feature + full comments) */
+.feat-modal-body { margin: 10px 0; max-height: 64vh; overflow-y: auto; }
+.feat-modal-counts { display: flex; gap: 10px; margin-bottom: 8px; font-size: 12px; }
+.feat-modal-counts .feat-mark { padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; }
+.feat-doc-row { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--pane2); }
+.feat-doc-row.current { border-color: var(--accent); }
+.feat-doc-row.yes { border-left: 3px solid var(--ok); }
+.feat-doc-row.partial { border-left: 3px solid var(--warn, #c90); }
+.feat-doc-head { display: flex; align-items: center; gap: 8px; }
+.feat-doc-num { cursor: pointer; color: var(--accent); font-family: ui-monospace, monospace; font-weight: 600; }
+.feat-doc-num:hover { text-decoration: underline; }
+.feat-doc-note { margin-top: 5px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+.doc.doc-flash { outline: 2px solid var(--accent); transition: outline-color 1.4s; }
+
+/* 🧩 Combi panel: best 2-document combinations */
+.combi-panel { margin: 10px 0; padding: 10px 12px; background: var(--pane2); border: 1px solid var(--accent2); border-radius: 10px; }
+.combi-head { font-size: 13px; margin-bottom: 6px; }
+.combi-actions { display: flex; gap: 6px; margin-bottom: 8px; }
+.combi-row { border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; margin-bottom: 7px; background: var(--pane); }
+.combi-row.complete { border-left: 3px solid var(--ok); }
+.combi-pair { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-family: ui-monospace, monospace; }
+.combi-doc { cursor: pointer; color: var(--accent); font-weight: 600; }
+.combi-doc:hover { text-decoration: underline; }
+.combi-plus { color: var(--muted); }
+.combi-rating { margin-left: auto; font-weight: 700; color: var(--accent2); }
+.combi-cov { font-size: 12px; margin-top: 3px; }
+.combi-split { display: flex; flex-direction: column; gap: 1px; font-size: 11px; margin-top: 3px; }
+.combi-motiv { margin-top: 5px; font-size: 12px; border-radius: 6px; padding: 4px 7px; }
+.combi-motiv.ok { color: var(--ok); border: 1px solid var(--ok); }
+.combi-motiv.no { color: var(--muted); border: 1px solid var(--border); }
+/* inline best-partner hint on each candidate row */
+.combi-hint { font-size: 12px; margin: 3px 0; color: var(--accent2); }
+.combi-hint.complete { font-weight: 600; }
+.combi-hint .combi-doc { cursor: pointer; color: var(--accent); }
 
 /* candidates pane */
 .pane-docs #in-text { min-height: 74px; font-family: ui-monospace, monospace; }

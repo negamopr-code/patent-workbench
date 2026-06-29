@@ -1815,6 +1815,20 @@ def test_benchmark_add_feature_preserves_freeform_text(client):
     assert [f["name"] for f in bm["features"]] == ["a thermistor"]
 
 
+def test_benchmark_add_feature_accepts_long_pasted_text(client):
+    # a feature pasted from a patent claim can be a long paragraph — the paste-
+    # friendly textarea allows up to 4000 chars, so the server must too (was 500).
+    tab = client.post("/api/tabs", json={"name": "LongFeat"}).json()
+    tid = tab["id"]
+    long_name = ("a rechargeable battery cell " + ("with a guardian protection sub-circuit " * 40)).strip()
+    assert len(long_name) > 500
+    r = client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                    json={"name": long_name, "weight": 3})
+    assert r.status_code == 200, r.text
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert bm["features"][0]["name"] == long_name
+
+
 def test_benchmark_add_feature_rejects_document_benchmark(client):
     tab = client.post("/api/tabs", json={"name": "AddFeat3"}).json()
     tid = tab["id"]
@@ -1831,6 +1845,60 @@ def test_benchmark_add_feature_creates_when_none(client):
     assert r["ok"]
     bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
     assert bm["source"] == "features" and bm["features"][0]["name"] == "a battery"
+
+
+def test_parse_combi_motivation_blocks():
+    text = ("=== 1 ===\nCOMBINABLE: YES\nWHY: same field, A adds the gauge B lacks.\n"
+            "=== 2 ===\nCOMBINABLE: NO\nWHY: unrelated domains, no motivation.")
+    out = claude_bridge.parse_combi_motivation(text)
+    assert out["1"]["combinable"] is True and "gauge" in out["1"]["reason"]
+    assert out["2"]["combinable"] is False
+
+
+def _feature_doc(db, tid, number, scores):
+    """Insert a fetched candidate with the given per-feature verdicts."""
+    import json as _j
+    doc_id = db.add_documents(tid, [number])["inserted"][0]
+    db.update_document(doc_id, status="fetched", digest=f"digest of {number}",
+                       feature_scores=_j.dumps(scores))
+    return doc_id
+
+
+def test_combi_motivation_endpoint_persists_and_returns(client, monkeypatch):
+    import patentbench.db as db
+    tab = client.post("/api/tabs", json={"name": "Combi"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "a battery", "weight": 3},
+                                   {"name": "a gauge", "weight": 2}], "title": "b+g"})
+    # A discloses battery only; B discloses gauge only → together they cover all mandatory
+    a_id = _feature_doc(db, tid, "US1111111A",
+                        [{"name": "a battery", "weight": 3, "status": "yes", "note": "cell"},
+                         {"name": "a gauge", "weight": 2, "status": "no", "note": ""}])
+    b_id = _feature_doc(db, tid, "US2222222A",
+                        [{"name": "a battery", "weight": 3, "status": "no", "note": ""},
+                         {"name": "a gauge", "weight": 2, "status": "yes", "note": "fuel gauge"}])
+    monkeypatch.setattr(claude_bridge, "combi_motivation",
+                        lambda bm, pairs, model=None: {"results": {"1": {"combinable": True,
+                                                       "reason": "same field; complementary"}},
+                                                       "model": "claude-sonnet-4-6"})
+    r = client.post(f"/api/tabs/{tid}/combi/motivation",
+                    json={"pairs": [{"a_id": a_id, "b_id": b_id,
+                                     "a_features": ["a battery"], "b_features": ["a gauge"]}]}).json()
+    lo, hi = sorted((a_id, b_id))
+    assert r["ok"] and r["results"][f"{lo}-{hi}"]["combinable"] is True
+    # persisted → surfaced in state for the next page load
+    cm = client.get(f"/api/tabs/{tid}/state").json()["combi_motivations"]
+    assert cm[f"{lo}-{hi}"]["combinable"] is True and "complementary" in cm[f"{lo}-{hi}"]["reason"]
+
+
+def test_combi_motivation_requires_feature_benchmark(client):
+    tab = client.post("/api/tabs", json={"name": "CombiDoc"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    r = client.post(f"/api/tabs/{tid}/combi/motivation",
+                    json={"pairs": [{"a_id": 1, "b_id": 2}]})
+    assert r.status_code == 400
 
 
 def test_parse_additional_maps_status_by_index():

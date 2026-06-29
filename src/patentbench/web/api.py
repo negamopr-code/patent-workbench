@@ -135,7 +135,8 @@ def tab_state(tab_id: int):
     return {"benchmark": _benchmark_view(tab_id),
             "documents": docs,
             "messages": db.list_messages(tab_id),
-            "notebook": db.get_notebook_config(tab_id)}
+            "notebook": db.get_notebook_config(tab_id),
+            "combi_motivations": db.get_combi_motivations(tab_id)}
 
 
 # ---------- benchmark (the reference document, one per tab) ----------
@@ -2060,6 +2061,49 @@ def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
         f"{len(a_features)} additional feature(s): {names}. Present/stretched features now ADD to "
         "each doc's score (absence never lowers it) — see the 🟢/🟡 chips and the +bonus in the score.")
     return {"ok": True, "assessed": stored, "a_features": len(a_features), "results": results}
+
+
+@app.post("/api/tabs/{tab_id}/combi/motivation")
+def combi_motivation_ep(tab_id: int, body: schemas.CombiMotivationRequest):
+    """🧩 COMBI. For each candidate PAIR the UI found (two docs that TOGETHER cover all the
+    benchmark's mandatory features), judge in ONE bulk LLM pass over their STORED DIGESTS whether
+    the two are genuinely combinable (real §103-style motivation). Persists each verdict so it
+    survives reload; never touches single-document scores. The coverage math itself is done in the
+    UI (free, from stored feature verdicts) — this only adds the motivation judgment."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("source") != "features":
+        raise HTTPException(400, "combi needs a feature-combination benchmark")
+    by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
+             if d["status"] == "fetched"}
+    pairs, keys = [], []
+    for p in body.pairs[:12]:                         # cap the bulk call to the top dozen pairs
+        a, b = by_id.get(p.a_id), by_id.get(p.b_id)
+        if not a or not b:
+            continue
+        pairs.append({"a": a, "b": b, "a_features": p.a_features, "b_features": p.b_features})
+        keys.append((p.a_id, p.b_id))
+    if not pairs:
+        raise HTTPException(400, "no valid fetched document pairs to judge")
+    res = claude_bridge.combi_motivation(bm, pairs, model=_read_model(body.model))
+    if "error" in res:
+        raise HTTPException(400, f"combi motivation failed: {res['error']}")
+    results = res.get("results") or {}
+    out = {}
+    for i, (a_id, b_id) in enumerate(keys, 1):
+        v = results.get(str(i))
+        if not v:
+            continue
+        db.set_combi_motivation(tab_id, a_id, b_id, v["combinable"], v.get("reason") or "",
+                                res.get("model"))
+        lo, hi = sorted((a_id, b_id))
+        out[f"{lo}-{hi}"] = {"combinable": v["combinable"], "reason": v.get("reason") or "",
+                             "model": res.get("model")}
+    db.append_message(tab_id, "s",
+        f"🧩 Judged combinability of {len(out)} document pair(s) ({res.get('model') or 'sonnet'}) — "
+        "each pair's two references TOGETHER cover all mandatory benchmark features. Verdicts are a "
+        "hint of what a 2-reference combination achieves; they do NOT change any single document's score.")
+    return {"ok": True, "results": out, "model": res.get("model")}
 
 
 @app.post("/api/tabs/{tab_id}/reconcile")

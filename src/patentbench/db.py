@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS nlm_query_cache(
   question TEXT,
   answer TEXT,
   created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS combi_motivation(
+  tab_id INTEGER NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+  a_id INTEGER NOT NULL,
+  b_id INTEGER NOT NULL,
+  combinable INTEGER NOT NULL,
+  reason TEXT,
+  model TEXT,
+  ts INTEGER NOT NULL,
+  PRIMARY KEY(tab_id, a_id, b_id));
 CREATE INDEX IF NOT EXISTS idx_messages_tab ON messages(tab_id, id);
 CREATE INDEX IF NOT EXISTS idx_documents_tab ON documents(tab_id, id);
 """
@@ -478,6 +487,31 @@ def clear_benchmark(tab_id: int) -> list[dict]:
     with _conn() as c:
         c.execute("DELETE FROM benchmark WHERE tab_id=?", (tab_id,))
     return (bm or {}).get("files") or []
+
+
+# ---------- combi (two-document combination) motivation verdicts ----------
+
+def set_combi_motivation(tab_id: int, a_id: int, b_id: int, combinable: bool,
+                         reason: str, model: str | None) -> None:
+    """Persist the LLM 'motivation to combine' verdict for a document PAIR. Stored with the
+    ids sorted so (a,b) and (b,a) collapse to one row (the combination is order-independent)."""
+    lo, hi = sorted((int(a_id), int(b_id)))
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO combi_motivation(tab_id, a_id, b_id, combinable, reason, model, ts) "
+            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(tab_id, a_id, b_id) DO UPDATE SET "
+            "combinable=excluded.combinable, reason=excluded.reason, model=excluded.model, ts=excluded.ts",
+            (tab_id, lo, hi, 1 if combinable else 0, reason, model, _now()))
+
+
+def get_combi_motivations(tab_id: int) -> dict:
+    """All stored pair verdicts for a tab, keyed 'lo-hi' (ids sorted) → {combinable, reason, model, ts}."""
+    with _conn() as c:
+        rows = c.execute("SELECT a_id, b_id, combinable, reason, model, ts FROM combi_motivation "
+                         "WHERE tab_id=?", (tab_id,)).fetchall()
+    return {f"{r['a_id']}-{r['b_id']}": {"combinable": bool(r["combinable"]),
+                                         "reason": r["reason"] or "", "model": r["model"],
+                                         "ts": r["ts"]} for r in rows}
 
 
 # ---------- uploads ----------

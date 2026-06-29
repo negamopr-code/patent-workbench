@@ -65,6 +65,9 @@
     <div id="bm-status" class="muted"></div>
   </section>
 
+  <!-- drag to widen the benchmark / candidates panes -->
+  <div class="resizer" data-resize="bm" title="Drag to resize this pane (double-click to reset)"></div>
+
   <!-- MIDDLE: candidate documents -->
   <section id="pane-docs" class="pane pane-docs">
     <h2 class="pane-head"><button class="collapse-btn" data-pane="docs" title="Collapse / expand this section">▾</button><span class="pane-title">📚 Candidates <span id="doc-count" class="chip"></span>
@@ -116,13 +119,18 @@
       <button id="nlm-rate" class="btn small" title="Ask NotebookLM to rate candidates not yet rated (already-rated ones are skipped) against the benchmark, to compare 📓 NLM vs 🤖 Claude. Costs ONE query PER candidate — for a quick pick use 📓 NLM shortlist instead.">📓 NLM-rate all candidates</button>
       <button id="digest-rescore" class="btn small" title="♻️ RE-CHECK (cheap). After changing the benchmark, re-score the top-N candidates against the CURRENT benchmark from their stored digests — ONE bulk sonnet pass, NO full-text re-read and NO downgrade. Scores are tagged ·digest. Use this instead of 🤖 deep-read-all when you just tweaked a feature; run a full deep-compare only when you want the rigorous opus read back.">♻️ Re-check vs benchmark (digests)</button>
       <button id="additional-read" class="btn small" title="➕ ADDITIONAL READ (cheap). Check only the benchmark's ADDITIONAL (A) features against the top-N candidates, in ONE bulk sonnet pass over their stored digests (no full-text re-read). Present/stretched A-features ADD to the score (absence never lowers it). Define A-features in the benchmark first (mark them 'A', set a stretch level).">➕ Additional read (top-N)</button>
+      <button id="combi" class="btn small" title="🧩 Find pairs of documents that, COMBINED, cover all the benchmark's mandatory features (+ the most additional ones). Computed for free from the per-feature read verdicts; shows a separate combined rating + each document's best partner — it never changes a single document's own score.">🧩 Combi (2-doc coverage)</button>
       <button id="reconcile" class="btn small hidden" title="Explain — in one cheap call over the stored rating notes — why 📓 NLM and 🤖 Claude disagree on the candidates where they diverge most">🔍 Why the gap?</button>
       <button id="nlm-challenge" class="btn small" title="Bidirectional debate over BOTH sides' picks — NotebookLM's shortlist AND Claude's high-scored picks (added into the notebook so NLM can judge them too). NLM reads each block-by-block (grounded); Claude reconciles on OPUS into a consensus + disputed list, explaining why each side ranked as it did. Run 🧺 Consolidate first so they share one notebook.">⚖️ Debate picks (Claude↔NLM, opus)</button>
       <span id="rate-status" class="muted"></span>
       <button id="pipeline-resume" class="btn small hidden" title="Resume the interrupted consolidate→shortlist→debate job from where it stopped (reuses the notebook it already created)">▶️ Resume pipeline</button>
     </div>
+    <div id="combi-panel" class="combi-panel hidden"></div>
     <div id="docs" class="docs"></div>
   </section>
+
+  <!-- drag to widen the candidates pane / shrink the chat -->
+  <div class="resizer" data-resize="docs" title="Drag to resize this pane (double-click to reset)"></div>
 
   <!-- RIGHT: chat -->
   <section class="pane pane-chat">
@@ -252,6 +260,16 @@
     <div id="view-meta" class="muted"></div>
     <pre id="view-body" class="view-body"></pre>
     <div class="row right"><button id="view-close" class="btn">Close</button></div>
+  </div>
+</div>
+
+<!-- Feature cross-reference modal: every document disclosing a given feature, with full notes -->
+<div id="feat-modal" class="modal hidden">
+  <div class="modal-box wide">
+    <h3 id="feat-modal-title">Feature</h3>
+    <div id="feat-modal-sub" class="muted"></div>
+    <div id="feat-modal-body" class="feat-modal-body"></div>
+    <div class="row right"><button id="feat-modal-close" class="btn">Close</button></div>
   </div>
 </div>
 
