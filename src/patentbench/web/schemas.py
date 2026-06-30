@@ -27,6 +27,11 @@ class BenchmarkSet(BaseModel):
     text: str = Field(min_length=1, max_length=2000)   # a number or a link containing one
 
 
+class BenchmarkTranscribe(BaseModel):
+    # Decline the cross-tab reuse offer and OCR the uploaded benchmark pages anew.
+    reading_model: str | None = None
+
+
 class FeatureItem(BaseModel):
     # One target feature added "one by one" with its own importance weight (1–5,
     # default 1). The weight feeds the candidate ranking: the primary rank key is

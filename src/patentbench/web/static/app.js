@@ -224,6 +224,16 @@ async function selectTab(id) {
 }
 
 /* ---------- benchmark (reference document) ---------- */
+// Re-pull just the benchmark view (e.g. after figure captioning finishes).
+async function refreshBenchmark(tabAtCall = activeTab, tries = 0) {
+  const st = await api(`/api/tabs/${tabAtCall}/state`);
+  if (activeTab !== tabAtCall || st.error) return;
+  renderBenchmark(st.benchmark);
+  const bm = st.benchmark;
+  if (bm && bm.number && !bm.text && (bm.figures_n === 0 || bm.figures_n == null)
+      && bm.figures_total && tries < 60)
+    setTimeout(() => refreshBenchmark(tabAtCall, tries + 1), 6000);
+}
 function renderBenchmark(bm) {
   clearTimeout(bmPoll);
   currentBm = bm;
@@ -259,7 +269,8 @@ function renderBenchmark(bm) {
     view.title = 'Show the stored content of the benchmark';
     view.onclick = async () => {
       const full = await api(`/api/tabs/${activeTab}/benchmark/full`);
-      openViewer(full.number || full.title || 'Benchmark', full);
+      openViewer(full.number || full.title || 'Benchmark', full,
+                 `/api/tabs/${activeTab}/benchmark/figure`);
     };
     row.appendChild(view);
   }
@@ -269,6 +280,27 @@ function renderBenchmark(bm) {
     edit.title = 'Add / remove / re-weight the target features and re-save';
     edit.onclick = () => openFeatureEditor(bm);
     row.appendChild(edit);
+  }
+  // number-based benchmark (has a number, not an upload/feature spec) can have its
+  // drawing sheets vision-read so the benchmark's figures are groundable too
+  if (bm.status === 'ready' && bm.number && !bm.text) {
+    if (bm.figures_n > 0) {
+      const tag = document.createElement('span');
+      tag.className = 'chip'; tag.textContent = `🖼 ${bm.figures_n} figures`;
+      tag.title = 'Benchmark drawings vision-read into its text — groundable by figure number.';
+      row.appendChild(tag);
+    } else {
+      const fb = document.createElement('button');
+      fb.className = 'btn small'; fb.textContent = '🖼 Read figures';
+      fb.title = 'Vision-read the benchmark’s drawing sheets into its text.';
+      fb.onclick = async () => {
+        fb.disabled = true; fb.textContent = '🖼 reading…';
+        const r = await api(`/api/tabs/${activeTab}/benchmark/figures`, { method: 'POST' });
+        if (r.error) { fb.disabled = false; fb.textContent = `error: ${r.error}`; return; }
+        setTimeout(() => refreshBenchmark(), 6000);
+      };
+      row.appendChild(fb);
+    }
   }
   const del = document.createElement('button');
   del.className = 'btn small del'; del.textContent = '🗑';
@@ -557,6 +589,23 @@ async function uploadBenchmark(fileList) {
   const res = await api(`/api/tabs/${activeTab}/benchmark/upload`, { method: 'POST', body: fd });
   $('bm-file').value = '';
   if (res.error) { $('bm-status').textContent = `Error: ${res.error}`; return; }
+  // Identical file-set already transcribed elsewhere → offer reuse instead of re-OCR.
+  if (res.reuse) {
+    const r = res.reuse;
+    const m = r.text_model ? ` by ${r.text_model.replace('claude-', '')}` : '';
+    if (confirm(`These exact files were already transcribed${m} in tab “${r.tab_name || '?'}” ` +
+                `(${r.chars} chars). Reuse that transcription instead of re-running OCR?`)) {
+      const rr = await api(`/api/tabs/${activeTab}/benchmark/reuse`, { method: 'POST' });
+      $('bm-status').textContent = rr.error ? `Error: ${rr.error}` : '';
+      renderBenchmark(rr.benchmark || res.benchmark);
+      return;
+    }
+    const rr = await api(`/api/tabs/${activeTab}/benchmark/transcribe`, {
+      method: 'POST', body: JSON.stringify({ reading_model: readModelValue() }) });
+    $('bm-status').textContent = rr.error ? `Error: ${rr.error}` : '';
+    renderBenchmark(rr.benchmark || res.benchmark);
+    return;
+  }
   $('bm-status').textContent = '';
   renderBenchmark(res.benchmark);
 }
@@ -1140,9 +1189,12 @@ function renderDocs(allDocs) {
       // fetched but never full-read — make that visible so it's clearly pending a read
       const r = document.createElement('div');
       r.className = 'read-meta muted';
-      r.textContent = '🤖 not yet full-read';
+      const dm = d.digest_model ? ` · digest ${d.digest_model.replace('claude-', '')}` : '';
+      const tm = d.text_model ? ` · OCR ${d.text_model.replace('claude-', '')}` : '';
+      r.textContent = '🤖 not yet full-read' + dm + tm;
       el.appendChild(r);
     }
+    if (d.status === 'fetched') el.appendChild(buildFiguresRow(d));
     const fst = featureStats(d);
     if (fst) {
       const fw = document.createElement('div');
@@ -1215,7 +1267,7 @@ function renderDocs(allDocs) {
       view.title = 'Show the stored full text';
       view.onclick = async () => {
         const full = await api(`/api/tabs/${activeTab}/documents/${d.id}`);
-        openViewer(full.number, full);
+        openViewer(full.number, full, `/api/tabs/${activeTab}/documents/${d.id}/figure`);
       };
       row2.appendChild(view);
     }
@@ -1321,8 +1373,55 @@ $('in-add').onclick = async () => {
   $('in-text').value = '';
   $('upload-status').textContent =
     `Added ${res.inserted.length}` + (res.skipped.length ? `, already present: ${res.skipped.join(', ')}` : '');
+  await maybePromptReuse(res);
   refreshDocs();
 };
+
+/* ---------- cross-tab reuse (a doc OCR'd/fetched in another tab) ---------- */
+// When documents_add held back numbers already processed elsewhere, ASK before
+// re-doing the work: reuse the stored body + digest, or fetch fresh.
+function maybePromptReuse(res) {
+  const reusable = (res && res.reusable) || [];
+  if (!reusable.length) return Promise.resolve();
+  return new Promise(resolve => {
+    const body = $('reuse-modal-body');
+    body.innerHTML = '';
+    $('reuse-modal-sub').textContent =
+      `${reusable.length} document(s) were already processed in another tab. ` +
+      `Reuse the stored full text + digest, or re-fetch from scratch?`;
+    for (const r of reusable) {
+      const label = document.createElement('label');
+      label.className = 'reuse-row';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = true; cb.dataset.docId = r.doc_id;
+      const models = [r.text_model && `OCR ${r.text_model.replace('claude-', '')}`,
+                      r.digest_model && `digest ${r.digest_model.replace('claude-', '')}`]
+                     .filter(Boolean).join(', ');
+      const txt = document.createElement('span');
+      txt.innerHTML = `<b>${r.number}</b> — in tab “${r.tab_name || '?'}”` +
+        (models ? ` <span class="muted">(${models})</span>` : '');
+      label.appendChild(cb); label.appendChild(txt);
+      body.appendChild(label);
+    }
+    const finish = () => { $('reuse-modal').classList.add('hidden'); resolve(); };
+    $('reuse-do').onclick = async () => {
+      const cbs = [...body.querySelectorAll('input[type=checkbox]')];
+      for (const cb of cbs) {
+        const id = cb.dataset.docId;
+        if (cb.checked) await api(`/api/tabs/${activeTab}/documents/${id}/reuse`, { method: 'POST' });
+        else await api(`/api/tabs/${activeTab}/documents/${id}/refetch`, { method: 'POST' });
+      }
+      finish(); refreshDocs();
+    };
+    $('reuse-skip').onclick = async () => {
+      for (const r of reusable)
+        await api(`/api/tabs/${activeTab}/documents/${r.doc_id}/refetch`, { method: 'POST' });
+      finish(); refreshDocs();
+    };
+    $('reuse-modal').classList.remove('hidden');
+  });
+}
+$('reuse-modal').onclick = e => { if (e.target === $('reuse-modal')) $('reuse-modal').classList.add('hidden'); };
 
 /* ---------- upload ---------- */
 const dz = $('dropzone');
@@ -1389,6 +1488,7 @@ $('cand-add').onclick = async () => {
                                            reading_model: readModelValue() }) });
   $('candidates').classList.add('hidden');
   $('upload-status').textContent = res.error || `Added ${res.inserted.length} document(s).`;
+  await maybePromptReuse(res);
   refreshDocs();
 };
 
@@ -1891,7 +1991,48 @@ $('q').onkeydown = e => {
 };
 
 /* ---------- content viewer ---------- */
-function openViewer(title, doc) {
+// Figures row on a fetched candidate card: shows the captioned-figure count (so you
+// know figures are groundable) or a 🖼 Read figures button to caption them on demand.
+function buildFiguresRow(d) {
+  const row = document.createElement('div');
+  row.className = 'read-meta fig-meta';
+  if (d.figures_n > 0) {
+    row.classList.add('muted');
+    row.textContent = `🖼 ${d.figures_n} figure(s) read — ask about figure numbers / reference numerals`;
+    row.title = 'Drawing sheets were vision-read into the text; chat & deep-compare can cite them like paragraphs.';
+  } else if (d.figures_n === 0) {
+    row.classList.add('muted');
+    row.textContent = '🖼 no drawings found';
+  } else {
+    const btn = document.createElement('button');
+    btn.className = 'btn small'; btn.textContent = '🖼 Read figures';
+    btn.title = 'Download this patent’s drawing sheets and vision-read them into the text, '
+      + 'so you can ask about figure numbers & reference numerals.';
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = '🖼 reading figures…';
+      const r = await api(`/api/tabs/${activeTab}/documents/${d.id}/figures?reading_model=${encodeURIComponent(readModelValue())}`,
+                          { method: 'POST' });
+      if (r.error) { btn.disabled = false; btn.textContent = `error: ${r.error}`; return; }
+      pollFiguresDone(d.id);
+    };
+    row.appendChild(btn);
+  }
+  return row;
+}
+
+// Poll the doc list until this doc's figures finished captioning (figures_n set).
+let figPoll = {};
+function pollFiguresDone(docId, tries = 0) {
+  clearTimeout(figPoll[docId]);
+  figPoll[docId] = setTimeout(async () => {
+    await refreshDocs();
+    const d = (lastDocs || []).find(x => x.id === docId);
+    if (d && (d.figures_n === null || d.figures_n === undefined) && tries < 120)
+      pollFiguresDone(docId, tries + 1);
+  }, 5000);
+}
+
+function openViewer(title, doc, figBase = null) {
   $('view-title').textContent = title;
   $('view-meta').textContent = doc.title || '';
   const parts = [];
@@ -1900,6 +2041,32 @@ function openViewer(title, doc) {
     if (doc[key] && typeof doc[key] === 'string') parts.push(`===== ${label} =====\n${doc[key]}`);
   }
   $('view-body').textContent = parts.join('\n\n') || '(no stored text)';
+  // drawing sheets (the real images) + their vision captions, if any
+  const fwrap = $('view-figs');
+  fwrap.innerHTML = '';
+  let figs = doc.figures;
+  if (typeof figs === 'string') { try { figs = JSON.parse(figs); } catch { figs = null; } }
+  if (figBase && Array.isArray(figs) && figs.length) {
+    const h = document.createElement('div');
+    h.className = 'view-figs-hdr'; h.textContent = `🖼 ${figs.length} drawing sheet(s)`;
+    fwrap.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'view-figs-grid';
+    figs.forEach((f, i) => {
+      const cell = document.createElement('figure'); cell.className = 'view-fig';
+      const img = document.createElement('img');
+      img.loading = 'lazy'; img.src = `${figBase}/${i + 1}`;
+      img.onclick = () => window.open(`${figBase}/${i + 1}`, '_blank');
+      cell.appendChild(img);
+      if (f.caption) {
+        const cap = document.createElement('figcaption');
+        cap.textContent = f.caption;
+        cell.appendChild(cap);
+      }
+      grid.appendChild(cell);
+    });
+    fwrap.appendChild(grid);
+    fwrap.classList.remove('hidden');
+  } else fwrap.classList.add('hidden');
   $('view-modal').classList.remove('hidden');
 }
 $('view-close').onclick = () => $('view-modal').classList.add('hidden');
@@ -1978,10 +2145,52 @@ function openFeatureModal(name, weight, kind, clickedDocId = null) {
   }
   if (!shown) {
     const none = document.createElement('div');
-    none.className = 'muted'; none.textContent = 'No document discloses this feature yet.';
+    none.className = 'muted'; none.textContent = 'No document discloses this feature in this tab yet.';
     body.appendChild(none);
   }
   $('feat-modal').classList.remove('hidden');
+  loadFeatureXref(name, body);
+}
+
+// Cross-tab feature lookup: any document in OTHER tabs that was assessed to disclose
+// the same feature. Loaded async and appended below the current tab's rows, so a
+// feature checked once is visible everywhere it appears.
+async function loadFeatureXref(name, body) {
+  const res = await api(`/api/tabs/${activeTab}/feature-xref?name=${encodeURIComponent(name)}`);
+  const docs = (res && res.documents) || [];
+  if (!docs.length) return;
+  const hdr = document.createElement('div');
+  hdr.className = 'feat-xref-hdr';
+  hdr.textContent = `🗂 In other tabs — ${docs.length} document(s) disclose this feature`;
+  body.appendChild(hdr);
+  const mark = { yes: '✓', partial: '~' };
+  for (const d of docs) {
+    const row = document.createElement('div');
+    row.className = 'feat-doc-row ' + (d.status || 'yes');
+    const head = document.createElement('div');
+    head.className = 'feat-doc-head';
+    const num = document.createElement('a');
+    num.className = 'feat-doc-num';
+    num.textContent = `${mark[d.status] || '✓'} ${d.number || d.title || ('#' + d.id)}`;
+    num.title = 'Switch to that tab and jump to this document';
+    num.onclick = async () => {
+      $('feat-modal').classList.add('hidden');
+      await selectTab(d.tab_id);
+      setTimeout(() => scrollToDoc(d.id), 400);
+    };
+    head.appendChild(num);
+    const tab = document.createElement('span');
+    tab.className = 'chip'; tab.textContent = `tab: ${d.tab_name || '?'}`
+      + (d.kind === 'A' ? ' · A' : '');
+    head.appendChild(tab);
+    row.appendChild(head);
+    if (d.note) {
+      const note = document.createElement('div');
+      note.className = 'feat-doc-note'; note.textContent = d.note;
+      row.appendChild(note);
+    }
+    body.appendChild(row);
+  }
 }
 $('feat-modal-close').onclick = () => $('feat-modal').classList.add('hidden');
 $('feat-modal').onclick = e => { if (e.target === $('feat-modal')) $('feat-modal').classList.add('hidden'); };

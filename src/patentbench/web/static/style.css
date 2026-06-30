@@ -202,7 +202,22 @@ textarea, select, input[type="text"] {
 .feat-doc-num { cursor: pointer; color: var(--accent); font-family: ui-monospace, monospace; font-weight: 600; }
 .feat-doc-num:hover { text-decoration: underline; }
 .feat-doc-note { margin-top: 5px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+.feat-xref-hdr { margin: 14px 0 8px; padding-top: 10px; border-top: 1px dashed var(--border); font-size: 13px; font-weight: 600; color: var(--muted, #889); }
 .doc.doc-flash { outline: 2px solid var(--accent); transition: outline-color 1.4s; }
+
+/* 🖼 drawing sheets in the viewer */
+.view-figs { margin: 8px 0 12px; }
+.view-figs-hdr { font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--muted, #889); }
+.view-figs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.view-fig { margin: 0; border: 1px solid var(--border); border-radius: 8px; padding: 6px; background: #fff; }
+.view-fig img { width: 100%; height: auto; cursor: zoom-in; background: #fff; border-radius: 4px; }
+.view-fig figcaption { font-size: 11px; line-height: 1.35; margin-top: 5px; color: var(--text); white-space: pre-wrap; max-height: 8.5em; overflow-y: auto; }
+.fig-meta .btn.small { padding: 1px 7px; }
+
+/* ♻️ cross-tab reuse modal */
+.reuse-body { margin: 10px 0; max-height: 56vh; overflow-y: auto; }
+.reuse-row { display: flex; align-items: flex-start; gap: 8px; padding: 7px 4px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.reuse-row input { margin-top: 3px; }
 
 /* 🧩 Combi panel: best 2-document combinations */
 .combi-panel { margin: 10px 0; padding: 10px 12px; background: var(--pane2); border: 1px solid var(--accent2); border-radius: 10px; }

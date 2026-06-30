@@ -33,6 +33,9 @@ def client(tmp_path, monkeypatch):
     # auto-create-notebook is exercised by its own tests with stubs; keep it off by
     # default so the other tests stay notebook-less unless they opt in.
     monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", False)
+    # Figures default ON in prod, but captioning shells to vision + network — keep it
+    # off for the generic tests; the figure test opts in with stubs.
+    monkeypatch.setattr(api, "AUTO_FIGURES", False)
     return TestClient(api.app)
 
 
@@ -2045,3 +2048,60 @@ def test_continue_rereads_stale_after_benchmark_change(client, monkeypatch):
     client.post(f"/api/tabs/{tid}/deep-compare", json={"skip_scored": True, "reading_model": "claude-sonnet-4-6"})
     _wait_read(client, tid)
     assert set(read) == {"EP3667902A1", "CN114547092"}   # BOTH stale opus reads re-read on sonnet
+
+
+def test_cross_tab_document_reuse_flow(client):
+    a = client.post("/api/tabs", json={"name": "A"}).json()
+    b = client.post("/api/tabs", json={"name": "B"}).json()
+    # add by number in A → bg fetch+digest run synchronously under TestClient
+    client.post(f"/api/tabs/{a['id']}/documents", json={"numbers": ["US9999999B1"]})
+    docs = client.get(f"/api/tabs/{a['id']}/documents").json()["documents"]
+    assert docs[0]["status"] == "fetched"
+    # same number in B is held back as reusable, NOT auto-fetched
+    res = client.post(f"/api/tabs/{b['id']}/documents", json={"numbers": ["US9999999B1"]}).json()
+    assert len(res["reusable"]) == 1
+    ru = res["reusable"][0]
+    assert ru["tab_name"] == "A" and ru["has_digest"]
+    bdoc = client.get(f"/api/tabs/{b['id']}/documents").json()["documents"][0]
+    assert bdoc["status"] == "pending"
+    # accept reuse → body+digest copied, no re-fetch needed
+    rr = client.post(f"/api/tabs/{b['id']}/documents/{ru['doc_id']}/reuse").json()
+    assert rr["ok"] and rr["reused_from"] == "A"
+    bdoc = client.get(f"/api/tabs/{b['id']}/documents").json()["documents"][0]
+    assert bdoc["status"] == "fetched" and bdoc["digest_len"]
+
+
+def test_feature_xref_endpoint(client):
+    import json
+    a = client.post("/api/tabs", json={"name": "A"}).json()
+    b = client.post("/api/tabs", json={"name": "B"}).json()
+    client.post(f"/api/tabs/{a['id']}/documents", json={"numbers": ["US7654321B1"]})
+    did = client.get(f"/api/tabs/{a['id']}/documents").json()["documents"][0]["id"]
+    db.update_document(did, feature_scores=json.dumps(
+        [{"name": "Gizmo", "status": "yes", "note": "see claim 3"}]))
+    # B asks who else discloses Gizmo → finds A's doc
+    res = client.get(f"/api/tabs/{b['id']}/feature-xref", params={"name": "Gizmo"}).json()
+    assert len(res["documents"]) == 1
+    assert res["documents"][0]["tab_name"] == "A"
+    assert res["documents"][0]["number"] == "US7654321B1"
+
+
+def test_document_figures_backfill(client, monkeypatch):
+    from patentbench import figures, fetcher as _f
+    monkeypatch.setattr(figures, "download",
+                        lambda urls, dest: [{"n": i + 1, "url": u, "path": f"/x/{i}.png"}
+                                            for i, u in enumerate(urls)])
+    monkeypatch.setattr(figures, "caption_all",
+                        lambda figs, model=None, workers=None:
+                        [f.update(caption=f"[FIG. {f['n']}] stub") or f for f in figs])
+    monkeypatch.setattr(_f, "figure_urls", lambda n: ["http://x/imgf0001.png",
+                                                      "http://x/imgf0002.png"])
+    t = client.post("/api/tabs", json={"name": "F"}).json()
+    client.post(f"/api/tabs/{t['id']}/documents", json={"numbers": ["US7654321B1"]})
+    did = client.get(f"/api/tabs/{t['id']}/documents").json()["documents"][0]["id"]
+    assert client.post(f"/api/tabs/{t['id']}/documents/{did}/figures").json()["ok"]
+    full = client.get(f"/api/tabs/{t['id']}/documents/{did}").json()
+    assert "[FIG. 1] stub" in full["description"]
+    assert figures.DRAWINGS_HEADER in full["description"]
+    doc = client.get(f"/api/tabs/{t['id']}/documents").json()["documents"][0]
+    assert doc["figures_n"] == 2

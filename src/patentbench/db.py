@@ -133,9 +133,27 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN nlm_rank INTEGER")
         if "additional_scores" not in dcols:   # ➕ additional-read verdict on the A-features
             con.execute("ALTER TABLE documents ADD COLUMN additional_scores TEXT")
+        if "digest_model" not in dcols:    # which model produced the digest (for cross-tab reuse label)
+            con.execute("ALTER TABLE documents ADD COLUMN digest_model TEXT")
+        if "text_model" not in dcols:      # which model OCR'd/transcribed the body (NULL = Google fetch)
+            con.execute("ALTER TABLE documents ADD COLUMN text_model TEXT")
+        if "content_hash" not in dcols:    # sha256 of the source upload, for hash-based cross-tab reuse
+            con.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_documents_number ON documents(number)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash)")
+        if "figures" not in dcols:         # drawing sheets: JSON [{n,url,path,caption}]
+            con.execute("ALTER TABLE documents ADD COLUMN figures TEXT")
+        if "figures_n" not in dcols:       # count of captioned figures (cheap for the list view)
+            con.execute("ALTER TABLE documents ADD COLUMN figures_n INTEGER")
         bmcols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "nlm_source_notebook" not in bmcols:   # benchmark mirrored into which notebook
             con.execute("ALTER TABLE benchmark ADD COLUMN nlm_source_notebook TEXT")
+        if "text_model" not in bmcols:      # which model transcribed the benchmark's page photos
+            con.execute("ALTER TABLE benchmark ADD COLUMN text_model TEXT")
+        if "content_hash" not in bmcols:    # sha256 of the uploaded file-set, for hash-based reuse
+            con.execute("ALTER TABLE benchmark ADD COLUMN content_hash TEXT")
+        if "figures" not in bmcols:         # benchmark drawing sheets: JSON [{n,url,path,caption}]
+            con.execute("ALTER TABLE benchmark ADD COLUMN figures TEXT")
         ncols = {r[1] for r in con.execute("PRAGMA table_info(tab_notebook_config)")}
         if "auto_add" not in ncols:
             con.execute("ALTER TABLE tab_notebook_config ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0")
@@ -233,6 +251,7 @@ def list_documents(tab_id: int, full: bool = False) -> list[dict]:
     cols = ("*" if full else
             "id, tab_id, number, title, status, error, source, added_at, fetched_at, "
             "score, score_note, scored_at, score_model, feature_scores, "
+            "digest_model, text_model, figures_n, "
             "nlm_score, nlm_score_note, nlm_scored_at, "
             "nlm_source_notebook, shortlisted, nlm_rank, additional_scores, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
@@ -346,6 +365,127 @@ def delete_document(tab_id: int, doc_id: int) -> bool:
     with _conn() as c:
         cur = c.execute("DELETE FROM documents WHERE id=? AND tab_id=?", (doc_id, tab_id))
         return cur.rowcount > 0
+
+
+# ---------- cross-tab reuse (a document OCR'd/fetched once benefits every tab) ----------
+
+_REUSE_COLS = ("number, title, abstract, claims, description, digest, source, "
+               "digest_model, text_model, content_hash")
+
+
+def _best_reusable(rows: list[sqlite3.Row]) -> dict | None:
+    """Pick the richest already-processed copy: prefer one WITH a digest, then the
+    one with the longest body. Rows must already carry a `tab_name`."""
+    def rank(r):
+        body = len((r["abstract"] or "") + (r["claims"] or "") + (r["description"] or ""))
+        return (1 if r["digest"] else 0, body)
+    best = max(rows, key=rank, default=None)
+    return dict(best) if best else None
+
+
+def find_reusable_by_number(number: str, exclude_tab_id: int | None = None) -> dict | None:
+    """The best already-fetched copy of this exact number in ANOTHER tab, with its
+    body + digest + the models that produced them, so a new tab can reuse the work
+    instead of re-fetching/re-OCR'ing. None if nobody has a usable copy yet."""
+    if not number:
+        return None
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT d.id AS src_doc_id, d.tab_id AS src_tab_id, t.name AS tab_name, "
+            f"{_REUSE_COLS} FROM documents d JOIN tabs t ON t.id = d.tab_id "
+            "WHERE d.number=? AND d.status='fetched' AND d.tab_id IS NOT ? "
+            "AND (d.description IS NOT NULL OR d.claims IS NOT NULL OR d.abstract IS NOT NULL)",
+            (number, exclude_tab_id)).fetchall()
+    return _best_reusable(rows)
+
+
+def find_reusable_by_hash(content_hash: str, exclude_tab_id: int | None = None) -> dict | None:
+    """The best already-transcribed content for an uploaded file-set, matched by its
+    content hash — across BOTH candidate documents and benchmarks. Lets an identical
+    upload reuse a prior OCR run even when no patent number is known."""
+    if not content_hash:
+        return None
+    rows: list[dict] = []
+    with _conn() as c:
+        for r in c.execute(
+                f"SELECT d.id AS src_doc_id, d.tab_id AS src_tab_id, t.name AS tab_name, "
+                f"{_REUSE_COLS} FROM documents d JOIN tabs t ON t.id = d.tab_id "
+                "WHERE d.content_hash=? AND d.tab_id IS NOT ? "
+                "AND (d.description IS NOT NULL OR d.claims IS NOT NULL OR d.abstract IS NOT NULL)",
+                (content_hash, exclude_tab_id)).fetchall():
+            rows.append(dict(r))
+        for r in c.execute(
+                "SELECT b.tab_id AS src_tab_id, t.name AS tab_name, b.number, b.title, "
+                "b.abstract, b.claims, b.description, b.text, b.text_model, b.content_hash "
+                "FROM benchmark b JOIN tabs t ON t.id = b.tab_id "
+                "WHERE b.content_hash=? AND b.status='ready' AND b.text IS NOT NULL "
+                "AND b.tab_id IS NOT ?", (content_hash, exclude_tab_id)).fetchall():
+            d = dict(r)
+            # benchmark carries its full body in `text`; expose it as `description`
+            if d.get("text") and not d.get("description"):
+                d["description"] = d["text"]
+            d.update(src_doc_id=None, digest=None, digest_model=None, source="benchmark")
+            rows.append(d)
+    if not rows:
+        return None
+    def rank(r):
+        return len((r.get("abstract") or "") + (r.get("claims") or "")
+                   + (r.get("description") or ""))
+    return max(rows, key=rank)
+
+
+def copy_into_document(doc_id: int, src: dict) -> None:
+    """Write a reusable copy's body + digest + provenance into a (pending) document,
+    marking it fetched. `src` is a row from find_reusable_by_*."""
+    with _conn() as c:
+        c.execute(
+            "UPDATE documents SET status='fetched', error=NULL, fetched_at=?, "
+            "title=COALESCE(title, ?), abstract=?, claims=?, description=?, digest=?, "
+            "digest_model=?, text_model=?, content_hash=COALESCE(?, content_hash) "
+            "WHERE id=?",
+            (_now(), src.get("title"), src.get("abstract"), src.get("claims"),
+             src.get("description"), src.get("digest"), src.get("digest_model"),
+             src.get("text_model"), src.get("content_hash"), doc_id))
+
+
+def documents_disclosing_feature(name: str, exclude_tab_id: int | None = None) -> list[dict]:
+    """Every document in ANY tab whose feature verdicts include a feature matching
+    `name` (case-insensitive) with status YES/PARTIAL — the cross-tab answer to
+    'who else discloses this feature?'. Scans both mandatory (feature_scores) and
+    additional (additional_scores) verdicts; returns one entry per (doc, match)."""
+    target = (name or "").strip().lower()
+    if not target:
+        return []
+    out: list[dict] = []
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT d.id, d.tab_id, t.name AS tab_name, d.number, d.title, "
+            "d.feature_scores, d.additional_scores FROM documents d "
+            "JOIN tabs t ON t.id = d.tab_id "
+            "WHERE (d.feature_scores IS NOT NULL OR d.additional_scores IS NOT NULL) "
+            "AND d.tab_id IS NOT ?", (exclude_tab_id,)).fetchall()
+    for r in rows:
+        for col, kind in (("feature_scores", "M"), ("additional_scores", "A")):
+            try:
+                arr = json.loads(r[col]) if r[col] else None
+            except (ValueError, TypeError):
+                arr = None
+            if not isinstance(arr, list):
+                continue
+            for e in arr:
+                if not isinstance(e, dict) or (e.get("name") or "").strip().lower() != target:
+                    continue
+                status = (e.get("status") or "").strip().lower()
+                # M-features: yes/partial disclose. A-features: present/stretch disclose.
+                full = status in ("yes", "present")
+                partial = status in ("partial", "stretch") or status.startswith("part")
+                if not (full or partial):
+                    continue
+                out.append({"id": r["id"], "tab_id": r["tab_id"], "tab_name": r["tab_name"],
+                            "number": r["number"], "title": r["title"], "kind": kind,
+                            "status": "partial" if partial else "yes",
+                            "note": e.get("note") or e.get("evidence") or ""})
+    return out
 
 
 # ---------- messages ----------

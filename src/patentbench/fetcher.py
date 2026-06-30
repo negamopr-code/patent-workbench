@@ -72,6 +72,78 @@ def _pdf_url(soup: BeautifulSoup, raw_html: str) -> str | None:
     return m.group(0) if m else None
 
 
+_IMG_EXT = r"(?:png|tif|tiff|jpg|jpeg|gif)"
+_IMG_URL_RE = re.compile(
+    r"https?:[^\s\"'<>]*patentimages\.storage\.googleapis\.com/[A-Za-z0-9./_\-]+\." + _IMG_EXT,
+    re.IGNORECASE)
+# A patentimages filename that denotes a DRAWING SHEET. EP/WO figures are imgfNNNN
+# (imgbNNNN = inline body math — EXCLUDED); US sheets are …-DNNNNN; CN/JP often a
+# bare numeric. _US_REPR (…-D00000) is the representative thumbnail — dropped when
+# real sheets exist.
+_FIG_NAME_RE = re.compile(
+    r"(?:imgf\d+|[-_]D\d{3,}|^\d{8,})\." + _IMG_EXT + r"$", re.IGNORECASE)
+_US_REPR_RE = re.compile(r"[-_]D0+\." + _IMG_EXT + r"$", re.IGNORECASE)
+
+
+def _figure_urls(soup: BeautifulSoup, raw_html: str) -> list[str]:
+    """Ordered, de-duplicated URLs of the drawing sheets. Google Patents serves
+    figures on patentimages with office-specific names (EP `imgfNNNN`, US
+    `…-DNNNNN`, CN a bare numeric). Each can appear under two storage paths, so we
+    dedupe by filename and keep document order (= figure order). The US `D00000`
+    representative thumbnail is dropped when real sheets exist (it duplicates FIG.1).
+    EP inline-math images (`imgbNNNN`) are not matched."""
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(src: str) -> None:
+        src = (src or "").strip()
+        if not src or "patentimages.storage.googleapis.com" not in src:
+            return
+        name = src.split("?")[0].rsplit("/", 1)[-1]
+        if not _FIG_NAME_RE.search(name):
+            return
+        if src.startswith("//"):
+            src = "https:" + src
+        elif not src.startswith("http"):
+            return
+        if name.lower() in seen:
+            return
+        seen.add(name.lower())
+        urls.append(src)
+
+    for img in soup.select('img[src*="patentimages"]'):
+        add(img.get("src") or "")
+    for m in _IMG_URL_RE.finditer(raw_html):
+        add(m.group(0))
+    # drop the US representative thumbnail (…-D00000) unless it's the only image
+    sheets = [u for u in urls if not _US_REPR_RE.search(u.rsplit("/", 1)[-1])]
+    return sheets or urls
+
+
+def figure_urls(number: str) -> list[str]:
+    """Scrape ONLY the drawing-sheet URLs for a publication (for backfilling figures
+    onto a document fetched before figures were captured). Tries the same grant-
+    preferred variants as fetch_document. [] if none / unreachable."""
+    for variant in _publication_variants(number):
+        url = f"https://patents.google.com/patent/{variant}/en"
+        with _lock:
+            _gap_wait()
+            try:
+                with httpx.Client(timeout=TIMEOUT, headers=HEADERS,
+                                  follow_redirects=True) as cl:
+                    resp = cl.get(url)
+            except httpx.HTTPError:
+                return []
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "lxml")
+            figs = _figure_urls(soup, resp.text)
+            if figs:
+                return figs
+        elif resp.status_code != 404:
+            break
+    return []
+
+
 def _description_from_pdf(url: str) -> str:
     """Download the publication PDF and pdftotext it — fallback when HTML has no
     description (common for some jurisdictions)."""
@@ -191,4 +263,5 @@ def _fetch_publication(number: str) -> dict:
     if not (title or abstract or claims_text or description):
         return {"error": "page fetched but no content parsed (layout change?)"}
     return {"title": title[:2000], "abstract": abstract[:MAX_FIELD],
-            "claims": claims_text[:MAX_FIELD], "description": description[:MAX_FIELD]}
+            "claims": claims_text[:MAX_FIELD], "description": description[:MAX_FIELD],
+            "figure_urls": _figure_urls(soup, raw)}

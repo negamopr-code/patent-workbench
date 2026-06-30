@@ -14,13 +14,16 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.requests import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import citations, claude_bridge, db, extract, fetcher, lessons, nlm_bridge, patents
+from .. import (citations, claude_bridge, db, extract, fetcher, figures, lessons,
+                nlm_bridge, patents)
 from . import schemas
 
 UPLOADS = os.environ.get("PB_UPLOADS", "/data/uploads")
+FIGURES = os.environ.get("PB_FIGURES", "/data/figures")
+AUTO_FIGURES = os.environ.get("PB_AUTO_FIGURES", "1") not in ("0", "", "false", "no")
 MAX_UPLOAD = 25 * 1024 * 1024
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
@@ -62,6 +65,25 @@ def _ocr_model(m: str | None) -> str:
     if chosen is None or chosen in claude_bridge.WEAK_OCR_MODELS:
         return claude_bridge.OCR_MODEL
     return chosen
+
+
+def _files_hash(paths: list[str]) -> str | None:
+    """A stable content signature for an uploaded file-set: sha256 over each file's
+    own sha256, sorted so file order doesn't matter. Lets an identical re-upload (in
+    any tab) be recognised and its OCR/transcription reused. None if unreadable."""
+    digests = []
+    for p in paths:
+        try:
+            h = hashlib.sha256()
+            with open(p, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            digests.append(h.hexdigest())
+        except OSError:
+            return None
+    if not digests:
+        return None
+    return hashlib.sha256("".join(sorted(digests)).encode()).hexdigest()
 
 
 # ---------- health / meta ----------
@@ -116,8 +138,15 @@ def tabs_delete(tab_id: int):
 
 def _benchmark_view(tab_id: int) -> dict | None:
     bm = db.get_benchmark(tab_id, full=False)
-    if bm and bm.get("number"):
+    if not bm:
+        return bm
+    if bm.get("number"):
         bm["links"] = patents.links(bm["number"])
+    # replace the heavy figures JSON with light counts for the state payload
+    figs = json.loads(bm["figures"]) if bm.get("figures") else []
+    bm["figures"] = bool(figs)
+    bm["figures_total"] = len(figs)
+    bm["figures_n"] = sum(1 for f in figs if f.get("caption"))
     return bm
 
 
@@ -141,7 +170,7 @@ def tab_state(tab_id: int):
 
 # ---------- benchmark (the reference document, one per tab) ----------
 
-def _fetch_benchmark(tab_id: int) -> None:
+def _fetch_benchmark(tab_id: int, model: str | None = None) -> None:
     bm = db.get_benchmark(tab_id)
     if not bm or not bm.get("number"):
         return
@@ -149,8 +178,40 @@ def _fetch_benchmark(tab_id: int) -> None:
     if "error" in res:
         db.update_benchmark(tab_id, status="error", error=res["error"])
     else:
-        db.update_benchmark(tab_id, status="ready", error=None, **res)
+        urls = res.pop("figure_urls", None) or []
+        figs = json.dumps([{"n": i, "url": u} for i, u in enumerate(urls, 1)]) if urls else None
+        db.update_benchmark(tab_id, status="ready", error=None, figures=figs, **res)
+        # caption the benchmark's drawings BEFORE mirroring, so NotebookLM and every
+        # reader can ground on the benchmark's figures too.
+        if AUTO_FIGURES and urls:
+            _process_benchmark_figures(tab_id, model)
         _mirror_benchmark_if_auto(tab_id)
+
+
+def _process_benchmark_figures(tab_id: int, model: str | None = None,
+                               force: bool = False) -> int:
+    """Caption the (number-based) benchmark's drawing sheets and merge them into its
+    description, so figures are groundable on the benchmark side as well. Upload-based
+    benchmarks carry their drawings in the page transcription already, so they are
+    skipped (no separate figure URLs)."""
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("text"):           # upload/feature benchmark — no figure URLs
+        return 0
+    meta = json.loads(bm["figures"]) if bm.get("figures") else []
+    if meta and all(f.get("caption") for f in meta) and not force:
+        return sum(1 for f in meta if f.get("caption"))
+    urls = [f["url"] for f in meta if f.get("url")]
+    if not urls and bm.get("number"):
+        urls = fetcher.figure_urls(bm["number"])
+    if not urls:
+        return 0
+    figs = figures.download(urls, os.path.join(FIGURES, f"bm-{tab_id}"))
+    figures.caption_all(figs, model)
+    merged = figures.merge_into_description(bm.get("description"), figs)
+    n = sum(1 for f in figs if f.get("caption"))
+    db.update_benchmark(tab_id, figures=json.dumps(figs, ensure_ascii=False),
+                        description=merged)
+    return n
 
 
 TRANSCRIBE_WORKERS = int(os.environ.get("PB_TRANSCRIBE_WORKERS", "4"))
@@ -191,7 +252,10 @@ def _extract_benchmark_files(tab_id: int, model: str | None = None) -> None:
         db.update_benchmark(tab_id, status="error", progress=None,
                             error="; ".join(errors) or "no text extracted")
         return
+    # only page photos go through a model; a pure-PDF benchmark records no text_model
+    had_image = any(f["kind"] != "pdf" for f in files)
     db.update_benchmark(tab_id, status="ready", text=text, progress=None,
+                        text_model=(model or claude_bridge.TRANSCRIBE_MODEL) if had_image else None,
                         error="; ".join(errors) or None)
     _mirror_benchmark_if_auto(tab_id)
 
@@ -348,7 +412,52 @@ async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
         except OSError:
             pass
     db.set_benchmark(tab_id, source="pdf" if "pdf" in kinds else "images", files=saved)
+    chash = _files_hash([f["path"] for f in saved])
+    if chash:
+        db.update_benchmark(tab_id, content_hash=chash)
+    # If this exact file-set was already transcribed in another tab, don't re-OCR —
+    # offer the stored text for reuse ("ask each time"). Transcription only starts
+    # once the user declines, via POST /benchmark/transcribe.
+    src = db.find_reusable_by_hash(chash, exclude_tab_id=tab_id) if chash else None
+    if src:
+        return {"ok": True, "benchmark": _benchmark_view(tab_id),
+                "reuse": {"tab_name": src.get("tab_name"),
+                          "text_model": src.get("text_model"),
+                          "chars": len(src.get("description") or "")}}
     bg.add_task(_extract_benchmark_files, tab_id, _read_model(reading_model))
+    return {"ok": True, "benchmark": _benchmark_view(tab_id)}
+
+
+@app.post("/api/tabs/{tab_id}/benchmark/reuse")
+def benchmark_reuse(tab_id: int):
+    """Accept the offered cross-tab transcription for the just-uploaded benchmark
+    file-set instead of re-OCR'ing it. Copies the stored text + its model."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm or not bm.get("content_hash"):
+        raise HTTPException(400, "no benchmark upload to reuse for")
+    src = db.find_reusable_by_hash(bm["content_hash"], exclude_tab_id=tab_id)
+    if not src:
+        raise HTTPException(404, "no reusable transcription found")
+    db.update_benchmark(tab_id, status="ready", progress=None, error=None,
+                        text=src.get("description") or src.get("text"),
+                        title=bm.get("title") or src.get("title"),
+                        text_model=src.get("text_model"))
+    _mirror_benchmark_if_auto(tab_id)
+    return {"ok": True, "benchmark": _benchmark_view(tab_id)}
+
+
+@app.post("/api/tabs/{tab_id}/benchmark/transcribe")
+def benchmark_transcribe(tab_id: int, bg: BackgroundTasks,
+                         body: schemas.BenchmarkTranscribe | None = None):
+    """Decline the reuse offer and OCR the uploaded benchmark pages from scratch."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm or not (bm.get("files") or []):
+        raise HTTPException(400, "no uploaded benchmark files to transcribe")
+    db.update_benchmark(tab_id, status="pending", error=None, progress=None)
+    model = _read_model(body.reading_model) if body else None
+    bg.add_task(_extract_benchmark_files, tab_id, model)
     return {"ok": True, "benchmark": _benchmark_view(tab_id)}
 
 
@@ -361,6 +470,33 @@ def benchmark_full(tab_id: int):
     if not bm:
         raise HTTPException(404, "no benchmark set")
     return bm
+
+
+@app.post("/api/tabs/{tab_id}/benchmark/figures")
+def benchmark_figures(tab_id: int, bg: BackgroundTasks, force: bool = False):
+    """Caption the benchmark's drawing sheets (number-based benchmark) on demand."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm:
+        raise HTTPException(404, "no benchmark set")
+    if bm.get("text"):
+        raise HTTPException(400, "this benchmark's drawings are already in its page transcription")
+    bg.add_task(_process_benchmark_figures, tab_id, None, force)
+    return {"ok": True}
+
+
+@app.get("/api/tabs/{tab_id}/benchmark/figure/{idx}")
+def benchmark_figure_image(tab_id: int, idx: int):
+    """Serve one stored benchmark drawing-sheet image (1-based)."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    figs = json.loads(bm["figures"]) if bm and bm.get("figures") else []
+    if idx < 1 or idx > len(figs):
+        raise HTTPException(404, "figure not found")
+    path = figs[idx - 1].get("path")
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "figure image missing")
+    return FileResponse(path)
 
 
 @app.delete("/api/tabs/{tab_id}/benchmark")
@@ -387,8 +523,12 @@ def _fetch_into_db(doc_id: int) -> None:
     if "error" in res:
         db.update_document(doc_id, status="error", error=res["error"])
     else:
+        # figure_urls isn't a column — stash the drawing URLs as a pending figures
+        # skeleton so _process_figures can download+caption them (no re-scrape).
+        urls = res.pop("figure_urls", None) or []
+        figs = json.dumps([{"n": i, "url": u} for i, u in enumerate(urls, 1)]) if urls else None
         db.update_document(doc_id, status="fetched", error=None,
-                           fetched_at=db._now(), **res)
+                           fetched_at=db._now(), figures=figs, **res)
 
 
 def _digest_doc(doc_id: int, model: str | None = None) -> None:
@@ -404,7 +544,34 @@ def _digest_doc(doc_id: int, model: str | None = None) -> None:
     res = claude_bridge.digest_document(doc["number"], doc.get("title") or "", fulltext,
                                         model=model)
     if "digest" in res:
-        db.update_document(doc_id, digest=res["digest"])
+        db.update_document(doc_id, digest=res["digest"],
+                           digest_model=model or claude_bridge.DIGEST_MODEL)
+
+
+def _process_figures(doc_id: int, model: str | None = None, force: bool = False) -> int:
+    """Download + vision-caption a candidate's drawing sheets and merge the figure
+    descriptions into its stored text, so chat/deep-compare/NLM can cite figures the
+    way they cite [00NN] paragraphs. Returns the number of figures captioned. Uses
+    the figure URLs stashed at fetch; falls back to re-scraping for older documents."""
+    doc = db.get_document(doc_id)
+    if not doc or doc["status"] != "fetched":
+        return 0
+    meta = json.loads(doc["figures"]) if doc.get("figures") else []
+    if meta and all(f.get("caption") for f in meta) and not force:
+        return sum(1 for f in meta if f.get("caption"))     # already done
+    urls = [f["url"] for f in meta if f.get("url")]
+    if not urls and doc.get("number"):
+        urls = fetcher.figure_urls(doc["number"])            # backfill: doc predates figures
+    if not urls:
+        db.update_document(doc_id, figures_n=0)
+        return 0
+    figs = figures.download(urls, os.path.join(FIGURES, str(doc_id)))
+    figures.caption_all(figs, model)
+    merged = figures.merge_into_description(doc.get("description"), figs)
+    n = sum(1 for f in figs if f.get("caption"))
+    db.update_document(doc_id, figures=json.dumps(figs, ensure_ascii=False),
+                       figures_n=n, description=merged)
+    return n
 
 
 MAX_FOCUS_DOCS = 5     # cap auto+manual focused candidates so the prompt stays tight
@@ -635,6 +802,11 @@ def _process_documents(doc_ids: list[int], model: str | None = None) -> None:
     stays a Claude-quota-independent fallback brain for the tab."""
     for doc_id in doc_ids:
         _fetch_into_db(doc_id)
+    # Caption drawings BEFORE the digest so the digest (and every later read) is
+    # figure-aware. Captioning is vision-per-sheet and slow, so it's gated by env.
+    if AUTO_FIGURES:
+        with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+            list(ex.map(lambda i: _process_figures(i, model), doc_ids))
     with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
         list(ex.map(lambda i: _digest_doc(i, model), doc_ids))
     first = db.get_document(doc_ids[0]) if doc_ids else None
@@ -653,9 +825,40 @@ def documents_add(tab_id: int, body: schemas.DocumentsAdd, bg: BackgroundTasks):
     if not nums:
         return {"inserted": [], "skipped": [], "error": "no plausible patent numbers found"}
     res = db.add_documents(tab_id, nums, source=body.source)
-    if res["inserted"]:
-        bg.add_task(_process_documents, res["inserted"], _read_model(body.reading_model))
+    # Cross-tab reuse: any inserted number already fetched+digested in another tab is
+    # held back (left pending) and surfaced so the UI can ASK before re-doing the work.
+    reusable, to_fetch = [], []
+    for doc_id in res["inserted"]:
+        d = db.get_document(doc_id)
+        src = db.find_reusable_by_number(d["number"], exclude_tab_id=tab_id) if d else None
+        if src:
+            reusable.append({"doc_id": doc_id, "number": d["number"],
+                             "tab_name": src.get("tab_name"),
+                             "digest_model": src.get("digest_model"),
+                             "text_model": src.get("text_model"),
+                             "has_digest": bool(src.get("digest"))})
+        else:
+            to_fetch.append(doc_id)
+    if to_fetch:
+        bg.add_task(_process_documents, to_fetch, _read_model(body.reading_model))
+    res["reusable"] = reusable
     return res
+
+
+@app.post("/api/tabs/{tab_id}/documents/{doc_id}/reuse")
+def document_reuse(tab_id: int, doc_id: int, bg: BackgroundTasks):
+    """Accept a cross-tab copy for a held-back document: copy its body + digest from
+    the richest existing copy in another tab instead of re-fetching/re-OCR'ing it."""
+    doc = db.get_document(doc_id)
+    if not doc or doc["tab_id"] != tab_id:
+        raise HTTPException(404, "document not found")
+    src = db.find_reusable_by_number(doc["number"], exclude_tab_id=tab_id)
+    if not src:
+        raise HTTPException(404, "no reusable copy found")
+    db.copy_into_document(doc_id, src)
+    # mirror into the connected notebook like a freshly-fetched candidate would be
+    bg.add_task(_auto_export_docs, tab_id, [doc_id])
+    return {"ok": True, "reused_from": src.get("tab_name")}
 
 
 @app.get("/api/tabs/{tab_id}/documents")
@@ -665,6 +868,16 @@ def documents_list(tab_id: int):
     for d in docs:
         d["links"] = _doc_links(d)
     return {"documents": docs}
+
+
+@app.get("/api/tabs/{tab_id}/feature-xref")
+def feature_xref(tab_id: int, name: str):
+    """Cross-tab feature lookup: every document in OTHER tabs that discloses (YES or
+    PARTIAL) a feature with this name. Powers the 'In other tabs' section of the
+    feature modal, so a feature assessed once is visible everywhere it was checked."""
+    _tab_or_404(tab_id)
+    rows = db.documents_disclosing_feature(name, exclude_tab_id=tab_id)
+    return {"name": name, "documents": rows}
 
 
 @app.get("/api/tabs/{tab_id}/documents/{doc_id}")
@@ -689,6 +902,36 @@ def document_edit_number(tab_id: int, doc_id: int, body: schemas.DocumentNumberE
         raise HTTPException(400, res["error"])
     bg.add_task(_process_documents, [doc_id])
     return {"ok": True, "number": n}
+
+
+@app.post("/api/tabs/{tab_id}/documents/{doc_id}/figures")
+def document_figures(tab_id: int, doc_id: int, bg: BackgroundTasks, force: bool = False,
+                     reading_model: str | None = None):
+    """Download + caption this candidate's drawing sheets and merge them into its
+    text (so figures become groundable). Runs in the background; poll the doc list
+    for figures_n. `force=1` re-reads even if already captioned."""
+    doc = db.get_document(doc_id)
+    if not doc or doc["tab_id"] != tab_id:
+        raise HTTPException(404, "document not found")
+    if doc["status"] != "fetched":
+        raise HTTPException(400, "fetch the document first")
+    bg.add_task(_process_figures, doc_id, _read_model(reading_model), force)
+    return {"ok": True}
+
+
+@app.get("/api/tabs/{tab_id}/documents/{doc_id}/figure/{idx}")
+def document_figure_image(tab_id: int, doc_id: int, idx: int):
+    """Serve one stored drawing sheet image (1-based index) for the viewer."""
+    doc = db.get_document(doc_id)
+    if not doc or doc["tab_id"] != tab_id:
+        raise HTTPException(404, "document not found")
+    figs = json.loads(doc["figures"]) if doc.get("figures") else []
+    if idx < 1 or idx > len(figs):
+        raise HTTPException(404, "figure not found")
+    path = figs[idx - 1].get("path")
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "figure image missing")
+    return FileResponse(path)
 
 
 @app.post("/api/tabs/{tab_id}/documents/{doc_id}/refetch")
