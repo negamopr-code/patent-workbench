@@ -1579,7 +1579,7 @@ function appendMsg(m) {
     for (const p of m.participants || []) {
       const chip = document.createElement('span');
       chip.className = 'chip';
-      chip.textContent = ({ model: '🧬 ', skill: '🧠 ', notebook: '📓 ', documents: '📚 ', benchmark: '🎯 ', xref: '🔗 ', 'tab-docs': '🗂 ', xtalk: '💬 ' }[p.kind] || '') + p.title;
+      chip.textContent = ({ model: '🧬 ', skill: '🧠 ', notebook: '📓 ', documents: '📚 ', benchmark: '🎯 ', xref: '🔗 ', 'tab-docs': '🗂 ', xtalk: '💬 ', psa: '⚖️ ' }[p.kind] || '') + p.title;
       meta.appendChild(chip);
     }
     el.appendChild(meta);
@@ -1649,6 +1649,63 @@ async function sendChat(notebookOnly) {
 
 $('ask-claude').onclick = () => sendChat(false);
 $('ask-notebook').onclick = () => sendChat(true);
+
+// ---------- ⚖️ problem-solution approach ----------
+
+let psaMethod = null;   // {name, chars, uploaded_at} of the uploaded methodology
+
+async function refreshPsaMethod() {
+  const r = await api('/api/psa/method');
+  psaMethod = r.ok ? r : null;
+  $('psa-method-btn').textContent = psaMethod ? `📋 ${psaMethod.name}` : '📋 method…';
+  $('psa-method-btn').title = psaMethod
+    ? `Methodology: ${psaMethod.name} (${psaMethod.chars} chars). Click to replace.`
+    : 'Upload the problem-solution methodology document (PDF/TXT/MD). It is followed verbatim on every ⚖️ run.';
+}
+
+$('psa-method-btn').onclick = () => $('psa-file').click();
+
+$('psa-file').onchange = async () => {
+  const f = $('psa-file').files[0];
+  $('psa-file').value = '';
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('file', f);
+  const r = await api('/api/psa/method', { method: 'POST', body: fd });
+  if (r.error) { alert(`Method upload failed: ${r.error}`); return; }
+  await refreshPsaMethod();
+};
+
+$('psa-btn').onclick = async () => {
+  if (!activeTab) return;
+  if (!psaMethod) {
+    alert('Upload the problem-solution methodology document first (📋 method…).');
+    $('psa-file').click();
+    return;
+  }
+  if (docSelection.size !== 2) {
+    alert(`Tick exactly TWO candidates (they become D1 and D2) — ${docSelection.size} selected now.`);
+    return;
+  }
+  const tabAtSend = activeTab;
+  const nums = [...docSelection]
+    .map(id => (lastDocs.find(d => d.id === id) || {}).number || `#${id}`).join(' + ');
+  appendMsg({ role: 'q', text: `⚖️ Problem-solution approach on ${nums} (method: ${psaMethod.name})` });
+  setBusy(true, 'Problem-solution approach');
+  const res = await api(`/api/tabs/${tabAtSend}/psa`, {
+    method: 'POST',
+    body: JSON.stringify({ doc_ids: [...docSelection], model: $('model').value }),
+  });
+  setBusy(false);
+  if (activeTab !== tabAtSend) return;
+  if (res.error && !(res.messages || []).length) {
+    appendMsg({ role: 's', text: `Error: ${res.error}` });
+    return;
+  }
+  for (const m of res.messages || []) appendMsg(m);
+};
+
+refreshPsaMethod();
 
 async function runDeepCompare(idsArg, skipScored, readModelOverride) {
   // idsArg: array of doc ids → those candidates; null/[] → EVERY candidate

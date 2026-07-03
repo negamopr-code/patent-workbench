@@ -124,6 +124,11 @@ class AskNotebookRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION)
 
 
+class PsaRequest(BaseModel):
+    doc_ids: list[int] = Field(min_length=2, max_length=2)   # exactly D1 and D2
+    model: str | None = None           # answer model; None = chat default
+
+
 class DeepCompareRequest(BaseModel):
     model: str | None = None           # answer/compile model (chat dropdown)
     skills: list[str] = []

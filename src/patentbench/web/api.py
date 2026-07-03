@@ -23,6 +23,7 @@ from . import schemas
 
 UPLOADS = os.environ.get("PB_UPLOADS", "/data/uploads")
 FIGURES = os.environ.get("PB_FIGURES", "/data/figures")
+PSA_DIR = os.environ.get("PB_PSA_DIR", "/data/psa")   # ⚖️ problem-solution methodology
 AUTO_FIGURES = os.environ.get("PB_AUTO_FIGURES", "1") not in ("0", "", "false", "no")
 MAX_UPLOAD = 25 * 1024 * 1024
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -1921,6 +1922,106 @@ def ask_notebook(tab_id: int, body: schemas.AskNotebookRequest):
                                                   and cfg.get("selected_source_ids"))}
                       for e in answers])
     return {"messages": [msg]}
+
+
+# ---------- ⚖️ problem-solution approach ----------
+
+def _psa_method() -> dict | None:
+    """The uploaded methodology: {name, chars, uploaded_at, text} or None. One
+    global document (the approach is jurisdiction doctrine, not tab data), kept in
+    the data volume so it survives rebuilds."""
+    meta_path = os.path.join(PSA_DIR, "method.json")
+    txt_path = os.path.join(PSA_DIR, "method.txt")
+    if not (os.path.exists(meta_path) and os.path.exists(txt_path)):
+        return None
+    with open(meta_path, encoding="utf-8") as fh:
+        meta = json.load(fh)
+    with open(txt_path, encoding="utf-8") as fh:
+        meta["text"] = fh.read()
+    return meta
+
+
+@app.get("/api/psa/method")
+def psa_method_status():
+    m = _psa_method()
+    if not m:
+        return {"ok": False}
+    return {"ok": True, "name": m["name"], "chars": m["chars"],
+            "uploaded_at": m["uploaded_at"]}
+
+
+@app.post("/api/psa/method")
+async def psa_method_upload(file: UploadFile = File(...)):
+    """Upload/replace the problem-solution methodology document (PDF/TXT/MD).
+    Its text is followed VERBATIM, step by step, by every ⚖️ run."""
+    data = await file.read()
+    if len(data) > MAX_UPLOAD:
+        raise HTTPException(413, "too large (25 MB max)")
+    name = os.path.basename(file.filename or "method")
+    ext = os.path.splitext(name)[1].lower()
+    os.makedirs(PSA_DIR, exist_ok=True)
+    if ext == ".pdf":
+        raw_path = os.path.join(PSA_DIR, "method.pdf")
+        with open(raw_path, "wb") as fh:
+            fh.write(data)
+        res = extract.text_from_pdf(raw_path)
+        if "error" in res:
+            raise HTTPException(400, f"PDF text extraction failed: {res['error']}")
+        text = res["text"]
+    elif ext in (".txt", ".md"):
+        text = data.decode("utf-8", errors="replace")
+    else:
+        raise HTTPException(400, f"{name}: only PDF, TXT or MD accepted")
+    text = (text or "").strip()
+    if len(text) < 50:
+        raise HTTPException(400, "the document yielded almost no text — is it a "
+                                 "scan? Provide a text PDF / TXT / MD")
+    with open(os.path.join(PSA_DIR, "method.txt"), "w", encoding="utf-8") as fh:
+        fh.write(text)
+    meta = {"name": name, "chars": len(text), "uploaded_at": int(time.time())}
+    with open(os.path.join(PSA_DIR, "method.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, ensure_ascii=False)
+    return {"ok": True, **meta}
+
+
+@app.post("/api/tabs/{tab_id}/psa")
+def psa_run(tab_id: int, body: schemas.PsaRequest):
+    """⚖️ Run the uploaded methodology STRICTLY step-by-step: benchmark = claimed
+    invention, the two selected candidates = D1/D2. Appends to the tab's chat."""
+    _tab_or_404(tab_id)
+    method = _psa_method()
+    if not method:
+        raise HTTPException(400, "no methodology uploaded yet — upload the "
+                                 "problem-solution document first (📋)")
+    benchmark = db.get_benchmark(tab_id)
+    if not benchmark or not (benchmark.get("text") or benchmark.get("claims")
+                             or benchmark.get("description")):
+        raise HTTPException(400, "set a benchmark (with content) first — it is "
+                                 "the claimed invention the approach assesses")
+    docs = []
+    for did in body.doc_ids:
+        d = db.get_document(did)
+        if not d or d["tab_id"] != tab_id:
+            raise HTTPException(404, f"document {did} not found in this tab")
+        if d["status"] != "fetched":
+            raise HTTPException(400, f"{d.get('number') or did} is not fetched yet")
+        docs.append(d)
+    model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
+    nums = " + ".join(d.get("number") or "?" for d in docs)
+    db.append_message(tab_id, "q", f"⚖️ Problem-solution approach on {nums} "
+                                   f"(method: {method['name']})")
+    res = claude_bridge.psa(method["text"], benchmark, docs, model=model)
+    out = []
+    if "error" in res:
+        out.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
+        return {"messages": out, "error": res["error"]}
+    participants = [{"kind": "model", "title": model},
+                    {"kind": "psa", "title": method["name"]}]
+    participants += [{"kind": "documents", "title": f"D{i} {d.get('number') or '?'}"}
+                     for i, d in enumerate(docs, 1)]
+    out.append(db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
+                                 model=model, participants=participants))
+    return {"messages": out}
 
 
 # ---------- chat ----------

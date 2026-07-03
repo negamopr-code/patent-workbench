@@ -2376,3 +2376,101 @@ def test_chat_focus_prefers_figures_read_copy(client, monkeypatch):
     assert [d["id"] for d in foc] == [kindless["id"]]
     # the dropped duplicate is still present in the tab roster, not lost
     assert any(d["number"] == "EP4338618A1" for d in seen.get("documents") or [])
+
+
+# ---------- ⚖️ problem-solution approach ----------
+
+@pytest.fixture
+def psa_client(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "PSA_DIR", str(tmp_path / "psa"))
+    return client
+
+
+def _upload_method(client, text="STEP 1: determine the closest prior art.\n"
+                                "STEP 2: formulate the objective technical problem.\n"
+                                "STEP 3: assess obviousness."):
+    return client.post("/api/psa/method",
+                       files={"file": ("epo-psa.txt", text.encode(), "text/plain")})
+
+
+def test_psa_method_upload_and_status(psa_client):
+    assert psa_client.get("/api/psa/method").json() == {"ok": False}
+    r = _upload_method(psa_client)
+    assert r.status_code == 200 and r.json()["ok"] is True
+    s = psa_client.get("/api/psa/method").json()
+    assert s["ok"] is True and s["name"] == "epo-psa.txt" and s["chars"] > 50
+
+
+def test_psa_method_rejects_junk(psa_client):
+    r = psa_client.post("/api/psa/method",
+                        files={"file": ("m.docx", b"x" * 100, "application/x")})
+    assert r.status_code == 400
+    r = _upload_method(psa_client, text="too short")
+    assert r.status_code == 400
+
+
+def test_psa_requires_method_benchmark_and_two_docs(psa_client):
+    tab = psa_client.post("/api/tabs", json={"name": "PSA"}).json()
+    psa_client.post(f"/api/tabs/{tab['id']}/documents",
+                    json={"text": "CN113964850 US11909216B2"})
+    ids = [d["id"] for d in
+           psa_client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]]
+    # no method yet
+    r = psa_client.post(f"/api/tabs/{tab['id']}/psa", json={"doc_ids": ids})
+    assert r.status_code == 400 and "methodology" in r.json()["detail"]
+    _upload_method(psa_client)
+    # no benchmark yet
+    r = psa_client.post(f"/api/tabs/{tab['id']}/psa", json={"doc_ids": ids})
+    assert r.status_code == 400 and "benchmark" in r.json()["detail"]
+    # exactly two docs enforced by the schema
+    psa_client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP1111111A1"})
+    r = psa_client.post(f"/api/tabs/{tab['id']}/psa", json={"doc_ids": ids[:1]})
+    assert r.status_code == 422
+
+
+def test_psa_runs_method_over_benchmark_and_two_docs(psa_client, monkeypatch):
+    seen = {}
+    def fake_psa(method_text, benchmark, docs, model=None):
+        seen.update(method=method_text, benchmark=benchmark, docs=docs, model=model)
+        return {"answer": "STEP 1: D1 is CN113964850 …", "model": model}
+    monkeypatch.setattr(claude_bridge, "psa", fake_psa)
+    _upload_method(psa_client)
+    tab = psa_client.post("/api/tabs", json={"name": "PSA"}).json()
+    psa_client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP1111111A1"})
+    psa_client.post(f"/api/tabs/{tab['id']}/documents",
+                    json={"text": "CN113964850 US11909216B2"})
+    ids = [d["id"] for d in
+           psa_client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]]
+    r = psa_client.post(f"/api/tabs/{tab['id']}/psa",
+                        json={"doc_ids": ids, "model": "claude-fable-5"}).json()
+    assert "STEP 1" in seen["method"]                      # methodology text passed
+    assert [d["id"] for d in seen["docs"]] == ids          # both docs, full rows
+    assert seen["benchmark"]["number"] == "EP1111111A1"
+    # answer lands in the tab's chat with ⚖️ participants
+    msgs = psa_client.get(f"/api/tabs/{tab['id']}/state").json()["messages"]
+    q = [m for m in msgs if m["role"] == "q" and "Problem-solution" in m["text"]]
+    assert q and "CN113964850 + US11909216B2" in q[0]["text"]
+    c = [m for m in msgs if m["role"] == "c"][-1]
+    kinds = {p["kind"] for p in c["participants"]}
+    assert "psa" in kinds and "model" in kinds
+    assert any(p["title"].startswith("D1 ") for p in c["participants"])
+    assert r["messages"][-1]["text"].startswith("STEP 1")
+
+
+def test_psa_prompt_is_strict_and_carries_all_parts(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, extra_args=None, cwd=None, timeout=None:
+                        captured.update(p=prompt) or {"answer": "ok", "model": model})
+    claude_bridge.psa("STEP 1: closest prior art.",
+                      {"number": "EP1", "title": "Bench", "claims": "1. A thing."},
+                      [{"number": "D1DOC", "title": "a", "claims": "1. x"},
+                       {"number": "D2DOC", "title": "b", "claims": "1. y"}])
+    p = captured["p"]
+    assert "USER-SUPPLIED METHODOLOGY (BINDING" in p
+    assert "STEP 1: closest prior art." in p
+    assert "BENCHMARK DOCUMENT — the claimed invention" in p
+    assert "D1 — selected prior-art document 1 of 2" in p
+    assert "D2 — selected prior-art document 2 of 2" in p
+    assert "do not skip, merge, reorder" in p
+    assert "never silently drop it" in p

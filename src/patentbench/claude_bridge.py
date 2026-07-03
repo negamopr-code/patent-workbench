@@ -72,6 +72,8 @@ MAX_DOC_CHARS = 9000        # per-candidate ceiling (abstract+digest+claims firs
 MAX_DOCS_CHARS = 400_000    # total candidate budget per prompt
 MAX_ROSTER_CHARS = 240_000  # total budget for non-focused candidates' DIGESTS (focus path)
 MAX_XTALK_CHARS = 80_000    # total budget for cross-tab chat exchanges pulled into the prompt
+MAX_METHOD_CHARS = 120_000  # the user's problem-solution methodology document, verbatim
+PSA_TIMEOUT = float(os.environ.get("PB_PSA_TIMEOUT", "900"))
 MIN_DOC_CHARS = 1200        # floor below which a candidate block stops being useful
 MAX_FULLTEXT_CHARS = 400_000  # full document fed to the digest/deep-map model
 MAX_FOCUS_CHARS = 600_000     # total budget for user-SELECTED candidates loaded in full.
@@ -830,6 +832,49 @@ def chat(question: str, history: list[dict] | None = None,
     if lessons:
         res["answer"] = LESSON_RE.sub("", res["answer"]).strip()
         res["lessons"] = [{"skill": s, "lesson": t.strip()} for s, t in lessons]
+    return res
+
+
+_PSA_INSTRUCTION = (
+    "TASK — PROBLEM-SOLUTION APPROACH.\n"
+    "The USER-SUPPLIED METHODOLOGY above is BINDING. Execute it STRICTLY, step by "
+    "step, in the exact order it is written:\n"
+    "• Work through EVERY step/point of the methodology — do not skip, merge, "
+    "reorder, abbreviate or invent steps.\n"
+    "• Head each part of your answer with the methodology's OWN step names/"
+    "numbering, so the execution of every step is visible and checkable.\n"
+    "• If a step cannot be executed with the provided material, say so explicitly "
+    "under that step's heading (and what is missing), then continue with the next "
+    "step — never silently drop it.\n"
+    "• The CLAIMED INVENTION under assessment is the BENCHMARK document. The two "
+    "selected documents D1 and D2 are the prior art the approach is based on "
+    "(e.g. closest prior art and combination document — assign their roles as the "
+    "methodology directs).\n"
+    "• Ground every factual statement in the provided texts with [00NN]/claim/"
+    "Fig. citations, per the grounding rules above.")
+
+
+def psa(method_text: str, benchmark: dict, docs: list[dict],
+        model: str | None = None) -> dict:
+    """⚖️ Problem-solution approach: run the user's uploaded methodology STRICTLY,
+    step by step, over the benchmark (claimed invention) + two user-selected
+    prior-art documents (full primary text). Same return contract as chat()."""
+    parts = [_PREAMBLE, _GROUNDING_INSTRUCTION]
+    parts.append("USER-SUPPLIED METHODOLOGY (BINDING — the answer must follow it "
+                 "verbatim, step by step):\n\n" + (method_text or "")[:MAX_METHOD_CHARS])
+    parts.append("BENCHMARK DOCUMENT — the claimed invention under assessment:\n\n"
+                 + _benchmark_block(benchmark))
+    per = max(MIN_DOC_CHARS, min(MAX_FULLTEXT_CHARS,
+                                 MAX_FOCUS_CHARS // max(1, len(docs))))
+    for i, d in enumerate(docs, 1):
+        parts.append(f"D{i} — selected prior-art document {i} of {len(docs)} "
+                     "(FULL primary text):\n\n" + _document_block(d, per, clipped=False))
+    parts.append(_PSA_INSTRUCTION)
+    res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL,
+                      timeout=PSA_TIMEOUT)
+    if "error" in res:
+        return res
+    res["answer"] = _strip_cjk(res["answer"])
     return res
 
 
