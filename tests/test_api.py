@@ -2665,3 +2665,20 @@ def test_psa_prompt_stretch_block(monkeypatch):
     assert "TASK — PROBLEM-SOLUTION APPROACH" in p          # methodology still executes
     claude_bridge.psa(*args)
     assert "ADVOCACY MODE" not in captured["p"]             # strict default unchanged
+
+
+def test_figures_all_captions_failed_keeps_unread_not_zero(client, monkeypatch):
+    from patentbench import figures, fetcher as _f
+    monkeypatch.setattr(figures, "download",
+                        lambda urls, dest: [{"n": i + 1, "url": u, "path": f"/x/{i}.png"}
+                                            for i, u in enumerate(urls)])
+    # every vision call fails → zero captions, but sheets DO exist
+    monkeypatch.setattr(figures, "caption_all",
+                        lambda figs, model=None, workers=None, context="": figs)
+    monkeypatch.setattr(_f, "figure_urls", lambda n: ["http://x/imgf0001.png"])
+    t = client.post("/api/tabs", json={"name": "FF"}).json()
+    client.post(f"/api/tabs/{t['id']}/documents", json={"numbers": ["US7654321B1"]})
+    did = client.get(f"/api/tabs/{t['id']}/documents").json()["documents"][0]["id"]
+    client.post(f"/api/tabs/{t['id']}/documents/{did}/figures")
+    doc = client.get(f"/api/tabs/{t['id']}/documents").json()["documents"][0]
+    assert doc["figures_n"] is None       # unread (re-run heals), NOT 'no drawings'

@@ -574,8 +574,13 @@ def _process_figures(doc_id: int, model: str | None = None, force: bool = False)
     figures.caption_all(figs, model, context=figures.doc_context(doc))
     merged = figures.merge_into_description(doc.get("description"), figs)
     n = sum(1 for f in figs if f.get("caption"))
+    # n==0 while sheets EXIST = the vision runs failed (rate limit/outage), not
+    # "this document has no drawings". figures_n=0 would falsely read as the
+    # latter everywhere (_figures_unread) — keep it None so the ⚠ DRAWINGS-NOT-
+    # READ deficiency stays visible and a re-run heals it. Seen live 2026-07-03:
+    # a 23-doc sweep hit failures from doc 16 on and stamped 8 docs 'no drawings'.
     db.update_document(doc_id, figures=json.dumps(figs, ensure_ascii=False),
-                       figures_n=n, description=merged)
+                       figures_n=(n if (n or not figs) else None), description=merged)
     return n
 
 
