@@ -855,13 +855,21 @@ _PSA_INSTRUCTION = (
 
 
 def psa(method_text: str, benchmark: dict, docs: list[dict],
-        model: str | None = None) -> dict:
+        model: str | None = None, format_text: str | None = None) -> dict:
     """⚖️ Problem-solution approach: run the user's uploaded methodology STRICTLY,
     step by step, over the benchmark (claimed invention) + two user-selected
-    prior-art documents (full primary text). Same return contract as chat()."""
+    prior-art documents (full primary text). `format_text` = the user's uploaded
+    output-format document, applied in combination with the steps. Same return
+    contract as chat()."""
     parts = [_PREAMBLE, _GROUNDING_INSTRUCTION]
     parts.append("USER-SUPPLIED METHODOLOGY (BINDING — the answer must follow it "
                  "verbatim, step by step):\n\n" + (method_text or "")[:MAX_METHOD_CHARS])
+    if format_text:
+        parts.append(
+            "USER-SUPPLIED OUTPUT FORMAT (BINDING — the answer's STRUCTURE must "
+            "follow this document exactly, in combination with the methodology "
+            "steps above; where the two conflict on structure, this format "
+            "document wins):\n\n" + format_text[:MAX_METHOD_CHARS])
     parts.append("BENCHMARK DOCUMENT — the claimed invention under assessment:\n\n"
                  + _benchmark_block(benchmark))
     per = max(MIN_DOC_CHARS, min(MAX_FULLTEXT_CHARS,

@@ -27,7 +27,8 @@ DATA_DIR="$(dirname "${PB_DB:-/data/workbench.db}")"
 rm -f "$DATA_DIR"/.claude_read_*.lock \
       "$DATA_DIR"/.claude_read_*.pause \
       "$DATA_DIR"/.nlm_rate_*.lock \
-      "$DATA_DIR"/psa/pending.json 2>/dev/null || true
+      "$DATA_DIR"/psa/pending.json \
+      "$DATA_DIR"/psa/*-pending.json 2>/dev/null || true
 echo "entrypoint: cleared stale background-job locks in $DATA_DIR"
 
 exec gunicorn patentbench.web.api:app -k uvicorn.workers.UvicornWorker \

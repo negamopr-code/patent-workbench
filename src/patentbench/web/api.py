@@ -1928,12 +1928,17 @@ def ask_notebook(tab_id: int, body: schemas.AskNotebookRequest):
 
 # ---------- ⚖️ problem-solution approach ----------
 
-def _psa_method() -> dict | None:
-    """The uploaded methodology: {name, chars, uploaded_at, text} or None. One
-    global document (the approach is jurisdiction doctrine, not tab data), kept in
-    the data volume so it survives rebuilds."""
-    meta_path = os.path.join(PSA_DIR, "method.json")
-    txt_path = os.path.join(PSA_DIR, "method.txt")
+# Two GLOBAL documents drive every ⚖️ run, both kept in the data volume forever
+# (they are doctrine, not tab data): `method` = the steps to follow, `format` =
+# how the answer must be structured. Same storage/upload/OCR machinery for both.
+PSA_KINDS = ("method", "format")
+
+
+def _psa_doc(kind: str) -> dict | None:
+    """The uploaded PSA document of this kind: {name, chars, uploaded_at, text}
+    or None."""
+    meta_path = os.path.join(PSA_DIR, f"{kind}.json")
+    txt_path = os.path.join(PSA_DIR, f"{kind}.txt")
     if not (os.path.exists(meta_path) and os.path.exists(txt_path)):
         return None
     with open(meta_path, encoding="utf-8") as fh:
@@ -1943,16 +1948,16 @@ def _psa_method() -> dict | None:
     return meta
 
 
-def _psa_pending() -> dict | None:
-    p = os.path.join(PSA_DIR, "pending.json")
+def _psa_pending(kind: str) -> dict | None:
+    p = os.path.join(PSA_DIR, f"{kind}-pending.json")
     if not os.path.exists(p):
         return None
     with open(p, encoding="utf-8") as fh:
         return json.load(fh)
 
 
-def _write_psa_pending(d: dict | None) -> None:
-    p = os.path.join(PSA_DIR, "pending.json")
+def _write_psa_pending(kind: str, d: dict | None) -> None:
+    p = os.path.join(PSA_DIR, f"{kind}-pending.json")
     if d is None:
         try:
             os.remove(p)
@@ -1964,12 +1969,18 @@ def _write_psa_pending(d: dict | None) -> None:
         json.dump(d, fh, ensure_ascii=False)
 
 
-def _transcribe_psa_method(name: str) -> None:
-    """Background: a SCANNED (image-only) methodology PDF → page PNGs (pdftoppm)
-    → vision transcription per page (same engine as benchmark photo pages) →
-    method.txt. Progress/errors live in pending.json so the UI can poll."""
-    pdf = os.path.join(PSA_DIR, "method.pdf")
-    pages_dir = os.path.join(PSA_DIR, "pages")
+def _kind_or_404(kind: str) -> None:
+    if kind not in PSA_KINDS:
+        raise HTTPException(404, f"unknown PSA document kind '{kind}' "
+                                 f"(expected one of {', '.join(PSA_KINDS)})")
+
+
+def _transcribe_psa_doc(kind: str, name: str) -> None:
+    """Background: a SCANNED (image-only) PSA PDF → page PNGs (pdftoppm) → vision
+    transcription per page (same engine as benchmark photo pages) → {kind}.txt.
+    Progress/errors live in {kind}-pending.json so the UI can poll."""
+    pdf = os.path.join(PSA_DIR, f"{kind}.pdf")
+    pages_dir = os.path.join(PSA_DIR, f"pages-{kind}")
     shutil.rmtree(pages_dir, ignore_errors=True)
     os.makedirs(pages_dir, exist_ok=True)
     try:
@@ -1983,7 +1994,7 @@ def _transcribe_psa_method(name: str) -> None:
     if not pages:
         _write_psa_pending({"name": name, "error": "the PDF produced no page images"})
         return
-    _write_psa_pending({"name": name, "total": len(pages), "done": 0})
+    _write_psa_pending(kind, {"name": name, "total": len(pages), "done": 0})
     texts: list[str] = [""] * len(pages)
     done = 0
     def one(ip):
@@ -1994,62 +2005,65 @@ def _transcribe_psa_method(name: str) -> None:
         for i, t in ex.map(one, enumerate(pages)):
             texts[i] = t
             done += 1
-            _write_psa_pending({"name": name, "total": len(pages), "done": done})
+            _write_psa_pending(kind, {"name": name, "total": len(pages), "done": done})
     text = "\n\n".join(f"— page {i + 1} —\n{t.strip()}"
                        for i, t in enumerate(texts) if t.strip()).strip()
     if len(text) < 50:
-        _write_psa_pending({"name": name,
-                            "error": "vision transcription yielded almost no text"})
+        _write_psa_pending(kind, {"name": name,
+                                  "error": "vision transcription yielded almost no text"})
         return
-    with open(os.path.join(PSA_DIR, "method.txt"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(PSA_DIR, f"{kind}.txt"), "w", encoding="utf-8") as fh:
         fh.write(text)
     meta = {"name": name, "chars": len(text), "uploaded_at": int(time.time())}
-    with open(os.path.join(PSA_DIR, "method.json"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(PSA_DIR, f"{kind}.json"), "w", encoding="utf-8") as fh:
         json.dump(meta, fh, ensure_ascii=False)
-    _write_psa_pending(None)
+    _write_psa_pending(kind, None)
 
 
-@app.get("/api/psa/method")
-def psa_method_status():
-    pend = _psa_pending()
+@app.get("/api/psa/{kind}")
+def psa_doc_status(kind: str):
+    _kind_or_404(kind)
+    pend = _psa_pending(kind)
     if pend:
         if pend.get("error"):
             return {"ok": False, "name": pend.get("name"), "error": pend["error"]}
         return {"ok": False, "pending": True, "name": pend.get("name"),
                 "progress": f"{pend.get('done', 0)}/{pend.get('total') or '?'}"}
-    m = _psa_method()
+    m = _psa_doc(kind)
     if not m:
         return {"ok": False}
     return {"ok": True, "name": m["name"], "chars": m["chars"],
             "uploaded_at": m["uploaded_at"]}
 
 
-@app.post("/api/psa/method")
-async def psa_method_upload(bg: BackgroundTasks, file: UploadFile = File(...)):
-    """Upload/replace the problem-solution methodology document (PDF/TXT/MD).
-    Its text is followed VERBATIM, step by step, by every ⚖️ run. A scanned
-    (image-only) PDF is vision-OCR'd page by page in the background."""
+@app.post("/api/psa/{kind}")
+async def psa_doc_upload(kind: str, bg: BackgroundTasks, file: UploadFile = File(...)):
+    """Upload/replace a global ⚖️ document (PDF/TXT/MD): `method` = the steps,
+    followed VERBATIM step by step; `format` = the answer's structure, applied in
+    combination with the steps. A scanned (image-only) PDF is vision-OCR'd page
+    by page in the background."""
+    _kind_or_404(kind)
     data = await file.read()
     if len(data) > MAX_UPLOAD:
         raise HTTPException(413, "too large (25 MB max)")
-    name = os.path.basename(file.filename or "method")
+    name = os.path.basename(file.filename or kind)
     ext = os.path.splitext(name)[1].lower()
     os.makedirs(PSA_DIR, exist_ok=True)
     if ext == ".pdf":
-        raw_path = os.path.join(PSA_DIR, "method.pdf")
+        raw_path = os.path.join(PSA_DIR, f"{kind}.pdf")
         with open(raw_path, "wb") as fh:
             fh.write(data)
         res = extract.text_from_pdf(raw_path)
         if "error" in res or len((res.get("text") or "").strip()) < 50:
             # scanned image-only PDF — no text layer. Same answer as the benchmark
             # photo path: render pages and vision-transcribe them, in the background.
-            for stale in ("method.txt", "method.json"):
+            for stale in (f"{kind}.txt", f"{kind}.json"):
                 try:
                     os.remove(os.path.join(PSA_DIR, stale))
                 except FileNotFoundError:
                     pass
-            _write_psa_pending({"name": name, "total": 0, "done": 0})
-            bg.add_task(_transcribe_psa_method, name)
+            _write_psa_pending(kind, {"name": name, "total": 0, "done": 0})
+            bg.add_task(_transcribe_psa_doc, kind, name)
             return {"ok": True, "pending": True, "name": name}
         text = res["text"]
     elif ext in (".txt", ".md"):
@@ -2060,10 +2074,10 @@ async def psa_method_upload(bg: BackgroundTasks, file: UploadFile = File(...)):
     if len(text) < 50:
         raise HTTPException(400, "the document yielded almost no text — is it a "
                                  "scan? Provide a text PDF / TXT / MD")
-    with open(os.path.join(PSA_DIR, "method.txt"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(PSA_DIR, f"{kind}.txt"), "w", encoding="utf-8") as fh:
         fh.write(text)
     meta = {"name": name, "chars": len(text), "uploaded_at": int(time.time())}
-    with open(os.path.join(PSA_DIR, "method.json"), "w", encoding="utf-8") as fh:
+    with open(os.path.join(PSA_DIR, f"{kind}.json"), "w", encoding="utf-8") as fh:
         json.dump(meta, fh, ensure_ascii=False)
     return {"ok": True, **meta}
 
@@ -2073,10 +2087,11 @@ def psa_run(tab_id: int, body: schemas.PsaRequest):
     """⚖️ Run the uploaded methodology STRICTLY step-by-step: benchmark = claimed
     invention, the two selected candidates = D1/D2. Appends to the tab's chat."""
     _tab_or_404(tab_id)
-    method = _psa_method()
+    method = _psa_doc("method")
     if not method:
         raise HTTPException(400, "no methodology uploaded yet — upload the "
                                  "problem-solution document first (📋)")
+    fmt = _psa_doc("format")   # optional: the answer's structure, if uploaded
     benchmark = db.get_benchmark(tab_id)
     if not benchmark or not (benchmark.get("text") or benchmark.get("claims")
                              or benchmark.get("description")):
@@ -2093,14 +2108,18 @@ def psa_run(tab_id: int, body: schemas.PsaRequest):
     model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
     nums = " + ".join(d.get("number") or "?" for d in docs)
     db.append_message(tab_id, "q", f"⚖️ Problem-solution approach on {nums} "
-                                   f"(method: {method['name']})")
-    res = claude_bridge.psa(method["text"], benchmark, docs, model=model)
+                                   f"(method: {method['name']}"
+                                   + (f", format: {fmt['name']}" if fmt else "") + ")")
+    res = claude_bridge.psa(method["text"], benchmark, docs, model=model,
+                            format_text=fmt["text"] if fmt else None)
     out = []
     if "error" in res:
         out.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
         return {"messages": out, "error": res["error"]}
     participants = [{"kind": "model", "title": model},
                     {"kind": "psa", "title": method["name"]}]
+    if fmt:
+        participants.append({"kind": "psa", "title": f"format: {fmt['name']}"})
     participants += [{"kind": "documents", "title": f"D{i} {d.get('number') or '?'}"}
                      for i, d in enumerate(docs, 1)]
     out.append(db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),

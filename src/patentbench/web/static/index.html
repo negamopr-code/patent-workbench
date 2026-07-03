@@ -168,9 +168,11 @@
           <label class="model-pick answer-pick" title="How Claude should shape the answer. Default = concise (or 📝 Full). Other presets impose a structure, e.g. claims grouped by focus → what the reference discloses, with [paragraph]/claim/figure citations.">📐 <select id="answer-format"></select></label>
         </div>
         <button id="best-match" class="btn small" title="Pre-fill a ranking question">🏆 Best match</button>
-        <button id="psa-btn" class="btn small" title="⚖️ Problem-solution approach: runs your uploaded methodology document STRICTLY step-by-step, with the benchmark as the claimed invention and the TWO checked candidates as D1/D2.">⚖️ Problem-solution</button>
-        <button id="psa-method-btn" class="btn small" title="Upload/replace the problem-solution methodology document (PDF/TXT/MD). It is followed verbatim on every ⚖️ run.">📋 method…</button>
+        <button id="psa-btn" class="btn small" title="⚖️ Problem-solution approach: runs your uploaded methodology document STRICTLY step-by-step, with the benchmark as the claimed invention and the TWO ticked candidates as D1/D2 (tick their checkboxes in the 📚 Candidates list — first tick = D1, second = D2).">⚖️ Problem-solution</button>
+        <button id="psa-method-btn" class="btn small" title="Upload/replace the problem-solution METHODOLOGY document (PDF/TXT/MD) — the steps, followed verbatim on every ⚖️ run. Stored permanently, shared by ALL tabs.">📋 method…</button>
         <input type="file" id="psa-file" accept=".pdf,.txt,.md" hidden>
+        <button id="psa-format-btn" class="btn small" title="Upload/replace the OUTPUT FORMAT document (PDF/TXT/MD) — the structure every ⚖️ answer must follow, in combination with the methodology steps. Stored permanently, shared by ALL tabs.">📑 format…</button>
+        <input type="file" id="psa-format-file" accept=".pdf,.txt,.md" hidden>
         <label class="check small"><input type="checkbox" id="ask-nb"> include NotebookLM</label>
         <button id="ask-claude" class="btn primary">Ask Claude</button>
         <button id="ask-notebook" class="btn">Notebook only</button>

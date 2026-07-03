@@ -2430,7 +2430,7 @@ def test_psa_requires_method_benchmark_and_two_docs(psa_client):
 
 def test_psa_runs_method_over_benchmark_and_two_docs(psa_client, monkeypatch):
     seen = {}
-    def fake_psa(method_text, benchmark, docs, model=None):
+    def fake_psa(method_text, benchmark, docs, model=None, format_text=None):
         seen.update(method=method_text, benchmark=benchmark, docs=docs, model=model)
         return {"answer": "STEP 1: D1 is CN113964850 …", "model": model}
     monkeypatch.setattr(claude_bridge, "psa", fake_psa)
@@ -2480,7 +2480,7 @@ def test_psa_scanned_pdf_falls_back_to_vision_ocr(psa_client, monkeypatch):
     import os as _os
     monkeypatch.setattr(api.extract, "text_from_pdf",
                         lambda p: {"error": "no extractable text in the PDF"})
-    def fake_transcribe(name):
+    def fake_transcribe(kind, name):
         text = "STEP 1: closest prior art. " * 10
         with open(_os.path.join(api.PSA_DIR, "method.txt"), "w") as fh:
             fh.write(text)
@@ -2488,8 +2488,8 @@ def test_psa_scanned_pdf_falls_back_to_vision_ocr(psa_client, monkeypatch):
             import json as _json, time as _time
             _json.dump({"name": name, "chars": len(text),
                         "uploaded_at": int(_time.time())}, fh)
-        api._write_psa_pending(None)
-    monkeypatch.setattr(api, "_transcribe_psa_method", fake_transcribe)
+        api._write_psa_pending("method", None)
+    monkeypatch.setattr(api, "_transcribe_psa_doc", fake_transcribe)
     r = psa_client.post("/api/psa/method",
                         files={"file": ("scan.pdf", b"%PDF-1.4 fake scan",
                                         "application/pdf")})
@@ -2500,11 +2500,64 @@ def test_psa_scanned_pdf_falls_back_to_vision_ocr(psa_client, monkeypatch):
 
 
 def test_psa_method_status_reports_ocr_progress_and_error(psa_client):
-    api._write_psa_pending({"name": "scan.pdf", "total": 12, "done": 3})
+    api._write_psa_pending("method", {"name": "scan.pdf", "total": 12, "done": 3})
     s = psa_client.get("/api/psa/method").json()
     assert s == {"ok": False, "pending": True, "name": "scan.pdf", "progress": "3/12"}
-    api._write_psa_pending({"name": "scan.pdf", "error": "pdftoppm failed"})
+    api._write_psa_pending("method", {"name": "scan.pdf", "error": "pdftoppm failed"})
     s = psa_client.get("/api/psa/method").json()
     assert s["ok"] is False and "pdftoppm" in s["error"] and "pending" not in s
-    api._write_psa_pending(None)
+    api._write_psa_pending("method", None)
     assert psa_client.get("/api/psa/method").json() == {"ok": False}
+
+
+def test_psa_format_doc_uploaded_and_combined(psa_client, monkeypatch):
+    seen = {}
+    def fake_psa(method_text, benchmark, docs, model=None, format_text=None):
+        seen.update(method=method_text, fmt=format_text)
+        return {"answer": "formatted per spec", "model": model}
+    monkeypatch.setattr(claude_bridge, "psa", fake_psa)
+    _upload_method(psa_client)
+    r = psa_client.post("/api/psa/format",
+                        files={"file": ("report-format.txt",
+                                        b"SECTION A: header table. SECTION B: reasoned "
+                                        b"could-would analysis. SECTION C: conclusion.",
+                                        "text/plain")})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert psa_client.get("/api/psa/format").json()["name"] == "report-format.txt"
+    tab = psa_client.post("/api/tabs", json={"name": "PSAF"}).json()
+    psa_client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP1111111A1"})
+    psa_client.post(f"/api/tabs/{tab['id']}/documents",
+                    json={"text": "CN113964850 US11909216B2"})
+    ids = [d["id"] for d in
+           psa_client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]]
+    psa_client.post(f"/api/tabs/{tab['id']}/psa", json={"doc_ids": ids})
+    assert "SECTION A" in seen["fmt"]                      # format doc reached the run
+    msgs = psa_client.get(f"/api/tabs/{tab['id']}/state").json()["messages"]
+    c = [m for m in msgs if m["role"] == "c"][-1]
+    assert any(p["title"] == "format: report-format.txt" for p in c["participants"])
+    q = [m for m in msgs if m["role"] == "q"][-1]
+    assert "format: report-format.txt" in q["text"]
+
+
+def test_psa_unknown_kind_404(psa_client):
+    assert psa_client.get("/api/psa/bogus").status_code == 404
+
+
+def test_psa_prompt_format_block_binding(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, extra_args=None, cwd=None, timeout=None:
+                        captured.update(p=prompt) or {"answer": "ok", "model": model})
+    claude_bridge.psa("STEP 1: x.", {"number": "EP1", "claims": "1. A thing."},
+                      [{"number": "D1DOC", "claims": "1. x"},
+                       {"number": "D2DOC", "claims": "1. y"}],
+                      format_text="SECTION A: table first.")
+    p = captured["p"]
+    assert "USER-SUPPLIED OUTPUT FORMAT (BINDING" in p
+    assert "SECTION A: table first." in p
+    assert "this format document wins" in p
+    # without a format doc the block is absent
+    claude_bridge.psa("STEP 1: x.", {"number": "EP1", "claims": "1. A thing."},
+                      [{"number": "D1DOC", "claims": "1. x"},
+                       {"number": "D2DOC", "claims": "1. y"}])
+    assert "OUTPUT FORMAT" not in captured["p"]

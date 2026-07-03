@@ -1088,7 +1088,7 @@ function renderDocs(allDocs) {
       const sel = document.createElement('input');
       sel.type = 'checkbox';
       sel.checked = docSelection.has(d.id);
-      sel.title = 'Select a candidate to (a) load its FULL primary text into the chat so Claude can quote real claims/[paragraphs], and (b) scope 🏆 Deep compare to it. None selected = whole list, clipped.';
+      sel.title = 'Select a candidate to (a) load its FULL primary text into the chat so Claude can quote real claims/[paragraphs], (b) scope 🏆 Deep compare to it, and (c) pick D1/D2 for ⚖️ Problem-solution (tick exactly two). None selected = whole list, clipped.';
       sel.onchange = () => {
         sel.checked ? docSelection.add(d.id) : docSelection.delete(d.id);
         updateDocSelChip();
@@ -1361,7 +1361,8 @@ function updateDocSelChip() {
   const chip = $('doc-sel');
   const bar = $('deep-bar');
   if (docSelection.size) {
-    chip.textContent = `🏆 ${docSelection.size} selected for deep analysis`;
+    chip.textContent = `🏆 ${docSelection.size} selected for deep analysis`
+      + (docSelection.size === 2 ? ' · ⚖️ D1+D2 ready' : '');
     chip.classList.remove('hidden');
     chip.style.cursor = 'default';
     chip.onclick = null;
@@ -1651,57 +1652,69 @@ $('ask-claude').onclick = () => sendChat(false);
 $('ask-notebook').onclick = () => sendChat(true);
 
 // ---------- ⚖️ problem-solution approach ----------
+// Two GLOBAL documents (stored server-side forever, shared by all tabs):
+// method = the steps, format = the answer structure.
 
-let psaMethod = null;   // {name, chars, uploaded_at} of the uploaded methodology
+const psaDocs = { method: null, format: null };
+const PSA_UI = { method: { btn: 'psa-method-btn', file: 'psa-file', icon: '📋', label: 'method…' },
+                 format: { btn: 'psa-format-btn', file: 'psa-format-file', icon: '📑', label: 'format…' } };
 
-async function refreshPsaMethod() {
-  const r = await api('/api/psa/method');
-  psaMethod = r.ok ? r : null;
-  $('psa-method-btn').textContent = psaMethod ? `📋 ${psaMethod.name}` : '📋 method…';
-  $('psa-method-btn').title = psaMethod
-    ? `Methodology: ${psaMethod.name} (${psaMethod.chars} chars). Click to replace.`
-    : 'Upload the problem-solution methodology document (PDF/TXT/MD). It is followed verbatim on every ⚖️ run.';
+async function refreshPsaDoc(kind) {
+  const u = PSA_UI[kind];
+  const r = await api(`/api/psa/${kind}`);
+  psaDocs[kind] = r.ok ? r : null;
+  $(u.btn).textContent = psaDocs[kind] ? `${u.icon} ${psaDocs[kind].name}` : `${u.icon} ${u.label}`;
+  if (psaDocs[kind]) {
+    $(u.btn).title = `${kind}: ${psaDocs[kind].name} (${psaDocs[kind].chars} chars), `
+      + 'stored permanently and shared by ALL tabs. Click to replace.';
+  }
 }
 
-$('psa-method-btn').onclick = () => $('psa-file').click();
-
-$('psa-file').onchange = async () => {
-  const f = $('psa-file').files[0];
-  $('psa-file').value = '';
-  if (!f) return;
-  const fd = new FormData();
-  fd.append('file', f);
-  const r = await api('/api/psa/method', { method: 'POST', body: fd });
-  if (r.error) { alert(`Method upload failed: ${r.error}`); return; }
-  if (r.pending) {           // scanned PDF → background vision OCR; poll progress
-    $('psa-method-btn').textContent = '📋 OCR…';
-    const timer = setInterval(async () => {
-      const s = await api('/api/psa/method');
-      if (s.pending) { $('psa-method-btn').textContent = `📋 OCR ${s.progress || ''}…`; return; }
-      clearInterval(timer);
-      if (s.error) alert(`Method OCR failed: ${s.error}`);
-      await refreshPsaMethod();
-    }, 3000);
-    return;
-  }
-  await refreshPsaMethod();
-};
+for (const kind of Object.keys(PSA_UI)) {
+  const u = PSA_UI[kind];
+  $(u.btn).onclick = () => $(u.file).click();
+  $(u.file).onchange = async () => {
+    const f = $(u.file).files[0];
+    $(u.file).value = '';
+    if (!f) return;
+    const fd = new FormData();
+    fd.append('file', f);
+    const r = await api(`/api/psa/${kind}`, { method: 'POST', body: fd });
+    if (r.error) { alert(`${kind} upload failed: ${r.error}`); return; }
+    if (r.pending) {         // scanned PDF → background vision OCR; poll progress
+      $(u.btn).textContent = `${u.icon} OCR…`;
+      const timer = setInterval(async () => {
+        const s = await api(`/api/psa/${kind}`);
+        if (s.pending) { $(u.btn).textContent = `${u.icon} OCR ${s.progress || ''}…`; return; }
+        clearInterval(timer);
+        if (s.error) alert(`${kind} OCR failed: ${s.error}`);
+        await refreshPsaDoc(kind);
+      }, 3000);
+      return;
+    }
+    await refreshPsaDoc(kind);
+  };
+}
 
 $('psa-btn').onclick = async () => {
   if (!activeTab) return;
-  if (!psaMethod) {
+  if (!psaDocs.method) {
     alert('Upload the problem-solution methodology document first (📋 method…).');
     $('psa-file').click();
     return;
   }
   if (docSelection.size !== 2) {
-    alert(`Tick exactly TWO candidates (they become D1 and D2) — ${docSelection.size} selected now.`);
+    alert('⚖️ needs exactly TWO candidates as D1 and D2.\n\n'
+      + 'Tick their CHECKBOXES in the 📚 Candidates list (the box at the left of '
+      + 'each fetched row) — first tick = D1, second tick = D2.\n\n'
+      + `Currently selected: ${docSelection.size}.`);
     return;
   }
   const tabAtSend = activeTab;
   const nums = [...docSelection]
     .map(id => (lastDocs.find(d => d.id === id) || {}).number || `#${id}`).join(' + ');
-  appendMsg({ role: 'q', text: `⚖️ Problem-solution approach on ${nums} (method: ${psaMethod.name})` });
+  appendMsg({ role: 'q', text: `⚖️ Problem-solution approach on ${nums} (method: ${psaDocs.method.name}`
+    + (psaDocs.format ? `, format: ${psaDocs.format.name}` : '') + ')' });
   setBusy(true, 'Problem-solution approach');
   const res = await api(`/api/tabs/${tabAtSend}/psa`, {
     method: 'POST',
@@ -1716,7 +1729,8 @@ $('psa-btn').onclick = async () => {
   for (const m of res.messages || []) appendMsg(m);
 };
 
-refreshPsaMethod();
+refreshPsaDoc('method');
+refreshPsaDoc('format');
 
 async function runDeepCompare(idsArg, skipScored, readModelOverride) {
   // idsArg: array of doc ids → those candidates; null/[] → EVERY candidate
