@@ -2474,3 +2474,37 @@ def test_psa_prompt_is_strict_and_carries_all_parts(monkeypatch):
     assert "D2 — selected prior-art document 2 of 2" in p
     assert "do not skip, merge, reorder" in p
     assert "never silently drop it" in p
+
+
+def test_psa_scanned_pdf_falls_back_to_vision_ocr(psa_client, monkeypatch):
+    import os as _os
+    monkeypatch.setattr(api.extract, "text_from_pdf",
+                        lambda p: {"error": "no extractable text in the PDF"})
+    def fake_transcribe(name):
+        text = "STEP 1: closest prior art. " * 10
+        with open(_os.path.join(api.PSA_DIR, "method.txt"), "w") as fh:
+            fh.write(text)
+        with open(_os.path.join(api.PSA_DIR, "method.json"), "w") as fh:
+            import json as _json, time as _time
+            _json.dump({"name": name, "chars": len(text),
+                        "uploaded_at": int(_time.time())}, fh)
+        api._write_psa_pending(None)
+    monkeypatch.setattr(api, "_transcribe_psa_method", fake_transcribe)
+    r = psa_client.post("/api/psa/method",
+                        files={"file": ("scan.pdf", b"%PDF-1.4 fake scan",
+                                        "application/pdf")})
+    assert r.status_code == 200 and r.json().get("pending") is True
+    # TestClient runs the background task inline → OCR has "finished" by now
+    s = psa_client.get("/api/psa/method").json()
+    assert s["ok"] is True and s["name"] == "scan.pdf"
+
+
+def test_psa_method_status_reports_ocr_progress_and_error(psa_client):
+    api._write_psa_pending({"name": "scan.pdf", "total": 12, "done": 3})
+    s = psa_client.get("/api/psa/method").json()
+    assert s == {"ok": False, "pending": True, "name": "scan.pdf", "progress": "3/12"}
+    api._write_psa_pending({"name": "scan.pdf", "error": "pdftoppm failed"})
+    s = psa_client.get("/api/psa/method").json()
+    assert s["ok"] is False and "pdftoppm" in s["error"] and "pending" not in s
+    api._write_psa_pending(None)
+    assert psa_client.get("/api/psa/method").json() == {"ok": False}

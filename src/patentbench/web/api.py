@@ -6,6 +6,8 @@ import itertools
 import json
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -1941,8 +1943,80 @@ def _psa_method() -> dict | None:
     return meta
 
 
+def _psa_pending() -> dict | None:
+    p = os.path.join(PSA_DIR, "pending.json")
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _write_psa_pending(d: dict | None) -> None:
+    p = os.path.join(PSA_DIR, "pending.json")
+    if d is None:
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+        return
+    os.makedirs(PSA_DIR, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, ensure_ascii=False)
+
+
+def _transcribe_psa_method(name: str) -> None:
+    """Background: a SCANNED (image-only) methodology PDF → page PNGs (pdftoppm)
+    → vision transcription per page (same engine as benchmark photo pages) →
+    method.txt. Progress/errors live in pending.json so the UI can poll."""
+    pdf = os.path.join(PSA_DIR, "method.pdf")
+    pages_dir = os.path.join(PSA_DIR, "pages")
+    shutil.rmtree(pages_dir, ignore_errors=True)
+    os.makedirs(pages_dir, exist_ok=True)
+    try:
+        subprocess.run(["pdftoppm", "-r", "150", "-png", pdf,
+                        os.path.join(pages_dir, "pg")],
+                       check=True, timeout=180, capture_output=True)
+    except (subprocess.SubprocessError, OSError) as e:
+        _write_psa_pending({"name": name, "error": f"pdftoppm failed: {e}"})
+        return
+    pages = sorted(os.listdir(pages_dir))
+    if not pages:
+        _write_psa_pending({"name": name, "error": "the PDF produced no page images"})
+        return
+    _write_psa_pending({"name": name, "total": len(pages), "done": 0})
+    texts: list[str] = [""] * len(pages)
+    done = 0
+    def one(ip):
+        i, p = ip
+        r = extract.text_from_image(os.path.join(pages_dir, p))
+        return i, (r.get("text") or "")
+    with ThreadPoolExecutor(max_workers=TRANSCRIBE_WORKERS) as ex:
+        for i, t in ex.map(one, enumerate(pages)):
+            texts[i] = t
+            done += 1
+            _write_psa_pending({"name": name, "total": len(pages), "done": done})
+    text = "\n\n".join(f"— page {i + 1} —\n{t.strip()}"
+                       for i, t in enumerate(texts) if t.strip()).strip()
+    if len(text) < 50:
+        _write_psa_pending({"name": name,
+                            "error": "vision transcription yielded almost no text"})
+        return
+    with open(os.path.join(PSA_DIR, "method.txt"), "w", encoding="utf-8") as fh:
+        fh.write(text)
+    meta = {"name": name, "chars": len(text), "uploaded_at": int(time.time())}
+    with open(os.path.join(PSA_DIR, "method.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, ensure_ascii=False)
+    _write_psa_pending(None)
+
+
 @app.get("/api/psa/method")
 def psa_method_status():
+    pend = _psa_pending()
+    if pend:
+        if pend.get("error"):
+            return {"ok": False, "name": pend.get("name"), "error": pend["error"]}
+        return {"ok": False, "pending": True, "name": pend.get("name"),
+                "progress": f"{pend.get('done', 0)}/{pend.get('total') or '?'}"}
     m = _psa_method()
     if not m:
         return {"ok": False}
@@ -1951,9 +2025,10 @@ def psa_method_status():
 
 
 @app.post("/api/psa/method")
-async def psa_method_upload(file: UploadFile = File(...)):
+async def psa_method_upload(bg: BackgroundTasks, file: UploadFile = File(...)):
     """Upload/replace the problem-solution methodology document (PDF/TXT/MD).
-    Its text is followed VERBATIM, step by step, by every ⚖️ run."""
+    Its text is followed VERBATIM, step by step, by every ⚖️ run. A scanned
+    (image-only) PDF is vision-OCR'd page by page in the background."""
     data = await file.read()
     if len(data) > MAX_UPLOAD:
         raise HTTPException(413, "too large (25 MB max)")
@@ -1965,8 +2040,17 @@ async def psa_method_upload(file: UploadFile = File(...)):
         with open(raw_path, "wb") as fh:
             fh.write(data)
         res = extract.text_from_pdf(raw_path)
-        if "error" in res:
-            raise HTTPException(400, f"PDF text extraction failed: {res['error']}")
+        if "error" in res or len((res.get("text") or "").strip()) < 50:
+            # scanned image-only PDF — no text layer. Same answer as the benchmark
+            # photo path: render pages and vision-transcribe them, in the background.
+            for stale in ("method.txt", "method.json"):
+                try:
+                    os.remove(os.path.join(PSA_DIR, stale))
+                except FileNotFoundError:
+                    pass
+            _write_psa_pending({"name": name, "total": 0, "done": 0})
+            bg.add_task(_transcribe_psa_method, name)
+            return {"ok": True, "pending": True, "name": name}
         text = res["text"]
     elif ext in (".txt", ".md"):
         text = data.decode("utf-8", errors="replace")

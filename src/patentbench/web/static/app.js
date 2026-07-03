@@ -1673,6 +1673,17 @@ $('psa-file').onchange = async () => {
   fd.append('file', f);
   const r = await api('/api/psa/method', { method: 'POST', body: fd });
   if (r.error) { alert(`Method upload failed: ${r.error}`); return; }
+  if (r.pending) {           // scanned PDF → background vision OCR; poll progress
+    $('psa-method-btn').textContent = '📋 OCR…';
+    const timer = setInterval(async () => {
+      const s = await api('/api/psa/method');
+      if (s.pending) { $('psa-method-btn').textContent = `📋 OCR ${s.progress || ''}…`; return; }
+      clearInterval(timer);
+      if (s.error) alert(`Method OCR failed: ${s.error}`);
+      await refreshPsaMethod();
+    }, 3000);
+    return;
+  }
   await refreshPsaMethod();
 };
 
