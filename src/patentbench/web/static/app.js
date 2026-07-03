@@ -1696,7 +1696,7 @@ for (const kind of Object.keys(PSA_UI)) {
   };
 }
 
-$('psa-btn').onclick = async () => {
+async function runPsa(stretch) {
   if (!activeTab) return;
   if (!psaDocs.method) {
     alert('Upload the problem-solution methodology document first (📋 method…).');
@@ -1704,7 +1704,7 @@ $('psa-btn').onclick = async () => {
     return;
   }
   if (docSelection.size !== 2) {
-    alert('⚖️ needs exactly TWO candidates as D1 and D2.\n\n'
+    alert(`${stretch ? '🪄' : '⚖️'} needs exactly TWO candidates as D1 and D2.\n\n`
       + 'Tick their CHECKBOXES in the 📚 Candidates list (the box at the left of '
       + 'each fetched row) — first tick = D1, second tick = D2.\n\n'
       + `Currently selected: ${docSelection.size}.`);
@@ -1713,13 +1713,16 @@ $('psa-btn').onclick = async () => {
   const tabAtSend = activeTab;
   const nums = [...docSelection]
     .map(id => (lastDocs.find(d => d.id === id) || {}).number || `#${id}`).join(' + ');
-  appendMsg({ role: 'q', text: `⚖️ Problem-solution approach on ${nums} (method: ${psaDocs.method.name}`
+  const head = stretch ? '🪄 Argumentation stretch (problem-solution approach)'
+                       : '⚖️ Problem-solution approach';
+  appendMsg({ role: 'q', text: `${head} on ${nums} (method: ${psaDocs.method.name}`
     + (psaDocs.format ? `, format: ${psaDocs.format.name}` : '') + ')' });
-  setBusy(true, 'Problem-solution approach');
+  setBusy(true, stretch ? 'Argumentation stretch' : 'Problem-solution approach');
   const res = await api(`/api/tabs/${tabAtSend}/psa`, {
     method: 'POST',
     body: JSON.stringify({ doc_ids: [...docSelection], model: $('model').value,
-                           use_discussions: $('psa-discuss').checked }),
+                           use_discussions: $('psa-discuss').checked,
+                           stretch }),
   });
   setBusy(false);
   if (activeTab !== tabAtSend) return;
@@ -1728,7 +1731,10 @@ $('psa-btn').onclick = async () => {
     return;
   }
   for (const m of res.messages || []) appendMsg(m);
-};
+}
+
+$('psa-btn').onclick = () => runPsa(false);
+$('psa-stretch-btn').onclick = () => runPsa(true);
 
 refreshPsaDoc('method');
 refreshPsaDoc('format');

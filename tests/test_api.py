@@ -2431,7 +2431,7 @@ def test_psa_requires_method_benchmark_and_two_docs(psa_client):
 def test_psa_runs_method_over_benchmark_and_two_docs(psa_client, monkeypatch):
     seen = {}
     def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
-                 discussions=None):
+                 discussions=None, **kw):
         seen.update(method=method_text, benchmark=benchmark, docs=docs, model=model)
         return {"answer": "STEP 1: D1 is CN113964850 …", "model": model}
     monkeypatch.setattr(claude_bridge, "psa", fake_psa)
@@ -2514,7 +2514,7 @@ def test_psa_method_status_reports_ocr_progress_and_error(psa_client):
 def test_psa_format_doc_uploaded_and_combined(psa_client, monkeypatch):
     seen = {}
     def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
-                 discussions=None):
+                 discussions=None, **kw):
         seen.update(method=method_text, fmt=format_text)
         return {"answer": "formatted per spec", "model": model}
     monkeypatch.setattr(claude_bridge, "psa", fake_psa)
@@ -2568,7 +2568,7 @@ def test_psa_prompt_format_block_binding(monkeypatch):
 def test_psa_reuses_prior_discussions_from_all_chats(psa_client, monkeypatch):
     seen = {}
     def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
-                 discussions=None):
+                 discussions=None, **kw):
         seen["disc"] = discussions
         return {"answer": "built on prior findings", "model": model}
     monkeypatch.setattr(claude_bridge, "psa", fake_psa)
@@ -2622,3 +2622,46 @@ def test_psa_prompt_discussions_block(monkeypatch):
     assert "claim 3 covers it" in p
     assert "REUSE this prior analysis" in p
     assert "do not rediscover from scratch" in p
+
+
+def test_psa_stretch_mode(psa_client, monkeypatch):
+    seen = {}
+    def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
+                 discussions=None, stretch=False):
+        seen["stretch"] = stretch
+        return {"answer": "advocacy draft", "model": model}
+    monkeypatch.setattr(claude_bridge, "psa", fake_psa)
+    _upload_method(psa_client)
+    tab = psa_client.post("/api/tabs", json={"name": "Str"}).json()
+    psa_client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP1111111A1"})
+    psa_client.post(f"/api/tabs/{tab['id']}/documents",
+                    json={"text": "CN113964850 US11909216B2"})
+    ids = [d["id"] for d in
+           psa_client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]]
+    psa_client.post(f"/api/tabs/{tab['id']}/psa", json={"doc_ids": ids, "stretch": True})
+    assert seen["stretch"] is True
+    msgs = psa_client.get(f"/api/tabs/{tab['id']}/state").json()["messages"]
+    q = [m for m in msgs if m["role"] == "q" and "stretch" in m["text"].lower()][-1]
+    assert q["text"].startswith("🪄 Argumentation stretch")
+    c = [m for m in msgs if m["role"] == "c"][-1]
+    assert any(p["title"] == "🪄 argumentation stretch" for p in c["participants"])
+    # default remains strict
+    psa_client.post(f"/api/tabs/{tab['id']}/psa", json={"doc_ids": ids})
+    assert seen["stretch"] is False
+
+
+def test_psa_prompt_stretch_block(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, extra_args=None, cwd=None, timeout=None:
+                        captured.update(p=prompt) or {"answer": "ok", "model": model})
+    args = ("STEP 1: x.", {"number": "EP1", "claims": "1. A thing."},
+            [{"number": "D1DOC", "claims": "1. x"}, {"number": "D2DOC", "claims": "1. y"}])
+    claude_bridge.psa(*args, stretch=True)
+    p = captured["p"]
+    assert "ADVOCACY MODE — ARGUMENTATION STRETCH" in p
+    assert "REMAIN SILENT about features that are NOT disclosed" in p
+    assert "Omission is allowed — misstatement is NOT" in p
+    assert "TASK — PROBLEM-SOLUTION APPROACH" in p          # methodology still executes
+    claude_bridge.psa(*args)
+    assert "ADVOCACY MODE" not in captured["p"]             # strict default unchanged

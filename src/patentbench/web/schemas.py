@@ -128,6 +128,7 @@ class PsaRequest(BaseModel):
     doc_ids: list[int] = Field(min_length=2, max_length=2)   # exactly D1 and D2
     model: str | None = None           # answer model; None = chat default
     use_discussions: bool = True       # 💬 feed ALL chats' exchanges about D1/D2 into the run
+    stretch: bool = False              # 🪄 advocacy mode: argue disclosed, silent on gaps
 
 
 class DeepCompareRequest(BaseModel):

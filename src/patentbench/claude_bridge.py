@@ -860,15 +860,40 @@ _PSA_INSTRUCTION = (
     "Fig. citations, per the grounding rules above.")
 
 
+_PSA_STRETCH_INSTRUCTION = (
+    "ADVOCACY MODE — ARGUMENTATION STRETCH. For THIS run only, the task above is "
+    "modified: produce the STRONGEST argumentation the provided disclosures can "
+    "honestly support — the reading most favorable to the case, as a party's "
+    "advocate would draft it.\n"
+    "• Argue AFFIRMATIVELY from what D1/D2 DISCLOSE. Where a feature is disclosed "
+    "only implicitly, functionally, partially or via an equivalent, put forward "
+    "the stretched interpretation — anchored to the exact passage ([00NN]/claim/"
+    "Fig.) that carries it, phrased as the reading of that passage.\n"
+    "• REMAIN SILENT about features that are NOT disclosed: do not enumerate "
+    "gaps, do not volunteer weaknesses or counter-arguments, do not add "
+    "'however/but X is missing' caveats. Simply build the argument from what is "
+    "there.\n"
+    "• Omission is allowed — misstatement is NOT. Never assert that a "
+    "non-disclosed feature IS disclosed, never invent or paraphrase text beyond "
+    "what a cited passage actually says, never cite a passage for more than it "
+    "carries. Every sentence you write must remain TRUE and verifiable against "
+    "the provided texts; the stretch lives in interpretation, emphasis and "
+    "selection — not in facts.\n"
+    "• Still execute the methodology step by step under its own headings (and "
+    "the output format, if provided); within each step, present the advocacy "
+    "version of that step's result.")
+
+
 def psa(method_text: str, benchmark: dict, docs: list[dict],
         model: str | None = None, format_text: str | None = None,
-        discussions: list[dict] | None = None) -> dict:
+        discussions: list[dict] | None = None, stretch: bool = False) -> dict:
     """⚖️ Problem-solution approach: run the user's uploaded methodology STRICTLY,
     step by step, over the benchmark (claimed invention) + two user-selected
     prior-art documents (full primary text). `format_text` = the user's uploaded
     output-format document, applied in combination with the steps; `discussions`
-    = ALL chats' exchanges about D1/D2, reused as prior findings. Same return
-    contract as chat()."""
+    = ALL chats' exchanges about D1/D2, reused as prior findings; `stretch` = 🪄
+    advocacy mode (argue the disclosed, silent on gaps, facts stay true). Same
+    return contract as chat()."""
     parts = [_PREAMBLE, _GROUNDING_INSTRUCTION]
     parts.append("USER-SUPPLIED METHODOLOGY (BINDING — the answer must follow it "
                  "verbatim, step by step):\n\n" + (method_text or "")[:MAX_METHOD_CHARS])
@@ -898,6 +923,8 @@ def psa(method_text: str, benchmark: dict, docs: list[dict],
             "the D1/D2 full texts above before relying on it:\n\n"
             + _discussions_body(discussions))
     parts.append(_PSA_INSTRUCTION)
+    if stretch:
+        parts.append(_PSA_STRETCH_INSTRUCTION)
     res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL,
                       timeout=PSA_TIMEOUT)
     if "error" in res:

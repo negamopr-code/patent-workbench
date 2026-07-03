@@ -2124,20 +2124,24 @@ def psa_run(tab_id: int, body: schemas.PsaRequest):
                     discussions.append({**grp, "exchanges": fresh})
     nums = " + ".join(d.get("number") or "?" for d in docs)
     n_ex = sum(len(g["exchanges"]) for g in discussions) if discussions else 0
-    db.append_message(tab_id, "q", f"⚖️ Problem-solution approach on {nums} "
+    head = ("🪄 Argumentation stretch (problem-solution approach)" if body.stretch
+            else "⚖️ Problem-solution approach")
+    db.append_message(tab_id, "q", f"{head} on {nums} "
                                    f"(method: {method['name']}"
                                    + (f", format: {fmt['name']}" if fmt else "")
                                    + (f", 💬 {n_ex} prior exchange(s)" if n_ex else "")
                                    + ")")
     res = claude_bridge.psa(method["text"], benchmark, docs, model=model,
                             format_text=fmt["text"] if fmt else None,
-                            discussions=discussions or None)
+                            discussions=discussions or None, stretch=body.stretch)
     out = []
     if "error" in res:
         out.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
         return {"messages": out, "error": res["error"]}
     participants = [{"kind": "model", "title": model},
                     {"kind": "psa", "title": method["name"]}]
+    if body.stretch:
+        participants.append({"kind": "psa", "title": "🪄 argumentation stretch"})
     if fmt:
         participants.append({"kind": "psa", "title": f"format: {fmt['name']}"})
     for g in discussions or []:
