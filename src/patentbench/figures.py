@@ -19,7 +19,8 @@ import httpx
 from . import claude_bridge
 
 FIG_WORKERS = int(os.environ.get("PB_FIGURE_WORKERS", "3"))
-MAX_FIGURES = int(os.environ.get("PB_MAX_FIGURES", "40"))   # cap captioned sheets per doc
+MAX_FIGURES = int(os.environ.get("PB_MAX_FIGURES", "80"))   # cap captioned sheets per doc
+# (was 40 — EP4338618A1 has 48 sheets and the cap silently dropped the tail 8)
 DL_TIMEOUT = float(os.environ.get("PB_FIGURE_DL_TIMEOUT", "30"))
 HEADERS = {"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "Chrome/120.0 Safari/537.36")}

@@ -83,3 +83,18 @@ def test_drawings_block_flags_uncaptioned_sheets():
     assert "2 of 4 sheets NOT captioned" in block
     assert "sheet(s) 2, 4" in block
     assert "UNKNOWN, not absent" in block
+
+
+def test_figure_urls_prefer_full_resolution_over_thumbnail():
+    # the SAME filename exists twice on the page: img src = ~70px thumbnail,
+    # meta itemprop=full = the real sheet; the full one must win the dedupe
+    html = """
+    <img src="https://patentimages.storage.googleapis.com/98/f9/67/thumbhash/imgf0001.png">
+    <meta itemprop="full" content="https://patentimages.storage.googleapis.com/86/c0/a5/fullhash/imgf0001.png">
+    <meta itemprop="full" content="https://patentimages.storage.googleapis.com/11/22/33/fullhash2/imgf0002.png">
+    """
+    soup = BeautifulSoup(html, "lxml")
+    urls = fetcher._figure_urls(soup, html)
+    assert urls[0] == "https://patentimages.storage.googleapis.com/86/c0/a5/fullhash/imgf0001.png"
+    assert all("thumbhash" not in u for u in urls)
+    assert len(urls) == 2

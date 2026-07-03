@@ -128,6 +128,13 @@ def _figure_urls(soup: BeautifulSoup, raw_html: str) -> list[str]:
         seen.add(name.lower())
         urls.append(src)
 
+    # Each sheet appears on the page TWICE under the SAME filename: a ~70px
+    # thumbnail (img src) and the full sheet (meta itemprop="full", ~1400×2700).
+    # Dedupe-by-filename keeps the first seen, so the full-resolution metas MUST
+    # be added before anything else — captioning the 70px thumbnails produced
+    # plausible-but-hallucinated figure numbers/numerals (seen live 2026-07-03).
+    for meta in soup.select('meta[itemprop="full"]'):
+        add(meta.get("content") or "")
     for img in soup.select('img[src*="patentimages"]'):
         add(img.get("src") or "")
     for m in _IMG_URL_RE.finditer(raw_html):

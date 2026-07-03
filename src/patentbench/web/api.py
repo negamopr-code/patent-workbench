@@ -201,8 +201,8 @@ def _process_benchmark_figures(tab_id: int, model: str | None = None,
     if meta and all(f.get("caption") for f in meta) and not force:
         return sum(1 for f in meta if f.get("caption"))
     urls = [f["url"] for f in meta if f.get("url")]
-    if not urls and bm.get("number"):
-        urls = fetcher.figure_urls(bm["number"])
+    if (force or not urls) and bm.get("number"):
+        urls = fetcher.figure_urls(bm["number"]) or urls
     if not urls:
         return 0
     figs = figures.download(urls, os.path.join(FIGURES, f"bm-{tab_id}"))
@@ -560,8 +560,10 @@ def _process_figures(doc_id: int, model: str | None = None, force: bool = False)
     if meta and all(f.get("caption") for f in meta) and not force:
         return sum(1 for f in meta if f.get("caption"))     # already done
     urls = [f["url"] for f in meta if f.get("url")]
-    if not urls and doc.get("number"):
-        urls = fetcher.figure_urls(doc["number"])            # backfill: doc predates figures
+    # force = the user distrusts the stored result — re-scrape the URLs too, they
+    # may be the very problem (stored thumbnails instead of full sheets, 2026-07-03)
+    if (force or not urls) and doc.get("number"):
+        urls = fetcher.figure_urls(doc["number"]) or urls
     if not urls:
         db.update_document(doc_id, figures_n=0)
         return 0
