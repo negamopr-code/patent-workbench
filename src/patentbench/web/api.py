@@ -2106,12 +2106,32 @@ def psa_run(tab_id: int, body: schemas.PsaRequest):
             raise HTTPException(400, f"{d.get('number') or did} is not fetched yet")
         docs.append(d)
     model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
+    # 💬 prior findings: every exchange in EVERY tab's chat (this one included)
+    # that mentions D1 or D2 — deduped when one exchange names both documents.
+    discussions = None
+    if body.use_discussions:
+        discussions, seen_ex = [], set()
+        for d in docs:
+            for grp in db.cross_tab_discussions(d.get("number") or "",
+                                                exclude_tab_id=None):
+                fresh = []
+                for ex in grp["exchanges"]:
+                    key = (grp["tab_id"], ex[0]["ts"], ex[0]["text"][:80])
+                    if key not in seen_ex:
+                        seen_ex.add(key)
+                        fresh.append(ex)
+                if fresh:
+                    discussions.append({**grp, "exchanges": fresh})
     nums = " + ".join(d.get("number") or "?" for d in docs)
+    n_ex = sum(len(g["exchanges"]) for g in discussions) if discussions else 0
     db.append_message(tab_id, "q", f"⚖️ Problem-solution approach on {nums} "
                                    f"(method: {method['name']}"
-                                   + (f", format: {fmt['name']}" if fmt else "") + ")")
+                                   + (f", format: {fmt['name']}" if fmt else "")
+                                   + (f", 💬 {n_ex} prior exchange(s)" if n_ex else "")
+                                   + ")")
     res = claude_bridge.psa(method["text"], benchmark, docs, model=model,
-                            format_text=fmt["text"] if fmt else None)
+                            format_text=fmt["text"] if fmt else None,
+                            discussions=discussions or None)
     out = []
     if "error" in res:
         out.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
@@ -2120,6 +2140,10 @@ def psa_run(tab_id: int, body: schemas.PsaRequest):
                     {"kind": "psa", "title": method["name"]}]
     if fmt:
         participants.append({"kind": "psa", "title": f"format: {fmt['name']}"})
+    for g in discussions or []:
+        participants.append({"kind": "xtalk",
+                             "title": f"{g['number']} — чат «{g['tab_name']}» "
+                                      f"({len(g['exchanges'])})"})
     participants += [{"kind": "documents", "title": f"D{i} {d.get('number') or '?'}"}
                      for i, d in enumerate(docs, 1)]
     out.append(db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),

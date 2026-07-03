@@ -561,6 +561,30 @@ def _focus_block(doc: dict) -> str:
     return _document_block(doc, per, clipped=False)
 
 
+def _discussions_body(discussions: list[dict]) -> str:
+    """Chat exchanges (from db.cross_tab_discussions) rendered as prompt text,
+    budget-capped at MAX_XTALK_CHARS. Shared by the chat block and the ⚖️ run."""
+    blocks, used = [], 0
+    for d in discussions:
+        for ex in d.get("exchanges", []):
+            lines = [f"{_ROLE.get(m.get('role', ''), 'User')}: "
+                     f"{(m.get('text') or '')[:MAX_TURN_CHARS]}" for m in ex]
+            when = (time.strftime("%Y-%m-%d", time.localtime(ex[0]["ts"]))
+                    if ex and ex[0].get("ts") else "?")
+            block = (f"[tab «{d.get('tab_name', '?')}» — {d.get('number', '?')} — "
+                     f"{when}]\n" + "\n".join(lines))
+            if used + len(block) > MAX_XTALK_CHARS:
+                blocks.append(f"(…more discussion of {d.get('number', '?')} in tab "
+                              f"«{d.get('tab_name', '?')}» did not fit the budget)")
+                used = MAX_XTALK_CHARS
+                break
+            blocks.append(block)
+            used += len(block)
+        if used >= MAX_XTALK_CHARS:
+            break
+    return "\n\n".join(blocks)
+
+
 def build_prompt(question: str, history: list[dict] | None = None,
                  documents: list[dict] | None = None,
                  sources: list[dict] | None = None,
@@ -597,24 +621,6 @@ def build_prompt(question: str, history: list[dict] | None = None,
         # Full chat exchanges from OTHER tabs that mention a document named in this
         # conversation — the actual discussion, so "what did we say about X in the
         # other tab" is answerable verbatim, and follow-ups can build on it.
-        blocks, used = [], 0
-        for d in discussions:
-            for ex in d.get("exchanges", []):
-                lines = [f"{_ROLE.get(m.get('role', ''), 'User')}: "
-                         f"{(m.get('text') or '')[:MAX_TURN_CHARS]}" for m in ex]
-                when = (time.strftime("%Y-%m-%d", time.localtime(ex[0]["ts"]))
-                        if ex and ex[0].get("ts") else "?")
-                block = (f"[tab «{d.get('tab_name', '?')}» — {d.get('number', '?')} — "
-                         f"{when}]\n" + "\n".join(lines))
-                if used + len(block) > MAX_XTALK_CHARS:
-                    blocks.append(f"(…more discussion of {d.get('number', '?')} in tab "
-                                  f"«{d.get('tab_name', '?')}» did not fit the budget)")
-                    used = MAX_XTALK_CHARS
-                    break
-                blocks.append(block)
-                used += len(block)
-            if used >= MAX_XTALK_CHARS:
-                break
         parts.append(
             "PRIOR DISCUSSIONS IN OTHER TABS — chat exchanges from elsewhere in this "
             "workbench that mention a document named in the current conversation. When "
@@ -622,7 +628,7 @@ def build_prompt(question: str, history: list[dict] | None = None,
             "other tabs, reproduce it faithfully from here (say which tab each exchange "
             "comes from) and answer follow-ups against it. These are conversation "
             "records, NOT primary patent text — do not cite [00NN]/claims from them as "
-            "verified:\n\n" + "\n\n".join(blocks))
+            "verified:\n\n" + _discussions_body(discussions))
     if skills:
         blocks = "\n\n".join(f"[Skill /{s['name']}]\n{s['content']}" for s in skills)
         parts.append(
@@ -855,11 +861,13 @@ _PSA_INSTRUCTION = (
 
 
 def psa(method_text: str, benchmark: dict, docs: list[dict],
-        model: str | None = None, format_text: str | None = None) -> dict:
+        model: str | None = None, format_text: str | None = None,
+        discussions: list[dict] | None = None) -> dict:
     """⚖️ Problem-solution approach: run the user's uploaded methodology STRICTLY,
     step by step, over the benchmark (claimed invention) + two user-selected
     prior-art documents (full primary text). `format_text` = the user's uploaded
-    output-format document, applied in combination with the steps. Same return
+    output-format document, applied in combination with the steps; `discussions`
+    = ALL chats' exchanges about D1/D2, reused as prior findings. Same return
     contract as chat()."""
     parts = [_PREAMBLE, _GROUNDING_INSTRUCTION]
     parts.append("USER-SUPPLIED METHODOLOGY (BINDING — the answer must follow it "
@@ -877,6 +885,18 @@ def psa(method_text: str, benchmark: dict, docs: list[dict],
     for i, d in enumerate(docs, 1):
         parts.append(f"D{i} — selected prior-art document {i} of {len(docs)} "
                      "(FULL primary text):\n\n" + _document_block(d, per, clipped=False))
+    if discussions:
+        parts.append(
+            "PRIOR DISCUSSIONS ABOUT D1/D2 — every exchange from this workbench's "
+            "chats (all tabs) that mentions the selected documents: the latest "
+            "findings, arguments, feature mappings and conclusions already worked "
+            "out about them. REUSE this prior analysis while executing the "
+            "methodology — do not rediscover from scratch what is already "
+            "established here, and flag where your step-by-step result contradicts "
+            "an earlier conclusion. These are conversation records, NOT primary "
+            "text — verify any [00NN]/claim citation you take from them against "
+            "the D1/D2 full texts above before relying on it:\n\n"
+            + _discussions_body(discussions))
     parts.append(_PSA_INSTRUCTION)
     res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL,
                       timeout=PSA_TIMEOUT)

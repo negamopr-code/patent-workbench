@@ -2430,7 +2430,8 @@ def test_psa_requires_method_benchmark_and_two_docs(psa_client):
 
 def test_psa_runs_method_over_benchmark_and_two_docs(psa_client, monkeypatch):
     seen = {}
-    def fake_psa(method_text, benchmark, docs, model=None, format_text=None):
+    def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
+                 discussions=None):
         seen.update(method=method_text, benchmark=benchmark, docs=docs, model=model)
         return {"answer": "STEP 1: D1 is CN113964850 …", "model": model}
     monkeypatch.setattr(claude_bridge, "psa", fake_psa)
@@ -2512,7 +2513,8 @@ def test_psa_method_status_reports_ocr_progress_and_error(psa_client):
 
 def test_psa_format_doc_uploaded_and_combined(psa_client, monkeypatch):
     seen = {}
-    def fake_psa(method_text, benchmark, docs, model=None, format_text=None):
+    def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
+                 discussions=None):
         seen.update(method=method_text, fmt=format_text)
         return {"answer": "formatted per spec", "model": model}
     monkeypatch.setattr(claude_bridge, "psa", fake_psa)
@@ -2561,3 +2563,62 @@ def test_psa_prompt_format_block_binding(monkeypatch):
                       [{"number": "D1DOC", "claims": "1. x"},
                        {"number": "D2DOC", "claims": "1. y"}])
     assert "OUTPUT FORMAT" not in captured["p"]
+
+
+def test_psa_reuses_prior_discussions_from_all_chats(psa_client, monkeypatch):
+    seen = {}
+    def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
+                 discussions=None):
+        seen["disc"] = discussions
+        return {"answer": "built on prior findings", "model": model}
+    monkeypatch.setattr(claude_bridge, "psa", fake_psa)
+    _upload_method(psa_client)
+    # prior discussion about D1 in ANOTHER tab…
+    other = psa_client.post("/api/tabs", json={"name": "Earlier"}).json()["id"]
+    db.append_message(other, "q", "does CN113964850 disclose the seal overlap?")
+    db.append_message(other, "c", "Yes — CN113964850 claim 3 covers it.")
+    # …and about D2 in the PSA tab ITSELF
+    tab = psa_client.post("/api/tabs", json={"name": "PSA"}).json()
+    db.append_message(tab["id"], "q", "US11909216B2 argument recap?")
+    db.append_message(tab["id"], "c", "US11909216B2 lacks the thermistor branch.")
+    psa_client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP1111111A1"})
+    psa_client.post(f"/api/tabs/{tab['id']}/documents",
+                    json={"text": "CN113964850 US11909216B2"})
+    ids = [d["id"] for d in
+           psa_client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]]
+    psa_client.post(f"/api/tabs/{tab['id']}/psa",
+                    json={"doc_ids": ids, "use_discussions": True})
+    disc = seen["disc"]
+    tabs_seen = {g["tab_name"] for g in disc}
+    assert "Earlier" in tabs_seen and "PSA" in tabs_seen    # all chats, incl. own tab
+    texts = " ".join(m["text"] for g in disc for ex in g["exchanges"] for m in ex)
+    assert "claim 3 covers it" in texts and "lacks the thermistor branch" in texts
+    # chip + q-line reflect the reuse
+    msgs = psa_client.get(f"/api/tabs/{tab['id']}/state").json()["messages"]
+    q = [m for m in msgs if m["role"] == "q" and "Problem-solution" in m["text"]][-1]
+    assert "💬" in q["text"]
+    c = [m for m in msgs if m["role"] == "c"][-1]
+    assert any(p["kind"] == "xtalk" for p in c["participants"])
+    # opt-out: checkbox off → no discussions gathered
+    seen.clear()
+    psa_client.post(f"/api/tabs/{tab['id']}/psa",
+                    json={"doc_ids": ids, "use_discussions": False})
+    assert seen["disc"] is None
+
+
+def test_psa_prompt_discussions_block(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, extra_args=None, cwd=None, timeout=None:
+                        captured.update(p=prompt) or {"answer": "ok", "model": model})
+    disc = [{"tab_id": 1, "tab_name": "Earlier", "number": "CN113964850",
+             "exchanges": [[{"role": "q", "text": "overlap?", "ts": 1750000000},
+                            {"role": "c", "text": "claim 3 covers it", "ts": 1750000001}]]}]
+    claude_bridge.psa("STEP 1: x.", {"number": "EP1", "claims": "1. A thing."},
+                      [{"number": "D1DOC", "claims": "1. x"},
+                       {"number": "D2DOC", "claims": "1. y"}], discussions=disc)
+    p = captured["p"]
+    assert "PRIOR DISCUSSIONS ABOUT D1/D2" in p
+    assert "claim 3 covers it" in p
+    assert "REUSE this prior analysis" in p
+    assert "do not rediscover from scratch" in p

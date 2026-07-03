@@ -1718,7 +1718,8 @@ $('psa-btn').onclick = async () => {
   setBusy(true, 'Problem-solution approach');
   const res = await api(`/api/tabs/${tabAtSend}/psa`, {
     method: 'POST',
-    body: JSON.stringify({ doc_ids: [...docSelection], model: $('model').value }),
+    body: JSON.stringify({ doc_ids: [...docSelection], model: $('model').value,
+                           use_discussions: $('psa-discuss').checked }),
   });
   setBusy(false);
   if (activeTab !== tabAtSend) return;
