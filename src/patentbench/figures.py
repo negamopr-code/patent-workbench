@@ -25,8 +25,10 @@ HEADERS = {"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit
                           "Chrome/120.0 Safari/537.36")}
 
 # A clearly-delimited, regeneratable block appended to the scraped description, so
-# re-captioning never corrupts or duplicates the primary text.
-DRAWINGS_HEADER = "========== DRAWINGS (figure descriptions, vision-read) =========="
+# re-captioning never corrupts or duplicates the primary text. The marker string
+# lives in claude_bridge (prompt building splits on it; importing figures from
+# there would be circular) — re-exported here for the merge/strip helpers below.
+DRAWINGS_HEADER = claude_bridge.DRAWINGS_HEADER
 _BLOCK_RE = re.compile(r"\n*" + re.escape(DRAWINGS_HEADER) + r".*\Z", re.S)
 
 CAPTION_PROMPT = (

@@ -434,6 +434,25 @@ def _figures_unread(doc: dict) -> bool:
     return doc.get("figures_n") is None
 
 
+# Canonical marker of the vision-read captions block that figures.py merges into a
+# stored description. Lives HERE (not in figures.py) because figures imports
+# claude_bridge — the reverse import would be circular.
+DRAWINGS_HEADER = "========== DRAWINGS (figure descriptions, vision-read) =========="
+
+
+def _split_drawings(text: str) -> tuple[str, str]:
+    """Split a stored description into (scraped body, merged DRAWINGS block). The
+    captions are merged at the TAIL of the text — exactly what a budget clip eats
+    first — so prompt blocks render them as their OWN field ahead of the
+    description; a clip then truncates prose, never the figures. Seen live
+    2026-07-03: EP4338618's 16 captions started at char 200 002 of a 215 838-char
+    description and every focus slice under that lost ALL figures."""
+    i = (text or "").find(DRAWINGS_HEADER)
+    if i < 0:
+        return text, ""
+    return text[:i].rstrip(), text[i:].strip()
+
+
 def _document_block(doc: dict, budget: int, clipped: bool = True) -> str:
     """One stored document as a prompt block. Fields are LABELLED by provenance so
     the model can obey the GROUNDING rules: abstract/claims/description are PRIMARY
@@ -442,16 +461,23 @@ def _document_block(doc: dict, budget: int, clipped: bool = True) -> str:
     must treat a clipped candidate as NOT full-text."""
     head = f"[{doc.get('number', '?')} — {doc.get('title') or 'no title fetched'}]"
     body_parts = []
+    desc_body, drawings = _split_drawings(doc.get("description") or "")
+    values = {"abstract": doc.get("abstract"), "claims": doc.get("claims"),
+              "drawings": drawings, "description": desc_body,
+              "digest": doc.get("digest")}
     # primary text first when we have the full budget (focus block); digest first
     # only matters in the tight clipped path where description rarely fits anyway.
+    # DRAWINGS (a few KB of vision-read captions) come BEFORE the description so a
+    # budget clip truncates prose, never the figures.
     fields = (("Abstract (PRIMARY)", "abstract"),
               ("Claims (PRIMARY — quotable verbatim, cite as 'claim N')", "claims"),
+              ("DRAWINGS (PRIMARY — vision-read figure captions; cite as 'Fig. N')", "drawings"),
               ("Description (PRIMARY — quotable verbatim; cite [00NN] markers)", "description"),
               ("DIGEST (DERIVED summary — NOT primary text, do NOT quote or cite paragraphs from it)", "digest"))
     if clipped:  # keep the old ordering when space is tight: abstract, digest, then primary
-        fields = (fields[0], fields[3], fields[1], fields[2])
+        fields = (fields[0], fields[4], fields[1], fields[2], fields[3])
     for label, key in fields:
-        text = (doc.get(key) or "").strip()
+        text = (values.get(key) or "").strip()
         if not text:
             continue
         room = budget - sum(len(p) for p in body_parts) - len(head)
@@ -503,9 +529,16 @@ def _benchmark_block(bm: dict) -> str:
         body.append(bm["text"][:MAX_BENCHMARK_CHARS])
     else:
         budget = MAX_BENCHMARK_CHARS
+        # DRAWINGS captions are merged at the description's tail — far beyond the
+        # benchmark budget for any long document; surface them as their own field
+        # ahead of the description or they are ALWAYS clipped away here.
+        desc_body, drawings = _split_drawings(bm.get("description") or "")
+        vals = {"abstract": bm.get("abstract"), "claims": bm.get("claims"),
+                "drawings": drawings, "description": desc_body}
         for label, key in (("Abstract", "abstract"), ("Claims", "claims"),
+                           ("Drawings (vision-read figure captions)", "drawings"),
                            ("Description", "description")):
-            t = (bm.get(key) or "").strip()
+            t = (vals.get(key) or "").strip()
             if t and budget > 100:
                 chunk = f"{label}: {t[:budget]}"
                 body.append(chunk)

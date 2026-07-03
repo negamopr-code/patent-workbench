@@ -2326,3 +2326,53 @@ def test_build_prompt_renders_discussions_block():
     assert "User: about EP4338618A1?" in p and "Claude: the overlap is in claim 3" in p
     # conversation records are not citable primary text
     assert "NOT primary patent text" in p
+
+
+# ---------- DRAWINGS captions must survive budget clips ----------
+
+def _doc_with_tail_drawings(n=20000):
+    return {"number": "EP4338618", "title": "Seal", "abstract": "A seal.",
+            "claims": "1. A seal with overlap.",
+            "description": ("[0001] prose " * (n // 13))
+            + "\n\n" + claude_bridge.DRAWINGS_HEADER
+            + "\n[FIG. 3] Overlapping section 42 between blades 40, 41.",
+            "figures_n": 16}
+
+
+def test_document_block_drawings_survive_focus_clip():
+    doc = _doc_with_tail_drawings()
+    out = claude_bridge._document_block(doc, budget=4000, clipped=False)
+    # the description overflows the budget and is clipped…
+    assert "…[CLIPPED" in out
+    # …but the vision-read captions still made it in, BEFORE the description
+    assert "[FIG. 3] Overlapping section 42" in out
+    assert out.index("DRAWINGS") < out.index("Description (PRIMARY")
+    assert "DRAWINGS NOT READ" not in out                 # figures ARE read
+
+
+def test_benchmark_block_drawings_survive_clip(monkeypatch):
+    monkeypatch.setattr(claude_bridge, "MAX_BENCHMARK_CHARS", 4000)
+    bm = _doc_with_tail_drawings()
+    block = claude_bridge._benchmark_block(bm)
+    assert "[FIG. 3] Overlapping section 42" in block
+    assert "DRAWINGS NOT READ" not in block
+
+
+def test_chat_focus_prefers_figures_read_copy(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: (seen.update(k), {"answer": "ok", "model": "m"})[1])
+    tab = client.post("/api/tabs", json={"name": "Dup"}).json()
+    client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "EP4338618 EP4338618A1"})
+    docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
+    kindless = next(d for d in docs if d["number"] == "EP4338618")
+    db.update_document(kindless["id"], figures_n=16,
+                       description="desc\n" + claude_bridge.DRAWINGS_HEADER + "\n[FIG. 1] x")
+    # the question names the A1 copy — but the figures-read kindless copy must win;
+    # duplicates must NOT split the focus budget between them
+    client.post(f"/api/tabs/{tab['id']}/chat",
+                json={"question": "what do EP4338618A1 figures show?"})
+    foc = seen.get("focus") or []
+    assert [d["id"] for d in foc] == [kindless["id"]]
+    # the dropped duplicate is still present in the tab roster, not lost
+    assert any(d["number"] == "EP4338618A1" for d in seen.get("documents") or [])

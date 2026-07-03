@@ -2013,6 +2013,21 @@ def chat(tab_id: int, body: schemas.ChatRequest):
         if ordered:
             keep = set(ordered[:MAX_FOCUS_DOCS])
             focus = [d for d in documents if d["id"] in keep]
+            # Duplicate copies of ONE patent (kindless + A1) both match a question
+            # naming it — the poorer copy halves the focus budget and injects a
+            # DRAWINGS-NOT-READ disclaimer right next to the figures-read one.
+            # Keep the richest copy; the dropped duplicate stays in the roster.
+            best: dict[str, tuple] = {}
+            for d in focus:
+                base = db._number_base(d.get("number") or "") or f"#{d['id']}"
+                rank = (d.get("figures_n") is not None,
+                        len(d.get("description") or ""))
+                if base not in best or rank > best[base][0]:
+                    best[base] = (rank, d)
+            if len(best) < len(focus):
+                chosen = {v[1]["id"] for v in best.values()}
+                focus = [d for d in focus if d["id"] in chosen]
+                keep = chosen
             documents = [d for d in documents if d["id"] not in keep]
     skill_blocks = []
     for name in body.skills:
