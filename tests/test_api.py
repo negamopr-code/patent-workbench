@@ -2167,7 +2167,7 @@ def test_document_figures_backfill(client, monkeypatch):
                         lambda urls, dest: [{"n": i + 1, "url": u, "path": f"/x/{i}.png"}
                                             for i, u in enumerate(urls)])
     monkeypatch.setattr(figures, "caption_all",
-                        lambda figs, model=None, workers=None:
+                        lambda figs, model=None, workers=None, context="":
                         [f.update(caption=f"[FIG. {f['n']}] stub") or f for f in figs])
     monkeypatch.setattr(_f, "figure_urls", lambda n: ["http://x/imgf0001.png",
                                                       "http://x/imgf0002.png"])

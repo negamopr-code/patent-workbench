@@ -206,7 +206,7 @@ def _process_benchmark_figures(tab_id: int, model: str | None = None,
     if not urls:
         return 0
     figs = figures.download(urls, os.path.join(FIGURES, f"bm-{tab_id}"))
-    figures.caption_all(figs, model)
+    figures.caption_all(figs, model, context=figures.doc_context(bm))
     merged = figures.merge_into_description(bm.get("description"), figs)
     n = sum(1 for f in figs if f.get("caption"))
     db.update_benchmark(tab_id, figures=json.dumps(figs, ensure_ascii=False),
@@ -566,7 +566,7 @@ def _process_figures(doc_id: int, model: str | None = None, force: bool = False)
         db.update_document(doc_id, figures_n=0)
         return 0
     figs = figures.download(urls, os.path.join(FIGURES, str(doc_id)))
-    figures.caption_all(figs, model)
+    figures.caption_all(figs, model, context=figures.doc_context(doc))
     merged = figures.merge_into_description(doc.get("description"), figs)
     n = sum(1 for f in figs if f.get("caption"))
     db.update_document(doc_id, figures=json.dumps(figs, ensure_ascii=False),

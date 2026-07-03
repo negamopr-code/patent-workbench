@@ -43,6 +43,17 @@ CAPTION_PROMPT = (
 )
 
 
+def doc_context(doc: dict) -> str:
+    """A short grounding header telling the vision captioner WHAT document the
+    sheets belong to. Blind captioning guessed device identity from outlines alone
+    (an aerosol-device PSU case read as 'clamshell phone', its chassis as a
+    'firearm', 2026-07-03) — and those guessed names then poisoned downstream
+    grounding ('DRAWINGS block is clearly mismatched'). '' when nothing is known."""
+    head = " — ".join(b for b in (doc.get("number"), doc.get("title")) if b)
+    abstract = (doc.get("abstract") or "").strip()
+    return (head + ("\n" + abstract[:600] if abstract else "")).strip()
+
+
 def download(urls: list[str], dest_dir: str) -> list[dict]:
     """Download drawing-sheet images into dest_dir. Returns [{n, url, path}] for the
     ones that fetched OK, numbered in document (= figure) order. Capped at MAX_FIGURES."""
@@ -63,35 +74,59 @@ def download(urls: list[str], dest_dir: str) -> list[dict]:
     return out
 
 
-def caption_one(path: str, model: str | None = None) -> str:
-    """Vision-transcribe a single drawing sheet to a [FIG. N] caption. '' on failure."""
-    prompt = (f"First read the image at {path} with the Read tool, then:\n\n{CAPTION_PROMPT}")
+def caption_one(path: str, model: str | None = None, context: str = "") -> str:
+    """Vision-transcribe a single drawing sheet to a [FIG. N] caption. '' on failure.
+    `context` (number/title/abstract) anchors WHAT the depicted apparatus is — never
+    let the model name the device from its outline alone."""
+    prompt = f"First read the image at {path} with the Read tool, then:\n\n"
+    if context:
+        prompt += ("DOCUMENT CONTEXT — this sheet belongs to the following patent. "
+                   "Identify the depicted apparatus as what it is IN THIS DOCUMENT; "
+                   "do NOT guess a generic consumer device from the outline:\n"
+                   f"{context}\n\n")
+    prompt += CAPTION_PROMPT
     res = claude_bridge.run_extract(prompt, allow_read=True,
                                     model=model or claude_bridge.TRANSCRIBE_MODEL)
     return "" if "error" in res else (res.get("answer") or "").strip()
 
 
 def caption_all(figs: list[dict], model: str | None = None,
-                workers: int | None = None) -> list[dict]:
+                workers: int | None = None, context: str = "") -> list[dict]:
     """Caption every downloaded sheet CONCURRENTLY (each is a slow vision `claude -p`).
-    Mutates+returns figs, adding a `caption` to each (preserving order)."""
+    Sheets whose vision run came back empty get ONE retry pass (seen live: 24 of 40
+    failed silently under concurrency). Mutates+returns figs, adding a `caption` to
+    each (preserving order)."""
     if not figs:
         return figs
     w = max(1, min(workers or FIG_WORKERS, len(figs)))
     with ThreadPoolExecutor(max_workers=w) as ex:
-        caps = list(ex.map(lambda f: caption_one(f["path"], model), figs))
+        caps = list(ex.map(lambda f: caption_one(f["path"], model, context), figs))
     for f, cap in zip(figs, caps):
         f["caption"] = cap
+    misses = [f for f in figs if not (f.get("caption") or "").strip()]
+    if misses:
+        with ThreadPoolExecutor(max_workers=max(1, w // 2)) as ex:
+            caps = list(ex.map(lambda f: caption_one(f["path"], model, context), misses))
+        for f, cap in zip(misses, caps):
+            f["caption"] = cap
     return figs
 
 
 def drawings_block(figs: list[dict]) -> str:
     """Render captioned figures into the DRAWINGS text block (the model's own
-    [FIG. N] lines), or '' if nothing was captioned."""
+    [FIG. N] lines), or '' if nothing was captioned. Sheets that failed the vision
+    read are flagged LOUDLY — a silent gap reads as 'no such figure', and the
+    missing figure may be exactly the one the user asks about."""
     caps = [f.get("caption", "").strip() for f in figs if f.get("caption", "").strip()]
     if not caps:
         return ""
-    return DRAWINGS_HEADER + "\n" + "\n\n".join(caps)
+    block = DRAWINGS_HEADER + "\n" + "\n\n".join(caps)
+    missing = [str(f.get("n", "?")) for f in figs if not (f.get("caption") or "").strip()]
+    if missing:
+        block += (f"\n\n(⚠ {len(missing)} of {len(figs)} sheets NOT captioned — vision "
+                  f"read failed for sheet(s) {', '.join(missing)}; figures on those "
+                  "sheets are UNKNOWN, not absent. Re-run 🖼 Read figures to fill them.)")
+    return block
 
 
 def strip_block(description: str | None) -> str:
