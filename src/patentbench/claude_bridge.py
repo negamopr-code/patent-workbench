@@ -11,10 +11,12 @@ missing — document management and NotebookLM Q&A keep working.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import time
 
 from . import citations
 
@@ -69,9 +71,14 @@ MAX_SKILL_CHARS = 16_000    # each skill doctrine clipped
 MAX_DOC_CHARS = 9000        # per-candidate ceiling (abstract+digest+claims first)
 MAX_DOCS_CHARS = 400_000    # total candidate budget per prompt
 MAX_ROSTER_CHARS = 240_000  # total budget for non-focused candidates' DIGESTS (focus path)
+MAX_XTALK_CHARS = 80_000    # total budget for cross-tab chat exchanges pulled into the prompt
 MIN_DOC_CHARS = 1200        # floor below which a candidate block stops being useful
 MAX_FULLTEXT_CHARS = 400_000  # full document fed to the digest/deep-map model
-MAX_FOCUS_CHARS = 300_000     # total budget for user-SELECTED candidates loaded in full
+MAX_FOCUS_CHARS = 600_000     # total budget for user-SELECTED candidates loaded in full.
+# Sized so a normal hand-selected set NEVER clips a full patent: an average patent
+# is ~80k chars, so 600k keeps ~7 focused docs fully unclipped (was 300k → clipped a
+# long doc's tail at ~[0113] once ~6 were selected — the model then honestly reported
+# it could not quote late paragraphs; the text was in the DB, the PROMPT dropped it).
 
 _PREAMBLE = (
     "You are the assistant of a Patent Workbench — a multi-tab patent project app. "
@@ -126,6 +133,13 @@ _GROUNDING_INSTRUCTION = (
     "missing and tell the user to run 🏆 Deep compare, or to narrow the tab to "
     "that specific candidate, for a verified answer. An ungrounded answer is "
     "worse than no answer.\n"
+    "• DRAWINGS: a document block marked 'DRAWINGS NOT READ' has had NO "
+    "vision-read of its figure sheets — treat its figures as UNKNOWN. Never "
+    "infer figure content from the surrounding text; if figures could matter "
+    "to the answer, say so explicitly and tell the user to run 🖼 Read figures "
+    "on that document for a detailed check including the drawings. Only a "
+    "document whose text carries a merged DRAWINGS block ([FIG. N] captions) "
+    "has readable figures.\n"
     "• LANGUAGE — ENGLISH ONLY, ZERO non-Latin characters: output NO "
     "Chinese/Japanese/Korean characters ANYWHERE — not in quotes, not as a "
     "parenthetical term gloss like '(测控装置)', not anywhere. The user cannot "
@@ -404,6 +418,22 @@ def load_skill(name: str) -> str | None:
         return None
 
 
+# Figures are opt-in (vision-captioning costs real tokens), so a document may be
+# read text-only. That is FINE — as long as the deficiency is loud: the model must
+# know the drawings are unknown, and the user must know which button closes the gap.
+_DRAWINGS_NOT_READ = (
+    "(DRAWINGS NOT READ — this document's figure sheets were never vision-captioned, "
+    "so nothing about its drawings appears in the text above. Figure content is "
+    "UNKNOWN: do not infer it. If figures could matter, say so and tell the user to "
+    "run 🖼 Read figures on this document for a detailed check including drawings.)")
+
+
+def _figures_unread(doc: dict) -> bool:
+    """True when the doc's drawing sheets were never vision-captioned. figures_n is
+    None until 🖼/ingest captioning runs (0 = ran, no drawings; >0 = captioned)."""
+    return doc.get("figures_n") is None
+
+
 def _document_block(doc: dict, budget: int, clipped: bool = True) -> str:
     """One stored document as a prompt block. Fields are LABELLED by provenance so
     the model can obey the GROUNDING rules: abstract/claims/description are PRIMARY
@@ -435,7 +465,28 @@ def _document_block(doc: dict, budget: int, clipped: bool = True) -> str:
     if not body_parts:
         body_parts.append(f"(text not fetched — status: {doc.get('status', '?')}"
                           + (f", error: {doc['error']}" if doc.get("error") else "") + ")")
+    # Focus blocks claim "FULL primary text" — if the drawings were never read, that
+    # claim must be qualified loudly (the clipped roster already disclaims fullness).
+    elif not clipped and _figures_unread(doc):
+        body_parts.append(_DRAWINGS_NOT_READ)
     return head + "\n" + "\n".join(body_parts)
+
+
+def _benchmark_figures_unread(bm: dict) -> bool:
+    """True when a NUMBER-based benchmark's drawing sheets were never captioned.
+    Upload-based benchmarks (text/photos) are exempt — their transcription IS the
+    document as given. A merged DRAWINGS block in the description counts as read."""
+    if not bm.get("number") or bm.get("text"):
+        return False
+    if "[FIG." in (bm.get("description") or ""):
+        return False
+    figs = bm.get("figures")
+    if isinstance(figs, str):
+        try:
+            figs = json.loads(figs)
+        except (ValueError, TypeError):
+            figs = None
+    return not (figs and any(f.get("caption") for f in figs))
 
 
 def _benchmark_block(bm: dict) -> str:
@@ -462,6 +513,8 @@ def _benchmark_block(bm: dict) -> str:
     if not body:
         body.append(f"(content not ready — status: {bm.get('status', '?')}"
                     + (f", error: {bm['error']}" if bm.get("error") else "") + ")")
+    elif _benchmark_figures_unread(bm):
+        body.append(_DRAWINGS_NOT_READ)
     return head + "\n" + "\n".join(body)
 
 
@@ -479,10 +532,62 @@ def build_prompt(question: str, history: list[dict] | None = None,
                  skills: list[dict] | None = None,
                  benchmark: dict | None = None,
                  focus: list[dict] | None = None,
-                 full: bool = False, answer_format: str = "") -> str:
+                 full: bool = False, answer_format: str = "",
+                 xrefs: list[dict] | None = None,
+                 other_docs: list[dict] | None = None,
+                 coverage: list[dict] | None = None,
+                 discussions: list[dict] | None = None) -> str:
     parts = [_PREAMBLE]
     if documents or focus or benchmark:
         parts.append(_GROUNDING_INSTRUCTION)
+    if xrefs:
+        # Documents named in the benchmark/question that live in OTHER tabs — their
+        # stored digest/verdict, pulled in as read-only context so the model can
+        # locate the referenced feature and hunt it across this tab's candidates.
+        blocks = []
+        for x in xrefs:
+            head = f"[{x.get('number', '?')}"
+            if x.get("tab_name"):
+                head += f" — from tab «{x['tab_name']}»"
+            head += "]"
+            body = (x.get("verdict") or x.get("digest") or "").strip()[:MAX_TURN_CHARS]
+            blocks.append(f"{head}\n{body}")
+        parts.append(
+            "CROSS-TAB REFERENCES — documents the user named that are stored in other "
+            "tabs of this workbench. Their assessment/digest is provided so you can "
+            "understand what feature is being referenced and find it among THIS tab's "
+            "candidates. Treat as background context (derived summaries — do not cite "
+            "[00NN] from them as verified):\n\n" + "\n\n".join(blocks))
+    if discussions:
+        # Full chat exchanges from OTHER tabs that mention a document named in this
+        # conversation — the actual discussion, so "what did we say about X in the
+        # other tab" is answerable verbatim, and follow-ups can build on it.
+        blocks, used = [], 0
+        for d in discussions:
+            for ex in d.get("exchanges", []):
+                lines = [f"{_ROLE.get(m.get('role', ''), 'User')}: "
+                         f"{(m.get('text') or '')[:MAX_TURN_CHARS]}" for m in ex]
+                when = (time.strftime("%Y-%m-%d", time.localtime(ex[0]["ts"]))
+                        if ex and ex[0].get("ts") else "?")
+                block = (f"[tab «{d.get('tab_name', '?')}» — {d.get('number', '?')} — "
+                         f"{when}]\n" + "\n".join(lines))
+                if used + len(block) > MAX_XTALK_CHARS:
+                    blocks.append(f"(…more discussion of {d.get('number', '?')} in tab "
+                                  f"«{d.get('tab_name', '?')}» did not fit the budget)")
+                    used = MAX_XTALK_CHARS
+                    break
+                blocks.append(block)
+                used += len(block)
+            if used >= MAX_XTALK_CHARS:
+                break
+        parts.append(
+            "PRIOR DISCUSSIONS IN OTHER TABS — chat exchanges from elsewhere in this "
+            "workbench that mention a document named in the current conversation. When "
+            "the user asks what was discussed/said/concluded about that document in "
+            "other tabs, reproduce it faithfully from here (say which tab each exchange "
+            "comes from) and answer follow-ups against it. These are conversation "
+            "records, NOT primary patent text — do not cite [00NN]/claims from them as "
+            "verified:\n\n" + "\n\n".join(blocks))
     if skills:
         blocks = "\n\n".join(f"[Skill /{s['name']}]\n{s['content']}" for s in skills)
         parts.append(
@@ -572,6 +677,47 @@ def build_prompt(question: str, history: list[dict] | None = None,
                      "run 🏆 Deep compare. Do not present clipped/digest content "
                      "as verified primary text); cite publication numbers:\n\n"
                      + "\n\n".join(blocks) + note)
+    if other_docs:
+        # Every OTHER tab's already-fetched documents, as a compact per-tab roster of
+        # digests/verdicts — enough to identify (and combine) documents across tabs
+        # without reloading. Budget-capped: highest-score first, digests clipped.
+        per = max(400, MAX_ROSTER_CHARS // max(1, len(other_docs)))
+        per = min(per, MAX_DOC_CHARS)
+        used, included, dropped = 0, [], 0
+        for d in other_docs:
+            summary = (d.get("verdict") or d.get("digest") or "").strip()
+            if not summary:
+                continue
+            if used + min(len(summary), per) > MAX_ROSTER_CHARS:
+                dropped += 1
+                continue
+            tabs = ", ".join(d.get("tabs") or [d.get("tab_name", "?")])
+            head = f"• {d.get('number', '?')} — {d.get('title') or 'no title'}  [tab: {tabs}"
+            if d.get("score") is not None:
+                head += f" · {d['score']:g}/10"
+            head += "]"
+            clip = " …[clipped]" if len(summary) > per else ""
+            included.append(f"{head}\n  {summary[:per]}{clip}")
+            used += min(len(summary), per)
+        if included:
+            cov = ""
+            if coverage:
+                cov = "\n\nPER-TAB DOCUMENT COUNTS (every tab, authoritative): " + \
+                    "; ".join(f"«{c['tab_name']}» {c['fetched']} fetched/"
+                              f"{c['total']} total" for c in coverage)
+            drop_note = (f"\n\n(+{dropped} more cross-tab documents not shown — budget; "
+                         "they exist and are fetched.)" if dropped else "")
+            parts.append(
+                "DOCUMENTS IN OTHER TABS — already fetched and OCR'd elsewhere in this "
+                "workbench, shown with their stored assessment/digest. You MAY use these "
+                "to answer, and to assemble a COMBINATION of documents that spans tabs "
+                "(they are reused, not re-fetched). Cite each by its publication number "
+                "and name which tab it comes from. These are DERIVED summaries — to quote "
+                "primary text/[00NN], the doc must be opened in its own tab.\n\n"
+                + "\n\n".join(included) + drop_note + cov
+                + "\n\nAT THE START of your answer, state the cross-tab coverage you "
+                "considered — the per-tab document counts above (e.g. 'Considered «A» "
+                "202 docs, «B» 100 docs, …').")
     if history:
         lines = []
         for h in history[-MAX_HISTORY:]:
@@ -621,15 +767,24 @@ def chat(question: str, history: list[dict] | None = None,
          documents: list[dict] | None = None, sources: list[dict] | None = None,
          skills: list[dict] | None = None, model: str | None = None,
          benchmark: dict | None = None, focus: list[dict] | None = None,
-         full: bool = False, answer_format: str = "") -> dict:
+         full: bool = False, answer_format: str = "",
+         xrefs: list[dict] | None = None,
+         other_docs: list[dict] | None = None,
+         coverage: list[dict] | None = None,
+         discussions: list[dict] | None = None) -> dict:
     """One stateless turn. Returns {answer, model, lessons:[(skill, text)]} | {error}.
     No tools — pure text; benchmark + documents arrive pre-fetched from the local DB.
     `focus` = user-selected candidates loaded with FULL primary text; `full` =
     long-form answer (otherwise 1-2 sentence precise mode); `answer_format` = an
-    ANSWER_FORMATS key that, when set, dictates the answer's structure."""
+    ANSWER_FORMATS key that, when set, dictates the answer's structure; `xrefs` =
+    cross-tab documents the text names, pulled in as read-only context; `other_docs`
+    = every OTHER tab's fetched docs (cross-tab roster); `coverage` = per-tab counts;
+    `discussions` = chat exchanges from OTHER tabs mentioning a named document."""
     prompt = build_prompt(question, history, documents, sources, skills,
                           benchmark=benchmark, focus=focus, full=full,
-                          answer_format=answer_format)
+                          answer_format=answer_format, xrefs=xrefs,
+                          other_docs=other_docs, coverage=coverage,
+                          discussions=discussions)
     res = _run_claude(prompt, model or CHAT_MODEL)
     if "error" in res:
         return res
@@ -734,6 +889,8 @@ def deep_map(benchmark_text: str, doc: dict, model: str | None = None,
     the weighted ranking. {verdict} | {error}."""
     fulltext = "\n\n".join(filter(None, [
         doc.get("abstract"), doc.get("claims"), doc.get("description")]))
+    if _figures_unread(doc):
+        fulltext += "\n\n" + _DRAWINGS_NOT_READ
     instructions = _DEEP_MAP_PROMPT
     if features:
         instructions = instructions + "\n" + _feature_check_block(features)
@@ -750,6 +907,15 @@ def deep_map(benchmark_text: str, doc: dict, model: str | None = None,
     verdict = citations.verify(res["answer"],
                                [{"number": doc.get("number"), "text": fulltext}],
                                flag_unfound=True)["answer"]
+    # Deficiency stamp — appended in CODE, not left to the model (LLM caveats are
+    # flaky; this one must survive verbatim). The verdict is persisted and reused by
+    # the chat roster, 📊 re-rank and the reduce, so the gap stays visible everywhere
+    # until the user opts into a figure read.
+    if _figures_unread(doc):
+        verdict += ("\n\n⚠ DRAWINGS NOT READ — this assessment covers the text only "
+                    "(abstract/claims/description); the figure sheets were never "
+                    "vision-captioned. For a check that includes the drawings, run "
+                    "🖼 Read figures on this document, then re-read it.")
     return {"verdict": verdict}
 
 
@@ -907,6 +1073,85 @@ def parse_additional(text: str, a_features: list[dict]) -> dict:
                           "evidence": m.group(3).strip()[:200]})
         if feats:
             out[num] = feats
+    return out
+
+
+CROSS_TAB_SCAN_PROMPT = (
+    "You screen patent documents from OTHER projects against THIS project's benchmark. "
+    "For each candidate below, judge from its stored DIGEST (a faithful summary of its "
+    "full text) whether it discloses ANY of the benchmark's target features — even ONE "
+    "covered feature makes it worth pulling in. If the digest is silent on a feature, "
+    "treat it as not shown (do not invent).\n\n"
+    "{benchmark}\n\n"
+    "{features}\n\n"
+    "=== CANDIDATES (digests) ===\n{docs}\n\n"
+    "OUTPUT — for EVERY candidate, in this EXACT format, nothing else:\n"
+    "=== <PUBLICATION NUMBER> ===\n"
+    "then EITHER one line per COVERED target feature (omit uncovered ones):\n"
+    "FEATURE <n>: <YES|PARTIAL> — <≤15 words: what in the candidate covers it>\n"
+    "OR, when target features are not numbered, a single line:\n"
+    "COVERS: <≤20 words: which benchmark elements it discloses>\n"
+    "OR, if it covers nothing of the benchmark:\n"
+    "MATCHES: NONE")
+
+_XSCAN_FEAT_RE = re.compile(
+    r"FEATURE\s*(\d+)\s*:\s*(YES|PARTIAL)\b[\s—:-]*(.*)", re.IGNORECASE)
+_XSCAN_COVERS_RE = re.compile(r"COVERS:\s*(.+)", re.IGNORECASE)
+
+
+def cross_tab_scan(benchmark: dict, features: list[dict], docs: list[dict],
+                   model: str | None = None) -> dict:
+    """🏆 Best-match cross-tab screen: ONE bulk call (default sonnet) judging each
+    OTHER-tab candidate's stored digest against THIS tab's benchmark. The caller
+    batches; every input doc gets a verdict (empty = no coverage → negative-cache).
+    Returns {results: {number: {features: [{name,weight,status,evidence}],
+    covers: str|None}}} | {error}."""
+    if not docs:
+        return {"results": {}}
+    feat_lines = ("TARGET FEATURES (numbered):\n" + "\n".join(
+        f"{i}. {f.get('name', '')}" for i, f in enumerate(features, 1))
+        if features else "TARGET FEATURES: not numbered — judge against the "
+                         "benchmark's claims/technical solution as a whole.")
+    doc_blocks = "\n\n".join(
+        f"=== {d['number']} ===\n"
+        f"{((d.get('digest') or d.get('verdict') or '') or '(no digest available)')[:3000]}"
+        for d in docs)
+    prompt = CROSS_TAB_SCAN_PROMPT.format(
+        benchmark="BENCHMARK:\n\n" + _benchmark_block(benchmark),
+        features=feat_lines, docs=doc_blocks)
+    res = _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"results": parse_cross_tab_scan(res["answer"], features),
+            "model": res.get("model")}
+
+
+def parse_cross_tab_scan(text: str, features: list[dict]) -> dict:
+    """Map the bulk scan output back onto {number: {features, covers}}. A block with
+    no FEATURE/COVERS line (e.g. 'MATCHES: NONE') yields an EMPTY entry — the caller
+    needs the negatives too, to cache them."""
+    out: dict = {}
+    parts = _ADD_HEADER_RE.split(text or "")
+    for i in range(1, len(parts) - 1, 2):
+        num = parts[i].strip()
+        body = parts[i + 1]
+        feats: list[dict] = []
+        for line in body.splitlines():
+            m = _XSCAN_FEAT_RE.search(line)
+            if not m:
+                continue
+            idx = int(m.group(1)) - 1
+            if not (0 <= idx < len(features)):
+                continue
+            f = features[idx]
+            feats.append({"name": f.get("name", ""), "weight": int(f.get("weight", 1)),
+                          "status": m.group(2).lower(),
+                          "note": m.group(3).strip()[:200]})
+        cov = _XSCAN_COVERS_RE.search(body)
+        covers = cov.group(1).strip()[:200] if cov else None
+        if covers and covers.lower() in ("none", "none.", "-"):
+            covers = None
+        out[num] = {"features": feats, "covers": covers}
     return out
 
 

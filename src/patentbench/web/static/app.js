@@ -243,11 +243,13 @@ function renderBenchmark(bm) {
     card.classList.add('hidden');
     setup.classList.remove('hidden');
     $('bm-status').textContent = '';
+    const xr = $('bm-xrefs'); if (xr) xr.innerHTML = '';
     return;
   }
   setup.classList.add('hidden');
   card.classList.remove('hidden');
   card.innerHTML = '';
+  loadBenchmarkXrefs(bm);   // patent numbers named here that live in other tabs
 
   const row = document.createElement('div');
   row.className = 'doc-row';
@@ -451,6 +453,11 @@ function addFeatureRow(name = '', weight = 1, kind = 'M', sl = 5) {
     sel.appendChild(o);
   }
   const { ksel, slin } = buildKindSl(kind, sl);
+  // 🔗 link this feature into the cross-tab knowledge graph (LLM suggests, you confirm)
+  const link = document.createElement('button');
+  link.className = 'btn small feat-link'; link.textContent = '🔗';
+  link.title = 'Classify this feature and link it to the cross-tab knowledge graph '
+             + '(field › block › function › option) — reuses a matching node if one exists';
   const del = document.createElement('button');
   del.className = 'btn small del'; del.textContent = '🗑'; del.title = 'Remove this feature';
   del.onclick = () => { row.remove(); if (!wrap.children.length) addFeatureRow(); };
@@ -458,8 +465,11 @@ function addFeatureRow(name = '', weight = 1, kind = 'M', sl = 5) {
   // narrow pane never squeezes the text box into an unwritable sliver.
   const controls = document.createElement('div');
   controls.className = 'feat-controls';
-  controls.append(sel, ksel, slin, del);
-  row.append(txt, controls);
+  controls.append(sel, ksel, slin, link, del);
+  const hint = document.createElement('div');
+  hint.className = 'feat-link-hint';
+  link.onclick = () => linkFeatureRow(txt.value.trim(), hint);
+  row.append(txt, controls, hint);
   wrap.appendChild(row);
   return txt;
 }
@@ -619,6 +629,7 @@ function savePrefs() {
     readModel: readModelValue(),
     skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
     useDocs: $('use-docs').checked,
+    allTabs: $('use-all-tabs').checked,
     askNb: $('ask-nb').checked,
     full: $('full-analysis').checked,
     answerFormat: $('answer-format').value,
@@ -633,6 +644,7 @@ function loadPrefs() {
   const want = new Set(p.skills || defaultSkills());
   document.querySelectorAll('#skills input').forEach(i => { i.checked = want.has(i.value); });
   $('use-docs').checked = p.useDocs !== false;
+  $('use-all-tabs').checked = !!p.allTabs;
   $('ask-nb').checked = !!p.askNb;
   $('full-analysis').checked = !!p.full;
   $('answer-format').value = p.answerFormat || '';
@@ -690,6 +702,7 @@ async function loadSkills() {
     if (lastDocs.length) renderDocs(lastDocs);   // refresh the model-aware Continue count
   };
   $('use-docs').onchange = savePrefs;
+  $('use-all-tabs').onchange = savePrefs;
   $('ask-nb').onchange = savePrefs;
   $('full-analysis').onchange = savePrefs;
   fmt.onchange = savePrefs;
@@ -1104,6 +1117,49 @@ function renderDocs(allDocs) {
         nbm.title = 'Not a source in any NotebookLM notebook — the 📓 NLM shortlist cannot see this candidate. Use 📓➕ to add it.';
       }
       row1.appendChild(nbm);
+      // Figures-read badge: figures are OPT-IN (vision cost), so a text-only read is
+      // normal — but the deficiency must be visible at a glance, with the fix one
+      // click away (run a detailed check including drawings on THIS document).
+      const fg = document.createElement('span');
+      if (d.figures_n > 0) {
+        fg.className = 'chip fig-in';
+        fg.textContent = `🖼 ${d.figures_n}`;
+        fg.title = `${d.figures_n} figure(s) vision-read into the text — chat & deep-compare can cite them like paragraphs.`;
+      } else if (d.figures_n === 0) {
+        fg.className = 'chip fig-none';
+        fg.textContent = '🖼 –';
+        fg.title = 'No drawing sheets found for this document.';
+      } else {
+        fg.className = 'chip fig-out';
+        fg.textContent = '🖼✗ figures not read';
+        fg.title = 'Text-only: the drawing sheets were NOT vision-read — figure content is unknown to chat/deep-compare. '
+          + 'Click to read the figures now (vision pass) for a detailed check including drawings.';
+        fg.style.cursor = 'pointer';
+        fg.onclick = async () => {
+          fg.textContent = '🖼 reading…'; fg.onclick = null; fg.style.cursor = '';
+          const r = await api(`/api/tabs/${activeTab}/documents/${d.id}/figures?reading_model=${encodeURIComponent(readModelValue())}`,
+                              { method: 'POST' });
+          if (r.error) { fg.textContent = `🖼 error`; fg.title = r.error; return; }
+          pollFiguresDone(d.id);
+        };
+      }
+      row1.appendChild(fg);
+      // ↪ cross-tab provenance: this candidate was pulled in by 🏆 Best match from
+      // another tab because it covers ≥1 of THIS tab's benchmark features — the
+      // tooltip names exactly which ones (digest pre-check; deep read refines).
+      if (d.source === 'cross-tab') {
+        const xt = document.createElement('span');
+        xt.className = 'chip xtab';
+        const from = (tabs.find(t => t.id === d.origin_tab_id) || {}).name || 'another tab';
+        xt.textContent = `↪ ${from}`;
+        const covered = (d.feature_scores || [])
+          .filter(f => f.status === 'yes' || f.status === 'partial')
+          .map(f => `${f.name}${f.status === 'partial' ? ' (partial)' : ''}`);
+        xt.title = `Pulled in by 🏆 Best match from tab «${from}» — covers benchmark feature(s): `
+          + (covered.join('; ') || (d.score_note || 'see its note'))
+          + '. Digest pre-check; the deep read assesses it in full.';
+        row1.appendChild(xt);
+      }
       const addNb = document.createElement('button');
       addNb.className = 'btn small'; addNb.textContent = '📓➕';
       addNb.title = 'Add this candidate to a NotebookLM notebook — pick which one (or create one)';
@@ -1523,7 +1579,7 @@ function appendMsg(m) {
     for (const p of m.participants || []) {
       const chip = document.createElement('span');
       chip.className = 'chip';
-      chip.textContent = ({ model: '🧬 ', skill: '🧠 ', notebook: '📓 ', documents: '📚 ', benchmark: '🎯 ' }[p.kind] || '') + p.title;
+      chip.textContent = ({ model: '🧬 ', skill: '🧠 ', notebook: '📓 ', documents: '📚 ', benchmark: '🎯 ', xref: '🔗 ', 'tab-docs': '🗂 ', xtalk: '💬 ' }[p.kind] || '') + p.title;
       meta.appendChild(chip);
     }
     el.appendChild(meta);
@@ -1576,6 +1632,7 @@ async function sendChat(notebookOnly) {
         skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
         use_documents: $('use-docs').checked,
         ask_notebook: $('ask-nb').checked,
+        all_tabs: $('use-all-tabs').checked,   // reuse every OTHER tab's fetched docs
         full: $('full-analysis').checked,
         answer_format: $('answer-format').value,
         focus_ids: [...docSelection],          // selected candidates → loaded full-text
@@ -1690,7 +1747,45 @@ async function reloadChat() {
   if (activeTab === tabAt && !st.error) renderChat(st.messages || []);
 }
 
-$('best-match').onclick = () => runDeepCompare(docSelection.size ? [...docSelection] : null);
+// 🏆 Best match considers ALL relevant documents, including OTHER tabs: first a
+// cheap digest scan of every other tab's fetched doc vs THIS benchmark; any doc
+// covering ≥1 feature is pulled in as a real candidate (covered features indicated
+// on its row), THEN the deep compare runs over the enlarged list. Negatives are
+// cached server-side per benchmark, so repeat clicks only scan what's new.
+async function crossTabScanThen(next) {
+  const el = $('read-status'); const tabAt = activeTab;
+  el.classList.remove('muted');
+  el.textContent = '↪ checking other tabs for documents that cover benchmark features…';
+  const r = await api(`/api/tabs/${activeTab}/cross-tab-scan`,
+                      { method: 'POST', body: JSON.stringify({}) });
+  if (r.error || !r.started) {
+    // no benchmark / nothing new to scan / scan already running — never block the run
+    el.textContent = r.error ? '' :
+      (r.cached_skipped ? `↪ other tabs already scanned for this benchmark (${r.cached_skipped} cached) — nothing new` : '');
+    next();
+    return;
+  }
+  const poll = async () => {
+    if (activeTab !== tabAt) return;               // user switched tabs — stop narrating
+    const s = await api(`/api/tabs/${activeTab}/cross-tab-scan/status`);
+    if (s.running) {
+      el.textContent = `↪ scanning other tabs vs this benchmark… ${s.done}/${s.total} digests checked, `
+        + `${(s.imported || []).length} pulled in so far`;
+      setTimeout(poll, 2500);
+      return;
+    }
+    const got = s.imported || [];
+    el.textContent = got.length
+      ? `↪ pulled ${got.length} document(s) from other tabs — each covers ≥1 benchmark feature; they join this run`
+      : '↪ other tabs checked — no additional document covers a benchmark feature';
+    await refreshDocs();
+    reloadChat();                                  // the 🏆 system line lists what came in
+    next();
+  };
+  poll();
+}
+$('best-match').onclick = () =>
+  crossTabScanThen(() => runDeepCompare(docSelection.size ? [...docSelection] : null));
 $('claude-rate-all').onclick = () => runDeepCompare(null);            // re-read EVERY candidate
 $('claude-continue').onclick = () => runDeepCompare(null, true);      // only the not-yet-read ones
 $('deep-selected').onclick = () => {
@@ -2739,6 +2834,282 @@ for (const handle of document.querySelectorAll('.resizer')) {
     localStorage.setItem('pb-cols', JSON.stringify(cols));
     applyCols();
   });
+}
+
+/* ================= cross-tab knowledge graph + global search ================= */
+
+const KIND_ICON = { field: '🗂', block: '🧱', function: '⚙️', option: '◦' };
+
+function openKgModal() {
+  $('kg-modal').classList.remove('hidden');
+  $('kg-results').classList.add('hidden');
+  loadKgTree();
+  setTimeout(() => $('kg-q').focus(), 50);
+}
+$('kg-open').onclick = openKgModal;
+$('kg-modal-close').onclick = () => $('kg-modal').classList.add('hidden');
+$('kg-modal').onclick = e => { if (e.target === $('kg-modal')) $('kg-modal').classList.add('hidden'); };
+
+// Top-bar box: Enter opens the graph modal already searched.
+$('topsearch').onkeydown = e => {
+  if (e.key !== 'Enter') return;
+  const q = $('topsearch').value.trim();
+  openKgModal();
+  if (q) { $('kg-q').value = q; runGlobalSearch(q); }
+};
+
+let kgSearchTimer = null;
+$('kg-q').oninput = () => {
+  clearTimeout(kgSearchTimer);
+  const q = $('kg-q').value.trim();
+  if (!q) { $('kg-results').classList.add('hidden'); return; }
+  kgSearchTimer = setTimeout(() => runGlobalSearch(q), 250);
+};
+
+async function loadKgTree() {
+  const box = $('kg-tree');
+  const res = await api('/api/kg');
+  const nodes = (res && res.nodes) || [];
+  box.innerHTML = '';
+  if (!nodes.length) {
+    box.innerHTML = '<div class="muted">The graph is empty. Click <b>🔄 Build / refresh</b> to '
+      + 'classify every tab\'s features into field › block › function › option, or add a '
+      + 'benchmark feature and use its 🔗 button.</div>';
+    return;
+  }
+  for (const n of nodes) box.appendChild(renderKgNode(n, 0));
+}
+
+function renderKgNode(node, depth) {
+  const wrap = document.createElement('div');
+  wrap.className = 'kg-node kg-' + node.kind;
+  const hasKids = (node.children && node.children.length) || (node.features && node.features.length);
+  const row = document.createElement('div');
+  row.className = 'kg-row';
+  const tw = document.createElement('button');
+  tw.className = 'kg-twist';
+  tw.textContent = hasKids ? '▸' : '·';
+  const label = document.createElement('span');
+  label.className = 'kg-label';
+  label.innerHTML = `<span class="kg-icon">${KIND_ICON[node.kind] || '•'}</span> `
+    + `<b class="kg-name">${esc(node.name)}</b>`
+    + (node.total_features ? ` <span class="chip kg-count">${node.total_features}</span>` : '');
+  label.title = 'Rename';
+  label.ondblclick = async () => {
+    const nn = prompt('Rename node:', node.name);
+    if (nn && nn.trim() && nn !== node.name) {
+      await api(`/api/kg/node/${node.id}`, { method: 'PATCH', body: JSON.stringify({ name: nn.trim() }) });
+      loadKgTree();
+    }
+  };
+  const del = document.createElement('button');
+  del.className = 'kg-del'; del.textContent = '🗑'; del.title = 'Delete this node and its children';
+  del.onclick = async e => {
+    e.stopPropagation();
+    if (!confirm(`Delete "${node.name}" and everything under it?`)) return;
+    await api(`/api/kg/node/${node.id}`, { method: 'DELETE' });
+    loadKgTree();
+  };
+  row.append(tw, label, del);
+  wrap.appendChild(row);
+
+  const kids = document.createElement('div');
+  kids.className = 'kg-kids hidden';
+  // related cross-links
+  if (node.related && node.related.length) {
+    const rel = document.createElement('div');
+    rel.className = 'kg-related';
+    rel.innerHTML = '⇄ related: ';
+    for (const r of node.related) {
+      const chip = document.createElement('span');
+      chip.className = 'chip kg-rel-chip';
+      chip.textContent = `${KIND_ICON[r.kind] || '•'} ${r.name}`;
+      rel.appendChild(chip);
+    }
+    kids.appendChild(rel);
+  }
+  // feature occurrences = the tabs/docs that disclose this node
+  for (const f of (node.features || [])) {
+    const fr = document.createElement('div');
+    fr.className = 'kg-feat';
+    const where = f.number ? `${f.number}` : (f.status === 'benchmark' ? '🎯 benchmark' : '#' + (f.doc_id || '?'));
+    const mark = { yes: '✓', partial: '~', present: '✓', stretch: '~', benchmark: '🎯' }[f.status] || '•';
+    fr.innerHTML = `<a class="kg-jump">${mark} ${esc(where)}</a> `
+      + `<span class="chip">tab: ${esc(f.tab_name || '?')}</span>`
+      + (f.feature_name && f.feature_name !== node.name ? ` <span class="kg-fname">“${esc(f.feature_name)}”</span>` : '');
+    if (f.tab_id) {
+      fr.querySelector('.kg-jump').onclick = async () => {
+        $('kg-modal').classList.add('hidden');
+        await selectTab(f.tab_id);
+        if (f.doc_id) setTimeout(() => scrollToDoc(f.doc_id), 400);
+      };
+      fr.querySelector('.kg-jump').title = 'Open that tab' + (f.doc_id ? ' and jump to this document' : '');
+    }
+    if (f.note) {
+      const note = document.createElement('div');
+      note.className = 'kg-fnote'; note.textContent = f.note;
+      fr.appendChild(note);
+    }
+    kids.appendChild(fr);
+  }
+  for (const ch of (node.children || [])) kids.appendChild(renderKgNode(ch, depth + 1));
+  wrap.appendChild(kids);
+  const toggle = () => {
+    kids.classList.toggle('hidden');
+    tw.textContent = kids.classList.contains('hidden') ? '▸' : '▾';
+  };
+  tw.onclick = toggle;
+  label.onclick = toggle;
+  if (depth === 0 && hasKids) toggle();   // fields open by default
+  return wrap;
+}
+
+async function runGlobalSearch(q) {
+  const box = $('kg-results');
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="muted">Searching…</div>';
+  const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
+  if (res.error) { box.innerHTML = `<div class="err">${esc(res.error)}</div>`; return; }
+  box.innerHTML = '';
+  const total = (res.nodes || []).length + (res.documents || []).length + (res.messages || []).length;
+  if (!total) { box.innerHTML = '<div class="muted">No cross-tab matches.</div>'; return; }
+
+  if (res.nodes && res.nodes.length) {
+    box.appendChild(sectionHead(`🗺 Graph nodes (${res.nodes.length})`));
+    for (const n of res.nodes) {
+      const el = document.createElement('div');
+      el.className = 'kg-hit';
+      const path = (n.path || []).map(p => esc(p.name)).join(' › ');
+      el.innerHTML = `<span class="kg-icon">${KIND_ICON[n.kind] || '•'}</span> ${path || esc(n.name)}`;
+      box.appendChild(el);
+    }
+  }
+  if (res.documents && res.documents.length) {
+    box.appendChild(sectionHead(`📄 Documents (${res.documents.length})`));
+    for (const d of res.documents) {
+      const el = document.createElement('div');
+      el.className = 'kg-hit';
+      el.innerHTML = `<a class="kg-jump">${esc(d.number || '#' + d.id)}</a> `
+        + `<span class="muted">${esc(d.title || '')}</span> <span class="chip">tab: ${esc(d.tab_name)}</span>`
+        + (d.score != null ? ` <span class="chip">${d.score}/10</span>` : '');
+      el.querySelector('.kg-jump').onclick = async () => {
+        $('kg-modal').classList.add('hidden');
+        await selectTab(d.tab_id);
+        setTimeout(() => scrollToDoc(d.id), 400);
+      };
+      box.appendChild(el);
+    }
+  }
+  if (res.messages && res.messages.length) {
+    box.appendChild(sectionHead(`💬 Chats (${res.messages.length})`));
+    for (const m of res.messages) {
+      const el = document.createElement('div');
+      el.className = 'kg-hit';
+      const who = { q: '❓', c: '🤖', a: '📓' }[m.role] || '•';
+      el.innerHTML = `<a class="kg-jump">${who} open</a> <span class="chip">tab: ${esc(m.tab_name)}</span> `
+        + `<span class="kg-snip">${esc(m.snippet || '')}</span>`;
+      el.querySelector('.kg-jump').onclick = async () => {
+        $('kg-modal').classList.add('hidden');
+        await selectTab(m.tab_id);
+      };
+      box.appendChild(el);
+    }
+  }
+}
+function sectionHead(t) {
+  const h = document.createElement('div');
+  h.className = 'kg-sec'; h.textContent = t;
+  return h;
+}
+
+$('kg-refresh').onclick = async () => {
+  const st = $('kg-rebuild-status');
+  st.textContent = 'Classifying features across all tabs (this uses a cheap LLM)…';
+  $('kg-refresh').disabled = true;
+  const res = await api('/api/kg/rebuild', { method: 'POST', body: JSON.stringify({}) });
+  $('kg-refresh').disabled = false;
+  if (res.error) { st.innerHTML = `<span class="err">${esc(res.error)}</span>`; return; }
+  st.textContent = `Done — ${res.attached} feature(s) placed on ${res.nodes} node(s) `
+    + `(${res.distinct_features} distinct${res.failed ? `, ${res.failed} failed` : ''}).`;
+  loadKgTree();
+};
+
+// Per-feature 🔗: classify THIS feature and offer to link it to an existing node.
+async function linkFeatureRow(name, hint) {
+  if (!name.trim()) return;
+  hint.textContent = '🔗 classifying…'; hint.className = 'feat-link-hint';
+  const res = await api('/api/kg/classify', { method: 'POST',
+    body: JSON.stringify({ feature_name: name, tab_id: activeTab }) });
+  if (res.error && !res.classification) { hint.innerHTML = `<span class="err">${esc(res.error)}</span>`; return; }
+  const cls = res.classification;
+  const cands = res.candidates || [];
+  hint.innerHTML = '';
+  const path = [cls.field, cls.block, cls.function, cls.option].filter(Boolean).join(' › ');
+  const head = document.createElement('div');
+  head.innerHTML = `🔗 <b>${esc(path)}</b>`
+    + (cls.related_blocks && cls.related_blocks.length ? ` <span class="muted">⇄ ${esc(cls.related_blocks.join(', '))}</span>` : '');
+  hint.appendChild(head);
+  const btns = document.createElement('div');
+  btns.className = 'feat-link-btns';
+  // link to the best existing node, if any overlap
+  for (const c of cands.slice(0, 2)) {
+    const b = document.createElement('button');
+    b.className = 'btn small';
+    b.textContent = `↪ link to “${c.name}”`;
+    b.title = (c.path || []).map(p => p.name).join(' › ');
+    b.onclick = () => attachFeature({ feature_name: name, node_id: c.id }, hint, c.name);
+    btns.appendChild(b);
+  }
+  const nb = document.createElement('button');
+  nb.className = 'btn small primary';
+  nb.textContent = cands.length ? '＋ new node' : '＋ add to graph';
+  nb.onclick = () => attachFeature({
+    feature_name: name, field: cls.field, block: cls.block,
+    function: cls.function, option: cls.option, related_blocks: cls.related_blocks,
+  }, hint, path);
+  btns.appendChild(nb);
+  const dismiss = document.createElement('button');
+  dismiss.className = 'btn small'; dismiss.textContent = '✕';
+  dismiss.onclick = () => { hint.innerHTML = ''; };
+  btns.appendChild(dismiss);
+  hint.appendChild(btns);
+}
+async function attachFeature(payload, hint, label) {
+  payload.tab_id = activeTab; payload.status = 'benchmark';
+  const res = await api('/api/kg/attach', { method: 'POST', body: JSON.stringify(payload) });
+  hint.innerHTML = res.error ? `<span class="err">${esc(res.error)}</span>`
+    : `✅ linked to <b>${esc(label)}</b> <span class="muted">(see 🗺)</span>`;
+}
+
+// Benchmark cross-tab references: patent numbers named in the benchmark that live in
+// OTHER tabs → chips whose stored arguments auto-load into chat context.
+async function loadBenchmarkXrefs(bm) {
+  const box = $('bm-xrefs');
+  if (!box) return;
+  box.innerHTML = '';
+  const text = [bm && bm.text, bm && bm.title, bm && bm.number,
+    ...((bm && bm.features) || []).map(f => f.name)].filter(Boolean).join('\n');
+  if (!text.trim() || !activeTab) return;
+  const res = await api(`/api/tabs/${activeTab}/refs?text=${encodeURIComponent(text)}`);
+  const refs = (res && res.refs) || [];
+  if (!refs.length) return;
+  const head = document.createElement('div');
+  head.className = 'bm-xref-head';
+  head.textContent = '📎 Referenced patents found in other tabs — their arguments auto-load into chat:';
+  box.appendChild(head);
+  for (const r of refs) {
+    const chip = document.createElement('span');
+    chip.className = 'chip bm-xref-chip';
+    chip.textContent = `📎 ${r.number} · tab ${r.tab_name || '?'}`;
+    chip.title = (r.verdict || r.digest || '').slice(0, 500);
+    chip.onclick = async () => { await selectTab(r.tab_id); if (r.doc_id) setTimeout(() => scrollToDoc(r.doc_id), 400); };
+    box.appendChild(chip);
+  }
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 /* ---------- boot ---------- */

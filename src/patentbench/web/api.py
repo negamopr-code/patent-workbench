@@ -17,8 +17,8 @@ from fastapi.requests import Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import (citations, claude_bridge, db, extract, fetcher, figures, lessons,
-                nlm_bridge, patents)
+from .. import (citations, claude_bridge, db, extract, fetcher, figures, kgraph,
+                lessons, nlm_bridge, patents)
 from . import schemas
 
 UPLOADS = os.environ.get("PB_UPLOADS", "/data/uploads")
@@ -878,6 +878,153 @@ def feature_xref(tab_id: int, name: str):
     _tab_or_404(tab_id)
     rows = db.documents_disclosing_feature(name, exclude_tab_id=tab_id)
     return {"name": name, "documents": rows}
+
+
+# ---------- knowledge graph (cross-tab feature taxonomy) + global search ----------
+
+@app.get("/api/kg")
+def kg_tree():
+    """The whole cross-tab knowledge graph (field›block›function›option forest with
+    per-node tab/doc references and ⇄ related cross-links)."""
+    return db.kg_tree()
+
+
+@app.get("/api/search")
+def global_search(q: str, limit: int = 40):
+    """Global cross-tab search over graph nodes, documents and chat messages."""
+    return db.kg_search(q, limit=min(max(limit, 1), 100))
+
+
+@app.get("/api/tabs/{tab_id}/refs")
+def resolve_refs(tab_id: int, text: str):
+    """Patent numbers named in `text` (e.g. a benchmark feature 'overlapping section
+    like in EP4338618') that are NOT in this tab but ARE stored in another — resolved
+    to that tab's document + its digest/verdict, so it can be pulled in as context."""
+    _tab_or_404(tab_id)
+    here = {d["number"] for d in db.list_documents(tab_id)}
+    out = []
+    seen = set()
+    for num in patents.extract_candidates(text or ""):
+        if num in here or num in seen:
+            continue
+        seen.add(num)
+        ref = db.cross_tab_reference(num, exclude_tab_id=tab_id)
+        if ref:
+            out.append(ref)
+    return {"refs": out}
+
+
+@app.post("/api/kg/classify")
+def kg_classify(body: schemas.KgClassifyRequest):
+    """LLM draft classification for a feature + existing nodes it could link to.
+    Powers the 'Looks like … [Link] [New]' suggestion when a feature is added."""
+    cls = kgraph.classify_feature(body.feature_name, model=body.model)
+    if "error" in cls:
+        return {"error": cls["error"], "candidates": db.kg_candidate_nodes(body.feature_name)}
+    return {"classification": cls, "candidates": db.kg_candidate_nodes(body.feature_name)}
+
+
+@app.post("/api/kg/attach")
+def kg_attach(body: schemas.KgAttachRequest):
+    """Confirm a classification: link the feature to an existing node, or create the
+    field›block›function›option path. Returns the resulting node breadcrumb."""
+    if body.node_id and db.kg_path(body.node_id):
+        db.kg_attach_feature(body.node_id, body.feature_name, tab_id=body.tab_id,
+                             doc_id=body.doc_id, status=body.status, note=body.note)
+        return {"node_id": body.node_id, "path": db.kg_path(body.node_id)}
+    if not (body.field or body.option):
+        raise HTTPException(400, "need node_id or at least a field/option to create")
+    cls = {"field": body.field or "", "block": body.block or "",
+           "function": body.function or "", "option": body.option or "",
+           "related_blocks": body.related_blocks, "matched_option_id": None}
+    res = kgraph.apply_classification(cls, body.feature_name, tab_id=body.tab_id,
+                                      doc_id=body.doc_id, status=body.status, note=body.note)
+    if "error" in res:
+        raise HTTPException(400, res["error"])
+    return res
+
+
+@app.patch("/api/kg/node/{node_id}")
+def kg_node_patch(node_id: int, body: schemas.KgNodePatch):
+    if not db.kg_path(node_id):
+        raise HTTPException(404, "node not found")
+    if body.name is not None:
+        db.kg_rename_node(node_id, body.name)
+    if body.reparent:
+        db.kg_reparent_node(node_id, body.parent_id)
+    return {"path": db.kg_path(node_id)}
+
+
+@app.delete("/api/kg/node/{node_id}")
+def kg_node_delete(node_id: int):
+    return {"deleted": db.kg_delete_node(node_id)}
+
+
+@app.post("/api/kg/edge")
+def kg_edge_add(body: schemas.KgEdgeRequest):
+    if not (db.kg_path(body.src_id) and db.kg_path(body.dst_id)):
+        raise HTTPException(404, "node not found")
+    db.kg_add_edge(body.src_id, body.dst_id, body.rel)
+    return {"ok": True}
+
+
+@app.delete("/api/kg/edge/{edge_id}")
+def kg_edge_delete(edge_id: int):
+    return {"deleted": db.kg_delete_edge(edge_id)}
+
+
+def _kg_feature_sources(tab_id: int | None) -> list[dict]:
+    """Every feature occurrence to classify: benchmark target features + each
+    document's per-feature verdicts, across the given tab (or all tabs)."""
+    tab_ids = [tab_id] if tab_id else [t["id"] for t in db.list_tabs()]
+    out = []
+    for tid in tab_ids:
+        bm = db.get_benchmark(tid)
+        for f in (bm or {}).get("features", []) or []:
+            if f.get("name"):
+                out.append({"tab_id": tid, "doc_id": None, "name": f["name"],
+                            "status": "benchmark", "note": ""})
+        for d in db.list_documents(tid, full=False):
+            for arr in (d.get("feature_scores") or [], d.get("additional_scores") or []):
+                for e in (arr or []):
+                    nm = (e or {}).get("name")
+                    st = ((e or {}).get("status") or "").lower()
+                    if nm and st in ("yes", "partial", "present", "stretch"):
+                        out.append({"tab_id": tid, "doc_id": d["id"], "name": nm,
+                                    "status": st, "note": e.get("note") or e.get("evidence") or ""})
+    return out
+
+
+@app.post("/api/kg/rebuild")
+def kg_rebuild(body: schemas.KgRebuildRequest):
+    """Batch-classify every feature (benchmark targets + document verdicts) across a
+    tab, or all tabs, into the graph. Deduplicates identical feature names within the
+    run so the LLM is called once per distinct feature."""
+    ok, why = claude_bridge.available()
+    if not ok:
+        raise HTTPException(503, why)
+    if body.clear:
+        db.kg_clear()
+    sources = _kg_feature_sources(body.tab_id)
+    cache: dict[str, dict] = {}
+    attached = 0
+    failed = 0
+    for s in sources:
+        key = s["name"].strip().lower()
+        cls = cache.get(key)
+        if cls is None:
+            cls = kgraph.classify_feature(s["name"], model=body.model)
+            cache[key] = cls
+        if "error" in cls:
+            failed += 1
+            continue
+        res = kgraph.apply_classification(
+            cls, s["name"], tab_id=s["tab_id"], doc_id=s["doc_id"],
+            status=s["status"], note=s["note"])
+        if "error" not in res:
+            attached += 1
+    return {"attached": attached, "failed": failed,
+            "distinct_features": len(cache), "nodes": db.kg_tree()["node_count"]}
 
 
 @app.get("/api/tabs/{tab_id}/documents/{doc_id}")
@@ -1776,6 +1923,48 @@ def ask_notebook(tab_id: int, body: schemas.AskNotebookRequest):
 
 # ---------- chat ----------
 
+def _resolve_xrefs(tab_id: int, question: str, benchmark: dict | None,
+                   documents: list[dict] | None, limit: int = 4) -> list[dict]:
+    """Cross-tab reference docs named in the question or benchmark that live in ANOTHER
+    tab. Numbers already present as candidates in THIS tab are skipped (they're loaded
+    directly). Returns at most `limit`, richest-first (verdict beats digest)."""
+    here = {(d.get("number") or "") for d in (documents or [])}
+    text = question or ""
+    if benchmark:
+        text += "\n" + (benchmark.get("text") or "") + "\n" + (benchmark.get("title") or "")
+        for f in benchmark.get("features", []) or []:
+            text += "\n" + (f.get("name") or "")
+    out, seen = [], set()
+    for num in patents.extract_candidates(text):
+        if num in here or num in seen:
+            continue
+        seen.add(num)
+        ref = db.cross_tab_reference(num, exclude_tab_id=tab_id)
+        if ref:
+            out.append(ref)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _resolve_discussions(tab_id: int, question: str, history: list[dict],
+                         limit_numbers: int = 3) -> list[dict]:
+    """Chat exchanges about a named patent from OTHER tabs' conversations — so
+    'what did we discuss about EP4338618 in the other tabs' surfaces the actual
+    exchange here. Numbers come from the current question first, then recent
+    questions (sticky, like focus) so follow-ups keep the discussion loaded.
+    Unlike xrefs, numbers present in THIS tab are NOT skipped — the discussion
+    still lives elsewhere."""
+    recent_q = " ".join(h.get("text", "") for h in (history or [])
+                        if h.get("role") == "q")[-2000:]
+    nums = list(dict.fromkeys(patents.extract_candidates(question or "")
+                              + patents.extract_candidates(recent_q)))[:limit_numbers]
+    out = []
+    for num in nums:
+        out.extend(db.cross_tab_discussions(num, exclude_tab_id=tab_id))
+    return out
+
+
 @app.post("/api/tabs/{tab_id}/chat")
 def chat(tab_id: int, body: schemas.ChatRequest):
     _tab_or_404(tab_id)
@@ -1832,10 +2021,38 @@ def chat(tab_id: int, body: schemas.ChatRequest):
             skill_blocks.append({"name": name, "content": content})
             participants.append({"kind": "skill", "title": name})
 
+    # Cross-tab references: a patent named in the question OR the benchmark that isn't
+    # in this tab but IS stored elsewhere → pull its digest/verdict in as context, so
+    # "overlapping section like in EP4338618" can actually see EP4338618's arguments.
+    xrefs = _resolve_xrefs(tab_id, body.question, benchmark, documents)
+    for x in xrefs:
+        participants.append({"kind": "xref", "title": f"{x['number']} (tab «{x['tab_name']}»)"})
+
+    # Cross-tab DISCUSSIONS: what the user and the assistants already said about a
+    # named patent in OTHER tabs' chats — the full exchanges, so "write here
+    # everything we had in other tabs concerning EP4338618" actually works.
+    discussions = _resolve_discussions(tab_id, body.question, history)
+    for d in discussions:
+        participants.append({"kind": "xtalk",
+                             "title": f"{d['number']} — чат «{d['tab_name']}» "
+                                      f"({len(d['exchanges'])})"})
+
+    # 🌐 All tabs: give the model every OTHER tab's already-fetched (OCR'd) documents
+    # as a cross-tab roster, so it can find/combine documents that live in any tab.
+    other_docs = coverage = None
+    if body.all_tabs and body.use_documents:
+        other_docs = db.documents_across_tabs(exclude_tab_id=tab_id)
+        coverage = db.document_counts_by_tab()
+        for c in coverage:
+            participants.append({"kind": "tab-docs",
+                                 "title": f"«{c['tab_name']}» {c['fetched']}/{c['total']} docs"})
+
     res = claude_bridge.chat(body.question, history=history, documents=documents,
                              sources=nlm_sources, skills=skill_blocks, model=model,
                              benchmark=benchmark, focus=focus, full=body.full,
-                             answer_format=body.answer_format)
+                             answer_format=body.answer_format, xrefs=xrefs,
+                             other_docs=other_docs, coverage=coverage,
+                             discussions=discussions)
     if "error" in res:
         out_messages.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
         return {"messages": out_messages, "error": res["error"]}
@@ -1849,6 +2066,18 @@ def chat(tab_id: int, body: schemas.ChatRequest):
                              "title": f"{len(focus)} focused (full text)"})
     if body.use_documents and documents:
         participants.append({"kind": "documents", "title": f"{len(documents)} candidates"})
+    # Deterministic cross-tab coverage confirmation — exact per-tab fetched/total
+    # counts (not the model's own count), so "considered N in tab A, M in tab B" is
+    # authoritative. `documents` here already excludes the focused set, so add it back.
+    if coverage:
+        here = len(documents or []) + len(focus or [])
+        parts = [f"«{c['tab_name']}» {c['fetched']}/{c['total']}"
+                 + (" (this tab)" if c["tab_id"] == tab_id else "") for c in coverage]
+        cross = sum(c["fetched"] for c in coverage if c["tab_id"] != tab_id)
+        out_messages.append(db.append_message(
+            tab_id, "s", f"🌐 Considered documents across all tabs — "
+            + "; ".join(parts) + f".  (fetched/total; {cross} cross-tab fetched docs "
+            "were available to this answer.)"))
     out_messages.append(db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
                                           model=model, participants=participants))
 
@@ -2222,6 +2451,130 @@ def _benchmark_feature_spec_for_nlm(bm: dict, limit: int = NLM_SHORTLIST_QUERY_C
 
 
 RECONCILE_MAX_DOCS = 30      # cap the disagreement set so the single call stays cheap
+
+
+# ---------- 🏆 best-match cross-tab scan ----------
+# "Best match" must consider EVERY relevant document, not just this tab's list: any
+# other-tab candidate that covers even ONE of this benchmark's features is pulled in
+# as a first-class candidate here (full content copied — no re-fetch), with the
+# covered features indicated. Digest-based (cheap, like ♻️ re-check); negatives are
+# cached per benchmark fingerprint so repeat Best-match clicks only scan what's new.
+XSCAN_BATCH = int(os.environ.get("PB_XSCAN_BATCH", "25"))
+_XSCAN_STATE: dict[int, dict] = {}          # tab_id → live progress (in-memory job)
+_XSCAN_NUM_RE = re.compile(r"^[A-Z]{1,3}\d[\dA-Z]*$")   # scannable publication numbers
+
+
+def _benchmark_fingerprint(bm: dict) -> str:
+    """Identity of the CURRENT benchmark for the scan cache — changes when the
+    benchmark document or its feature list changes, so stale verdicts don't stick."""
+    feats = [(f.get("name"), f.get("weight")) for f in (bm.get("features") or [])]
+    basis = json.dumps([bm.get("number"), bm.get("content_hash"),
+                        len(bm.get("text") or ""), len(bm.get("description") or ""),
+                        feats], ensure_ascii=False, sort_keys=True)
+    return hashlib.md5(basis.encode()).hexdigest()
+
+
+def _seed_feature_scores(hits: list[dict], features: list[dict]) -> list[dict] | None:
+    """Align scan hits onto the full benchmark feature list (unmatched → 'no'), the
+    same shape deep-read stores — so the feature chips indicate coverage at once.
+    The next full read overwrites this seed with rigorous full-text verdicts."""
+    if not features:
+        return None
+    by_name = {h["name"]: h for h in hits}
+    return [{"name": f.get("name", ""), "weight": int(f.get("weight", 1)),
+             "status": by_name.get(f.get("name", ""), {}).get("status", "no"),
+             "note": by_name.get(f.get("name", ""), {}).get("note", "")}
+            for f in features]
+
+
+def _run_cross_scan(tab_id: int, bm: dict, fp: str, todo: list[dict],
+                    model: str | None) -> None:
+    st = _XSCAN_STATE[tab_id]
+    features = bm.get("features") or []
+    by_num = {d["number"]: d for d in todo}
+    try:
+        batches = [todo[i:i + XSCAN_BATCH] for i in range(0, len(todo), XSCAN_BATCH)]
+
+        def one(batch: list[dict]) -> None:
+            res = claude_bridge.cross_tab_scan(bm, features, batch, model=model)
+            marks: dict[str, bool] = {}
+            if "error" not in res:
+                for num, r in (res.get("results") or {}).items():
+                    d = by_num.get(num)
+                    if not d:
+                        continue
+                    matched = bool(r["features"] or r["covers"])
+                    marks[num] = matched
+                    if matched:
+                        covers = (", ".join(h["name"] for h in r["features"])
+                                  or r["covers"] or "")
+                        note = (f"↪ pulled from tab «{d['tab_name']}» — digest "
+                                f"pre-check: covers {covers}")[:300]
+                        new_id = db.import_document_copy(
+                            tab_id, d["doc_id"],
+                            feature_scores=_seed_feature_scores(r["features"], features),
+                            score_note=note)
+                        if new_id:
+                            st["imported"].append({"id": new_id, "number": num,
+                                                   "from": d["tab_name"],
+                                                   "covers": covers})
+                db.cross_scan_mark(tab_id, fp, marks)   # per-batch: a kill loses little
+            else:
+                st["errors"] += 1
+            st["done"] += len(batch)
+
+        with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+            list(ex.map(one, batches))
+        if st["imported"]:
+            names = ", ".join(f"{i['number']} (from «{i['from']}»)"
+                              for i in st["imported"][:12])
+            more = len(st["imported"]) - 12
+            db.append_message(tab_id, "s",
+                f"🏆 Cross-tab scan: pulled {len(st['imported'])} document(s) from other "
+                f"tabs into this one — each covers ≥1 benchmark feature (digest "
+                f"pre-check; the deep read will assess them in full): {names}"
+                + (f" … +{more} more" if more > 0 else "") + ".")
+    finally:
+        st["running"] = False
+
+
+@app.post("/api/tabs/{tab_id}/cross-tab-scan")
+def cross_tab_scan_ep(tab_id: int, bg: BackgroundTasks,
+                      body: schemas.CrossTabScanRequest | None = None):
+    """Start the cross-tab scan for this tab's 🏆 Best match. Returns immediately;
+    poll GET /cross-tab-scan/status until running=false."""
+    _tab_or_404(tab_id)
+    st = _XSCAN_STATE.get(tab_id)
+    if st and st.get("running"):
+        raise HTTPException(409, "a cross-tab scan is already running for this tab")
+    bm = db.get_benchmark(tab_id, full=True)
+    if not bm or bm.get("status") != "ready":
+        raise HTTPException(400, "benchmark is not ready — set it first")
+    fp = _benchmark_fingerprint(bm)
+    here = {d["number"] for d in db.list_documents(tab_id)}
+    checked = db.cross_scan_checked(tab_id, fp)
+    others = db.documents_across_tabs(exclude_tab_id=tab_id)
+    todo = [d for d in others
+            if d["number"] not in here and d["number"] not in checked
+            and (d.get("digest") or d.get("verdict"))
+            and _XSCAN_NUM_RE.match(d["number"] or "")]
+    unscannable = sum(1 for d in others if d["number"] not in here
+                      and not _XSCAN_NUM_RE.match(d["number"] or ""))
+    _XSCAN_STATE[tab_id] = {"running": bool(todo), "total": len(todo), "done": 0,
+                            "imported": [], "errors": 0,
+                            "cached_skipped": len(checked & {d["number"] for d in others}),
+                            "unscannable": unscannable}
+    if todo:
+        bg.add_task(_run_cross_scan, tab_id, bm, fp, todo,
+                    _read_model(body.model if body else None))
+    return {"started": bool(todo), **_XSCAN_STATE[tab_id]}
+
+
+@app.get("/api/tabs/{tab_id}/cross-tab-scan/status")
+def cross_tab_scan_status(tab_id: int):
+    _tab_or_404(tab_id)
+    return _XSCAN_STATE.get(tab_id) or {"running": False, "total": 0, "done": 0,
+                                        "imported": [], "errors": 0}
 
 
 @app.post("/api/tabs/{tab_id}/digest-rescore")

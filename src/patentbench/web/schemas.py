@@ -117,6 +117,7 @@ class ChatRequest(BaseModel):
     full: bool = False                 # long-form answer; default = 1-2 sentence precise mode
     answer_format: str = ""            # ANSWER_FORMATS key; "" = default style
     focus_ids: list[int] = []          # selected candidates loaded with FULL primary text
+    all_tabs: bool = False             # also give the model every OTHER tab's fetched docs
 
 
 class AskNotebookRequest(BaseModel):
@@ -158,6 +159,13 @@ class PipelineRequest(BaseModel):
     include_benchmark: bool = True
     consolidate_only: bool = False         # stop after copying the 49 in — no shortlist, no NLM query
     resume: bool = False
+
+
+class CrossTabScanRequest(BaseModel):
+    """🏆 Best-match cross-tab scan: digest-check every OTHER tab's fetched document
+    against THIS tab's benchmark and import any that covers ≥1 target feature as a
+    first-class candidate here (with the covered features indicated)."""
+    model: str | None = None
 
 
 class DigestRescoreRequest(BaseModel):
@@ -217,3 +225,48 @@ class ReconcileRequest(BaseModel):
 class LessonCreate(BaseModel):
     skill: str
     lesson: str = Field(min_length=1, max_length=8000)
+
+
+# ---------- knowledge graph ----------
+
+class KgClassifyRequest(BaseModel):
+    """Ask the LLM to place a feature in the cross-tab taxonomy and return an existing
+    node to link to (if any) + a draft field›block›function›option path to confirm."""
+    feature_name: str = Field(min_length=1, max_length=4000)
+    tab_id: int | None = None
+    doc_id: int | None = None
+    model: str | None = None
+
+
+class KgAttachRequest(BaseModel):
+    """Confirm/persist a classification (the [Link]/[New] step). Either link to an
+    existing node_id, or create the field›block›function›option chain from the draft."""
+    feature_name: str = Field(min_length=1, max_length=4000)
+    node_id: int | None = None                 # link to this existing node…
+    field: str | None = Field(default=None, max_length=200)   # …or build this path
+    block: str | None = Field(default=None, max_length=200)
+    function: str | None = Field(default=None, max_length=200)
+    option: str | None = Field(default=None, max_length=200)
+    related_blocks: list[str] = []
+    tab_id: int | None = None
+    doc_id: int | None = None
+    status: str | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class KgNodePatch(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    parent_id: int | None = None               # reparent (may be null → root)
+    reparent: bool = False                     # explicit: apply parent_id even if null
+
+
+class KgEdgeRequest(BaseModel):
+    src_id: int
+    dst_id: int
+    rel: str = "related"
+
+
+class KgRebuildRequest(BaseModel):
+    tab_id: int | None = None                  # None = every tab
+    model: str | None = None
+    clear: bool = False                        # wipe the graph first

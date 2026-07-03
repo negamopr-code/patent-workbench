@@ -121,6 +121,15 @@ textarea, select, input[type="text"] {
 .chip.nlm-in { color: var(--ok); border-color: var(--ok); max-width: 16ch;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .chip.nlm-out { color: var(--warn); border-color: var(--warn); }
+/* per-candidate figures-read badge: figures are opt-in, but a text-only read must
+   be visible at a glance (fig-out is clickable → runs the vision figure read) */
+.chip.fig-in { color: var(--ok); border-color: var(--ok); }
+.chip.fig-none { opacity: .6; }
+.chip.fig-out { color: var(--warn); border-color: var(--warn); }
+.chip.fig-out:hover { border-color: var(--accent); filter: brightness(1.25); }
+/* ↪ candidate pulled in from another tab by the 🏆 Best-match cross-tab scan */
+.chip.xtab { color: var(--accent); border-color: var(--accent); max-width: 18ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 
 /* benchmark pane */
 .pane-input #bm-set { margin-top: 8px; width: 100%; }
@@ -401,3 +410,60 @@ textarea, select, input[type="text"] {
 
 .doc .score { font-size: 12px; color: var(--accent2); margin: 3px 0; font-weight: 600; }
 .doc .read-meta .stale-flag { color: var(--warn); font-weight: 600; }
+
+/* ================= cross-tab knowledge graph + global search ================= */
+.topsearch-wrap { display: flex; align-items: center; gap: 4px; margin: 0 8px 4px auto; }
+.topsearch {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 8px; font-size: 13px; width: 200px; max-width: 30vw;
+}
+.topsearch:focus { border-color: var(--accent); outline: none; }
+.kg-open { font-size: 15px; }
+
+.kg-box { display: flex; flex-direction: column; max-height: 86vh; width: min(920px, 94vw); }
+.kg-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kg-head h3 { margin: 0; }
+.kg-q {
+  flex: 1; min-width: 180px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 14px;
+}
+.kg-q:focus { border-color: var(--accent); outline: none; }
+.kg-results { border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+  margin-top: 8px; background: var(--pane2); max-height: 40vh; overflow: auto; }
+.kg-sec { font-weight: 700; color: var(--accent2); margin: 8px 0 4px; font-size: 13px; }
+.kg-hit { padding: 3px 0; font-size: 13px; line-height: 1.5; }
+.kg-snip { color: var(--muted); }
+.kg-jump { color: var(--accent); cursor: pointer; text-decoration: none; }
+.kg-jump:hover { text-decoration: underline; }
+
+.kg-tree { margin-top: 10px; overflow: auto; flex: 1; }
+.kg-node { }
+.kg-row { display: flex; align-items: center; gap: 4px; padding: 2px 0; }
+.kg-twist { background: none; border: none; color: var(--muted); cursor: pointer;
+  width: 16px; font-size: 12px; padding: 0; }
+.kg-label { cursor: pointer; flex: 1; min-width: 0; font-size: 14px; }
+.kg-icon { opacity: 0.85; }
+.kg-name { }
+.kg-field > .kg-row .kg-name { color: var(--accent2); }
+.kg-count { font-size: 11px; }
+.kg-del { background: none; border: none; color: var(--muted); cursor: pointer;
+  opacity: 0; font-size: 12px; }
+.kg-row:hover .kg-del { opacity: 0.7; }
+.kg-del:hover { color: var(--err); opacity: 1; }
+.kg-kids { margin-left: 16px; border-left: 1px solid var(--border); padding-left: 10px; }
+.kg-related { font-size: 12px; color: var(--muted); margin: 2px 0; }
+.kg-rel-chip { margin-left: 4px; }
+.kg-feat { font-size: 13px; padding: 3px 0; }
+.kg-fname { color: var(--muted); font-style: italic; }
+.kg-fnote { margin-top: 2px; font-size: 12px; color: var(--muted); white-space: pre-wrap;
+  word-break: break-word; }
+
+.feat-link-hint { font-size: 12px; margin-top: 4px; color: var(--text); line-height: 1.5; }
+.feat-link-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.feat-link { }
+
+.bm-xrefs { margin-top: 8px; }
+.bm-xref-head { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.bm-xref-chip { cursor: pointer; margin: 2px 4px 2px 0; }
+.bm-xref-chip:hover { border-color: var(--accent); }
+.err { color: var(--err); }

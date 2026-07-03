@@ -39,6 +39,23 @@ def _gap_wait() -> None:
     _last = time.monotonic()
 
 
+# A complete patent description ends on a concluding sentence; a scrape that captured
+# only PART of it (seen on some CN/EP layouts) is cut mid-word/clause. These are the
+# characters a real ending lands on (Latin + CJK sentence/quote/bracket terminators).
+_TERMINAL = set(".!?\"')]}»।。！？”’")
+
+
+def _looks_truncated(text: str) -> bool:
+    """True if a non-empty, body-sized description ends mid-sentence — the hallmark
+    of a partial scrape. Conservative: never flags short fragments (abstracts, stubs)
+    and never flags a normally-terminated body, so complete numbered descriptions are
+    left untouched."""
+    t = (text or "").rstrip()
+    if len(t) < 800:
+        return False
+    return t[-1] not in _TERMINAL
+
+
 def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
@@ -255,10 +272,16 @@ def _fetch_publication(number: str) -> dict:
                 paras.append(_with_para_num(el, t))
     description = "\n\n".join(paras)
 
-    if not description:
+    # Recover from a missing OR truncated HTML description via the PDF text layer.
+    # A truncated scrape has only PARTIAL [00NN] markers, so swapping in the fuller
+    # (marker-less) PDF body is a net win — but ONLY when it is clearly more complete,
+    # so a good numbered description is never replaced by a shorter/equal PDF.
+    if not description or _looks_truncated(description):
         pdf = _pdf_url(soup, raw)
         if pdf:
-            description = _description_from_pdf(pdf).strip()
+            pdf_desc = _description_from_pdf(pdf).strip()
+            if len(pdf_desc) > max(len(description) * 1.15, len(description) + 500):
+                description = pdf_desc
 
     if not (title or abstract or claims_text or description):
         return {"error": "page fetched but no content parsed (layout change?)"}

@@ -10,6 +10,11 @@
 <nav id="tabbar" class="tabbar">
   <div id="tabs" class="tabs"></div>
   <button id="tab-add" class="tab-add" title="New tab">＋</button>
+  <div class="topsearch-wrap">
+    <input id="topsearch" class="topsearch" placeholder="🔎 Search all tabs…"
+      title="Global search across every tab: knowledge-graph features, documents and chats">
+    <button id="kg-open" class="tab-add kg-open" title="🗺 Cross-tab knowledge graph — field › block › function › option, with the tabs/docs that disclose each">🗺</button>
+  </div>
   <div id="health" class="health" title="📜 Patent Workbench — service status"></div>
 </nav>
 
@@ -63,6 +68,7 @@
       </details>
     </div>
     <div id="bm-status" class="muted"></div>
+    <div id="bm-xrefs" class="bm-xrefs"></div>
   </section>
 
   <!-- drag to widen the benchmark / candidates panes -->
@@ -144,6 +150,7 @@
         <div id="skills" class="skills-list"></div>
       </details>
       <label class="check"><input type="checkbox" id="use-docs" checked> 📄 Use documents</label>
+      <label class="check" title="Also give Claude every OTHER tab's already-fetched (OCR'd) documents — so it can find and combine documents from any tab. The answer states how many docs it considered per tab."><input type="checkbox" id="use-all-tabs"> 🌐 All tabs</label>
       <label class="check" title="OFF (default): precise 1–2 sentence answers with [paragraph]/claim citations. ON: full long-form analysis."><input type="checkbox" id="full-analysis"> 📝 Full analysis</label>
       <button id="nb-btn" class="btn small">🔗 Notebook…</button>
       <span id="nb-chip" class="chip hidden"></span>
@@ -284,6 +291,21 @@
       <button id="reuse-do" class="btn primary">Reuse checked</button>
       <button id="reuse-skip" class="btn">Re-do all (fetch fresh)</button>
     </div>
+  </div>
+</div>
+
+<!-- Cross-tab knowledge graph + global search -->
+<div id="kg-modal" class="modal hidden">
+  <div class="modal-box wide kg-box">
+    <div class="kg-head">
+      <h3>🗺 Cross-tab knowledge graph</h3>
+      <input id="kg-q" class="kg-q" placeholder="Search features, documents, chats across all tabs…">
+      <button id="kg-refresh" class="btn small" title="Re-classify every tab's benchmark features and document verdicts into the graph (uses a cheap LLM). Existing nodes are reused.">🔄 Build / refresh</button>
+      <button id="kg-modal-close" class="btn">Close</button>
+    </div>
+    <div id="kg-rebuild-status" class="muted"></div>
+    <div id="kg-results" class="kg-results hidden"></div>
+    <div id="kg-tree" class="kg-tree"><div class="muted">Loading…</div></div>
   </div>
 </div>
 

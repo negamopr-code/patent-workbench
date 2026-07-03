@@ -1,5 +1,17 @@
 from patentbench import patents
-from patentbench.fetcher import _publication_variants
+from patentbench.fetcher import _publication_variants, _looks_truncated
+
+
+def test_looks_truncated_detects_mid_sentence_cut():
+    body = "".join(f"[{i:04d}] The apparatus does a thing. " for i in range(1, 60))
+    # a properly-ended description is NOT flagged
+    assert not _looks_truncated(body + "This concludes the description.")
+    # the same body cut mid-clause (no terminator) IS flagged
+    assert _looks_truncated(body + "the controller then proceeds to recalcul")
+    # short fragments (abstract-sized) are never flagged, even without a terminator
+    assert not _looks_truncated("a brief unterminated stub")
+    # CJK sentence terminator counts as a proper ending
+    assert not _looks_truncated(body + "これで終わり。")
 
 
 def test_publication_variants_prefer_grant_for_same_number_offices():
@@ -12,6 +24,64 @@ def test_publication_variants_prefer_grant_for_same_number_offices():
     # different-number-grant / no-grant offices → never kind-substitute
     assert _publication_variants("US20160156193") == ["US20160156193"]
     assert _publication_variants("WO2022243179") == ["WO2022243179"]
+
+
+def test_fetch_recovers_truncated_description_from_pdf(monkeypatch):
+    from patentbench import fetcher
+
+    # a scrape whose ONLY paragraph is body-sized but cut mid-sentence (no terminator)
+    cut = "the controller then proceeds to recalcul" * 30   # >800, unterminated
+    html = f'<html><meta name="DC.title" content="T">' \
+           f'<description-paragraph num="0001">{cut}</description-paragraph></html>'
+
+    class _Resp:
+        status_code = 200
+        text = html
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url): return _Resp()
+
+    monkeypatch.setattr(fetcher.httpx, "Client", _Client)
+    monkeypatch.setattr(fetcher, "_pdf_url", lambda soup, raw: "http://x/p.pdf")
+    full = "[0001] The controller recalculates and rechecks the value. " * 60  # long, terminated
+    monkeypatch.setattr(fetcher, "_description_from_pdf", lambda url: full)
+
+    res = fetcher._fetch_publication("US20240225122A1")
+    # the fuller PDF body replaced the truncated scrape
+    assert "rechecks the value" in res["description"]
+    assert res["description"].rstrip().endswith(".")
+
+
+def test_fetch_keeps_good_description_over_shorter_pdf(monkeypatch):
+    from patentbench import fetcher
+
+    good = "".join(f'<description-paragraph num="{i:04d}">Para {i} ends cleanly. '
+                   f'</description-paragraph>' for i in range(1, 80))
+    html = f'<html><meta name="DC.title" content="T">{good}</html>'
+
+    class _Resp:
+        status_code = 200
+        text = html
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url): return _Resp()
+
+    monkeypatch.setattr(fetcher.httpx, "Client", _Client)
+    # even if a PDF exists, a properly-terminated scrape must NOT be flagged/replaced
+    called = {"pdf": False}
+    monkeypatch.setattr(fetcher, "_pdf_url",
+                        lambda soup, raw: called.__setitem__("pdf", True) or "http://x/p.pdf")
+    monkeypatch.setattr(fetcher, "_description_from_pdf", lambda url: "short")
+
+    res = fetcher._fetch_publication("US1")
+    assert "[0001]" in res["description"] and "[0079]" in res["description"]
+    assert called["pdf"] is False          # guard never even looked at the PDF
 
 
 def test_extract_bare_numbers():

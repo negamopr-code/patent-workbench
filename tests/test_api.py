@@ -1718,6 +1718,81 @@ def test_focus_block_loads_full_long_description():
     assert "CLIPPED" not in prompt
 
 
+def test_focus_multiple_long_docs_not_clipped():
+    # REGRESSION (the [0113] incident): selecting several full patents at once must
+    # NOT clip any one of them below its full text. Before the 600k budget, six ~82k
+    # docs each got 300k//6 = 50k → a long description was cut around [0113] and the
+    # model could not quote late paragraphs like [0133]/[0134].
+    def make(num):
+        desc = "".join(f"[{i:04d}] paragraph body line {i}. " for i in range(1, 2000))
+        return {"number": num, "title": "Power supply", "abstract": "abs",
+                "claims": "1. A unit.", "description": desc}
+    docs = [make(f"US2024022512{n}") for n in range(6)]   # six full-size patents
+    assert len(docs[0]["description"]) > 60_000
+    prompt = claude_bridge.build_prompt("does it disclose [1999]?", focus=docs)
+    assert "[1999]" in prompt                       # every doc's tail paragraph survives
+    assert "CLIPPED" not in prompt                  # none silently truncated
+
+
+def test_focus_flags_drawings_not_read():
+    # figures are OPT-IN — but a focused doc whose sheets were never vision-captioned
+    # must carry a loud DRAWINGS NOT READ block so the model flags the gap instead of
+    # the user discovering it at the last moment.
+    # the note's unique wording (the grounding RULE always references the marker
+    # name, so assertions must target the per-document note, not the phrase)
+    NOTE = "never vision-captioned"
+    doc = {"number": "US1", "title": "t", "abstract": "a", "claims": "1. A unit.",
+           "description": "[0001] Body ends cleanly."}
+    p = claude_bridge.build_prompt("q", focus=[doc])                 # figures_n absent
+    assert "(DRAWINGS NOT READ" in p and NOTE in p
+    assert "🖼 Read figures" in p                                    # names the fix
+    p = claude_bridge.build_prompt("q", focus=[{**doc, "figures_n": 10}])
+    assert NOTE not in p                                             # figures were read
+    p = claude_bridge.build_prompt("q", focus=[{**doc, "figures_n": 0}])
+    assert NOTE not in p                                             # ran: no drawings exist
+
+
+def test_grounding_rule_mentions_drawings():
+    doc = {"number": "US1", "title": "t", "description": "[0001] x."}
+    p = claude_bridge.build_prompt("q", focus=[doc])
+    assert "DRAWINGS:" in p                # the grounding instruction covers the case
+
+
+def test_deep_map_appends_figures_caveat(monkeypatch):
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, timeout=None:
+                        {"answer": "MATCH SCORE: 6\nKEY FEATURES: none"})
+    doc = {"number": "US1", "title": "t", "description": "[0001] body."}
+    out = claude_bridge.deep_map("BENCH", doc)                       # figures_n absent
+    assert "⚠ DRAWINGS NOT READ" in out["verdict"]                   # code-stamped, not LLM
+    assert "🖼 Read figures" in out["verdict"]
+    # the stamp must not corrupt the structured verdict fields
+    assert claude_bridge.parse_verdict(out["verdict"])["score"] == 6
+    out = claude_bridge.deep_map("BENCH", {**doc, "figures_n": 3})
+    assert "DRAWINGS NOT READ" not in out["verdict"]                 # figures were read
+    out = claude_bridge.deep_map("BENCH", {**doc, "figures_n": 0})
+    assert "DRAWINGS NOT READ" not in out["verdict"]                 # no drawings exist
+
+
+def test_benchmark_block_flags_unread_figures():
+    # number-based benchmark without captioned figures → the note; with a merged
+    # DRAWINGS block or upload-based text → no note.
+    NOTE = "never vision-captioned"      # unique to the per-document note
+    bm = {"number": "EP1", "title": "t", "abstract": "a", "claims": "1. A unit.",
+          "description": "[0001] Body."}
+    p = claude_bridge.build_prompt("q", benchmark=bm)
+    assert "(DRAWINGS NOT READ" in p and NOTE in p
+    p = claude_bridge.build_prompt("q", benchmark={**bm, "description":
+                                                   "[0001] Body.\n[FIG. 1] A pump."})
+    assert NOTE not in p                                             # captions merged
+    p = claude_bridge.build_prompt(
+        "q", benchmark={**bm, "figures": '[{"n": 1, "caption": "A pump."}]'})
+    assert NOTE not in p                                             # captioned (JSON)
+    p = claude_bridge.build_prompt("q", benchmark={"text": "uploaded transcription",
+                                                   "title": "t"})
+    assert NOTE not in p                                             # upload-based
+
+
 def test_focus_block_flags_clip_when_over_budget(monkeypatch):
     # if a focused doc genuinely exceeds the focus budget, the model must be TOLD
     # it is truncated — never silently presented as "full text".
@@ -2105,3 +2180,149 @@ def test_document_figures_backfill(client, monkeypatch):
     assert figures.DRAWINGS_HEADER in full["description"]
     doc = client.get(f"/api/tabs/{t['id']}/documents").json()["documents"][0]
     assert doc["figures_n"] == 2
+
+
+# ---------- 🏆 best-match cross-tab scan ----------
+
+def test_parse_cross_tab_scan():
+    feats = [{"name": "battery", "weight": 5}, {"name": "inverter", "weight": 3}]
+    text = ("=== US1111111 ===\n"
+            "FEATURE 1: YES — a battery pack 12 is disclosed\n"
+            "FEATURE 2: NO — absent\n"
+            "=== US2222222 ===\nMATCHES: NONE\n"
+            "=== US3333333 ===\nCOVERS: grid-tie inverter with droop control")
+    out = claude_bridge.parse_cross_tab_scan(text, feats)
+    hits = out["US1111111"]["features"]
+    assert [h["name"] for h in hits] == ["battery"]        # NO lines are not "coverage"
+    assert hits[0]["status"] == "yes" and "battery pack" in hits[0]["note"]
+    assert out["US2222222"] == {"features": [], "covers": None}   # negatives kept (for caching)
+    assert out["US3333333"]["covers"].startswith("grid-tie")
+
+
+def test_import_document_copy_copies_content_not_scores(client):
+    # content (text/digest/figures) travels; score/verdict do NOT — they were judged
+    # against the OTHER tab's benchmark and would poison this tab's ranking.
+    a = client.post("/api/tabs", json={"name": "A"}).json()["id"]
+    b = client.post("/api/tabs", json={"name": "B"}).json()["id"]
+    client.post(f"/api/tabs/{a}/documents", json={"numbers": ["US7777777"], "source": "manual"})
+    import patentbench.db as _db
+    src = client.get(f"/api/tabs/{a}/documents").json()["documents"][0]
+    _db.update_document(src["id"], verdict="MATCH SCORE: 9 vs A's benchmark", score=9,
+                        figures='[{"n": 1, "caption": "[FIG. 1] pump"}]', figures_n=1)
+    new_id = _db.import_document_copy(
+        b, src["id"],
+        feature_scores=[{"name": "f", "weight": 1, "status": "yes", "note": "n"}],
+        score_note="↪ pulled from tab «A»")
+    d = _db.get_document(new_id)
+    assert d["tab_id"] == b and d["source"] == "cross-tab" and d["origin_tab_id"] == a
+    assert d["status"] == "fetched" and d["description"] == "desc"   # content copied
+    assert d["digest"] == "digest of US7777777" and d["figures_n"] == 1
+    assert d["score"] is None and d["verdict"] is None               # judgements do not travel
+    assert _db.import_document_copy(b, src["id"]) is None            # dup number → skipped
+
+
+def test_cross_tab_scan_endpoint_imports_and_caches(client, monkeypatch):
+    from patentbench import claude_bridge as cb
+    a = client.post("/api/tabs", json={"name": "Origin"}).json()["id"]
+    b = client.post("/api/tabs", json={"name": "Target"}).json()["id"]
+    client.post(f"/api/tabs/{a}/documents",
+                json={"numbers": ["US5555555", "US6666666"], "source": "manual"})
+    client.post(f"/api/tabs/{b}/benchmark/features", json={"title": "t", "features": [
+        {"name": "thermistor divider", "weight": 5, "kind": "M", "sl": 5}]})
+
+    def fake_scan(bm, feats, docs, model=None):
+        res = {}
+        for d in docs:
+            if d["number"] == "US5555555":      # covers ONE feature → must be pulled in
+                res[d["number"]] = {"features": [{"name": "thermistor divider", "weight": 5,
+                                                  "status": "partial", "note": "divider 12"}],
+                                    "covers": None}
+            else:                               # covers nothing → negative-cached
+                res[d["number"]] = {"features": [], "covers": None}
+        return {"results": res, "model": "claude-sonnet-4-6"}
+    monkeypatch.setattr(cb, "cross_tab_scan", fake_scan)
+
+    r = client.post(f"/api/tabs/{b}/cross-tab-scan", json={}).json()
+    assert r["started"] is True and r["total"] == 2
+    s = client.get(f"/api/tabs/{b}/cross-tab-scan/status").json()
+    assert s["running"] is False and len(s["imported"]) == 1
+    assert s["imported"][0]["number"] == "US5555555" and s["imported"][0]["from"] == "Origin"
+
+    docs_b = client.get(f"/api/tabs/{b}/documents").json()["documents"]
+    imp = [d for d in docs_b if d["source"] == "cross-tab"]
+    assert len(imp) == 1 and imp[0]["number"] == "US5555555"
+    assert imp[0]["origin_tab_id"] == a                              # ↪ chip provenance
+    fs = imp[0]["feature_scores"]                                    # covered features indicated
+    assert fs and fs[0]["name"] == "thermistor divider" and fs[0]["status"] == "partial"
+    assert "covers thermistor divider" in (imp[0]["score_note"] or "")
+    assert imp[0]["score"] is None                                   # deep read still to come
+
+    # second Best-match click: the match is now IN the tab, the non-match is cached →
+    # nothing to scan, no repeat token spend.
+    r2 = client.post(f"/api/tabs/{b}/cross-tab-scan", json={}).json()
+    assert r2["started"] is False and r2["total"] == 0
+    assert r2["cached_skipped"] >= 1
+
+
+# ---------- cross-tab chat discussions ----------
+
+def test_cross_tab_discussions_db(client):
+    a = client.post("/api/tabs", json={"name": "Valves"}).json()["id"]
+    b = client.post("/api/tabs", json={"name": "Pumps"}).json()["id"]
+    # a full exchange in tab A about EP4338618A1, plus an unrelated one after it
+    db.append_message(a, "q", "what does EP4338618A1 teach about the overlapping section?")
+    db.append_message(a, "a", "NLM: EP4338618A1 discloses an overlap of blades")
+    db.append_message(a, "c", "Claude: the overlap is in claim 3")
+    db.append_message(a, "q", "unrelated question about something else")
+    db.append_message(a, "c", "unrelated answer")
+
+    # kind-code- and spacing-insensitive: ask with B1 and spaces, stored as A1
+    out = db.cross_tab_discussions("EP 4338618 B1", exclude_tab_id=b)
+    assert len(out) == 1 and out[0]["tab_name"] == "Valves"
+    ex = out[0]["exchanges"]
+    assert len(ex) == 1                                   # unrelated exchange NOT included
+    assert [m["role"] for m in ex[0]] == ["q", "a", "c"]  # the WHOLE exchange, q→replies
+    assert "claim 3" in ex[0][2]["text"]
+
+    # the tab that holds the discussion is excluded from its own lookup
+    assert db.cross_tab_discussions("EP4338618A1", exclude_tab_id=a) == []
+
+
+def test_chat_pulls_cross_tab_discussions(client, monkeypatch):
+    a = client.post("/api/tabs", json={"name": "Valves"}).json()["id"]
+    b = client.post("/api/tabs", json={"name": "Pumps"}).json()["id"]
+    # a real chat happened in tab A (stubbed claude): both q and c are stored
+    client.post(f"/api/tabs/{a}/chat", json={"question": "is EP4338618A1 novel over D1?"})
+
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *args, **k: (seen.update(k), {"answer": "ok", "model": "m"})[1])
+    r = client.post(f"/api/tabs/{b}/chat",
+                    json={"question": "write here everything we had in other tabs "
+                                      "concerning EP4338618A1"}).json()
+    disc = seen.get("discussions") or []
+    assert disc and disc[0]["tab_name"] == "Valves"
+    texts = " ".join(m["text"] for ex in disc[0]["exchanges"] for m in ex)
+    assert "novel over D1" in texts and "claude says hi" in texts
+    # the answer carries a 💬 participants chip naming the source tab
+    chips = [p for m in r["messages"] if m.get("participants")
+             for p in m["participants"] if p["kind"] == "xtalk"]
+    assert chips and "Valves" in chips[0]["title"]
+
+    # sticky: the follow-up does NOT re-type the number, discussions stay loaded
+    seen.clear()
+    client.post(f"/api/tabs/{b}/chat", json={"question": "and what was the conclusion?"})
+    disc2 = seen.get("discussions") or []
+    assert disc2 and disc2[0]["tab_name"] == "Valves"
+
+
+def test_build_prompt_renders_discussions_block():
+    disc = [{"tab_id": 1, "tab_name": "Valves", "number": "EP4338618A1",
+             "exchanges": [[{"role": "q", "text": "about EP4338618A1?", "ts": 1750000000},
+                            {"role": "c", "text": "the overlap is in claim 3", "ts": 1750000001}]]}]
+    p = claude_bridge.build_prompt("what did we discuss?", discussions=disc)
+    assert "PRIOR DISCUSSIONS IN OTHER TABS" in p
+    assert "tab «Valves» — EP4338618A1" in p
+    assert "User: about EP4338618A1?" in p and "Claude: the overlap is in claim 3" in p
+    # conversation records are not citable primary text
+    assert "NOT primary patent text" in p
