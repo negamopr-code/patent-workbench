@@ -1033,6 +1033,31 @@ function renderDocs(allDocs) {
       split.onclick = () => autoSplitNotInNlm(notInNlm.map(d => d.id));
       bar.appendChild(split);
     }
+    // Bulk pick of the 🤖-unrated: fetched candidates Claude has never scored. Ticking them
+    // one by one is the tedious path this replaces — one click stages them all for
+    // 🏆 Deep-analyse selected. 📓 NLM scores deliberately do NOT count as rated here:
+    // "rated" means Claude has deep-read it (📓 NLM-rate all already skips its own rated ones).
+    const unratedByClaude = allDocs.filter(d => d.status === 'fetched' && d.score == null);
+    if (unratedByClaude.length) {
+      const pick = document.createElement('button');
+      pick.className = 'btn small';
+      const fresh = unratedByClaude.filter(d => !docSelection.has(d.id));
+      pick.textContent = `☑ select ${unratedByClaude.length} not rated by 🤖`;
+      pick.disabled = !fresh.length;
+      pick.title = fresh.length
+        ? `Tick every fetched candidate 🤖 Claude has NOT scored yet (${fresh.length} not already checked), `
+          + 'ADDING them to the current selection — then hit 🏆 Deep-analyse selected to read only those. '
+          + 'Candidates 🤖 already scored are left untouched; a 📓 NLM score does not count as rated here.'
+        : 'All not-yet-rated candidates are already checked.';
+      pick.onclick = () => {
+        for (const d of unratedByClaude) docSelection.add(d.id);
+        // An active filter hides some of the fresh picks, and the render prunes the
+        // selection to what it drew — so drop back to the full list to keep them all.
+        docsFilter = 'all';
+        renderDocs(allDocs);
+      };
+      bar.appendChild(pick);
+    }
     // sort the palmares — feature mode adds the weighted key (and defaults to it)
     const fmode = featureMode();
     const effSort = (!docsSortTouched && fmode) ? 'weighted' : docsSort;
