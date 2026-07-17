@@ -1079,14 +1079,23 @@ def get_benchmark(tab_id: int, full: bool = True) -> dict | None:
 
 def set_benchmark(tab_id: int, source: str, number: str | None = None,
                   files: list[dict] | None = None) -> None:
-    """Replace the tab's benchmark with a fresh pending one (number- or file-based)."""
+    """Replace the tab's benchmark with a fresh pending one (number- or file-based).
+
+    Written features SURVIVE the replacement. They are the user's OWN input — what a
+    match must disclose — not something derived from the document, so adding a document
+    benchmark must never silently delete them. `features_json` is orthogonal to `source`:
+    the benchmark is a document (number/pdf/images) or a spec ('features'), and either
+    may carry a weighted feature list that drives the ranking."""
     with _conn() as c:
+        prev = c.execute("SELECT features_json FROM benchmark WHERE tab_id=?",
+                         (tab_id,)).fetchone()
+        feats = prev["features_json"] if prev else None
         c.execute("DELETE FROM benchmark WHERE tab_id=?", (tab_id,))
         c.execute(
-            "INSERT INTO benchmark(tab_id, number, files, status, source, updated_at) "
-            "VALUES(?,?,?,?,?,?)",
+            "INSERT INTO benchmark(tab_id, number, files, status, source, "
+            "features_json, updated_at) VALUES(?,?,?,?,?,?,?)",
             (tab_id, number, json.dumps(files or [], ensure_ascii=False),
-             "pending", source, _now()))
+             "pending", source, feats, _now()))
 
 
 def set_benchmark_features(tab_id: int, spec: str, title: str,
@@ -1104,6 +1113,18 @@ def set_benchmark_features(tab_id: int, spec: str, title: str,
              json.dumps(features or [], ensure_ascii=False) if features else None, _now()))
 
 
+def set_benchmark_feature_list(tab_id: int, features: list[dict] | None) -> None:
+    """Write ONLY the weighted feature list, keeping the benchmark itself intact.
+
+    Used when the benchmark is a DOCUMENT: the features annotate it (they drive the
+    ranking) and must not replace it, so unlike `set_benchmark_features` this touches
+    no other column — the fetched number/text/files stay exactly as they are."""
+    with _conn() as c:
+        c.execute("UPDATE benchmark SET features_json=?, updated_at=? WHERE tab_id=?",
+                  (json.dumps(features, ensure_ascii=False) if features else None,
+                   _now(), tab_id))
+
+
 def update_benchmark(tab_id: int, **fields) -> None:
     if not fields:
         return
@@ -1114,11 +1135,21 @@ def update_benchmark(tab_id: int, **fields) -> None:
 
 
 def clear_benchmark(tab_id: int) -> list[dict]:
-    """Remove the benchmark; returns its uploaded files so the caller can delete them."""
+    """Remove the benchmark ENTIRELY — written features included; returns its uploaded
+    files so the caller can delete them. This is the explicit "remove the benchmark"
+    action. To REPLACE a benchmark, use `benchmark_files` + `set_benchmark` instead, so
+    the user's written features survive the swap."""
     bm = get_benchmark(tab_id)
     with _conn() as c:
         c.execute("DELETE FROM benchmark WHERE tab_id=?", (tab_id,))
     return (bm or {}).get("files") or []
+
+
+def benchmark_files(tab_id: int) -> list[dict]:
+    """The benchmark's uploaded files, WITHOUT removing the row — so a caller replacing
+    the benchmark can unlink stale uploads while `set_benchmark` still sees the previous
+    row and can carry its features across."""
+    return (get_benchmark(tab_id) or {}).get("files") or []
 
 
 # ---------- combi (two-document combination) motivation verdicts ----------

@@ -270,7 +270,9 @@ def benchmark_set_number(tab_id: int, body: schemas.BenchmarkSet, bg: Background
     nums = patents.extract_candidates(body.text)
     if not nums:
         raise HTTPException(400, "no plausible patent number found")
-    for f in db.clear_benchmark(tab_id):       # replacing: drop previous uploads
+    # NOT clear_benchmark: set_benchmark replaces the row itself and carries the
+    # written features across — clearing first would delete them (the whole point).
+    for f in db.benchmark_files(tab_id):       # replacing: drop previous uploads
         try:
             os.unlink(f["path"])
         except OSError:
@@ -294,13 +296,20 @@ def benchmark_set_features(tab_id: int, body: schemas.BenchmarkFeatures):
     features = [{"name": f.name.strip(), "weight": f.weight,
                  "kind": (f.kind if f.kind in ("M", "A") else "M"), "sl": f.sl}
                 for f in body.features if f.name.strip()]
+    # Re-weighting/editing the features of a DOCUMENT benchmark annotates it — it must
+    # not silently replace the fetched document with a spec. To swap a document out for
+    # a feature combination, remove the document first (or write a free-form spec).
+    bm = db.get_benchmark(tab_id)
+    if features and bm and bm.get("source") not in (None, "features"):
+        db.set_benchmark_feature_list(tab_id, features)
+        return {"ok": True, "benchmark": _benchmark_view(tab_id)}
     if features:
         spec = _compose_feature_spec(features)
     else:
         spec = (body.spec or "").strip()
         if len(spec) < 10:
             raise HTTPException(400, "describe the feature combination, or add features one by one")
-    for f in db.clear_benchmark(tab_id):       # replacing: drop previous uploads
+    for f in db.benchmark_files(tab_id):       # replacing: drop previous uploads
         try:
             os.unlink(f["path"])
         except OSError:
@@ -346,18 +355,21 @@ def _compose_feature_spec(features: list[dict], extra: str = "") -> str:
 def benchmark_add_feature(tab_id: int, body: schemas.FeatureItem):
     """APPEND one weighted feature to the benchmark, non-destructively. Existing
     weighted features are kept; any free-form text already written is preserved as
-    context. Creates a fresh feature benchmark if none exists yet."""
+    context. Creates a fresh feature benchmark if none exists yet.
+
+    When the benchmark is a DOCUMENT the features annotate it instead of replacing it:
+    only the feature list is written, so the fetched document stays put."""
     _tab_or_404(tab_id)
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "empty feature")
     bm = db.get_benchmark(tab_id)
-    if bm and bm.get("source") not in (None, "features"):
-        raise HTTPException(400, "the current benchmark is a document — remove it "
-                                 "before defining the benchmark by features")
     features = list((bm.get("features") if bm else None) or [])
     features.append({"name": name, "weight": body.weight,
                      "kind": (body.kind if body.kind in ("M", "A") else "M"), "sl": body.sl})
+    if bm and bm.get("source") not in (None, "features"):
+        db.set_benchmark_feature_list(tab_id, features)   # keep the document itself
+        return {"ok": True, "benchmark": _benchmark_view(tab_id)}
     # preserve free-form text the user already wrote (a features benchmark with text
     # but no weighted list yet) so adding a feature never throws it away
     extra = ""
@@ -408,8 +420,9 @@ async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
         raise HTTPException(400, "upload ONE PDF, or multiple pictures — not several PDFs")
     if "pdf" in kinds and "image" in kinds:
         raise HTTPException(400, "upload either a PDF or pictures, not a mix")
-    # replacing the benchmark: drop previous uploaded files from disk
-    for f in db.clear_benchmark(tab_id):
+    # replacing the benchmark: drop previous uploaded files from disk. Read them without
+    # clearing — set_benchmark replaces the row and carries the written features across.
+    for f in db.benchmark_files(tab_id):
         try:
             os.unlink(f["path"])
         except OSError:
@@ -2922,8 +2935,10 @@ def combi_motivation_ep(tab_id: int, body: schemas.CombiMotivationRequest):
     UI (free, from stored feature verdicts) — this only adds the motivation judgment."""
     _tab_or_404(tab_id)
     bm = db.get_benchmark(tab_id)
-    if not bm or bm.get("source") != "features":
-        raise HTTPException(400, "combi needs a feature-combination benchmark")
+    # Coverage is computed from the weighted feature list, which a DOCUMENT benchmark may
+    # also carry — what combi needs is the features, not a particular benchmark source.
+    if not bm or not (bm.get("features") or []):
+        raise HTTPException(400, "combi needs benchmark features — define them first")
     by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
              if d["status"] == "fetched"}
     pairs, keys = [], []

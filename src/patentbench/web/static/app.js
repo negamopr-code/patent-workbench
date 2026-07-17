@@ -276,10 +276,12 @@ function renderBenchmark(bm) {
     };
     row.appendChild(view);
   }
-  if (bm.source === 'features') {
+  if (bm.source === 'features' || (bm.features || []).length) {
     const edit = document.createElement('button');
     edit.className = 'btn small'; edit.textContent = '✏️ Edit features';
-    edit.title = 'Add / remove / re-weight the target features and re-save';
+    edit.title = bm.source === 'features'
+      ? 'Add / remove / re-weight the target features and re-save'
+      : 'Add / remove / re-weight the features ranking against this document (the document stays)';
     edit.onclick = () => openFeatureEditor(bm);
     row.appendChild(edit);
   }
@@ -337,8 +339,9 @@ function renderBenchmark(bm) {
     card.appendChild(fl);
   }
   // Always-available "add a feature" window: APPENDS one weighted feature without
-  // touching the existing benchmark (non-destructive).
-  if (bm.source === 'features') card.appendChild(buildAddFeatureBox());
+  // touching the existing benchmark (non-destructive) — including when the benchmark
+  // is a document, where the features rank candidates against it.
+  if (bm.status === 'ready' || bm.source === 'features') card.appendChild(buildAddFeatureBox());
   for (const f of bm.files || []) {
     const chip = document.createElement('span');
     chip.className = 'chip';
@@ -754,8 +757,11 @@ function additionalBonus(d) {
   }
   return Math.min(ADD_CAP, b);
 }
+// Weighted-feature ranking is driven by the feature LIST, whatever the benchmark's
+// source: a document benchmark may carry features that annotate it, and those rank
+// the candidates exactly the same way.
 function featureMode() {
-  return !!(currentBm && currentBm.source === 'features' && (currentBm.features || []).length);
+  return !!(currentBm && (currentBm.features || []).length);
 }
 // Weighted points a candidate earns from the benchmark's weighted features, using
 // the CURRENT weights (re-weighting re-ranks without re-reading). YES = full weight,

@@ -1907,12 +1907,56 @@ def test_benchmark_add_feature_accepts_long_pasted_text(client):
     assert bm["features"][0]["name"] == long_name
 
 
-def test_benchmark_add_feature_rejects_document_benchmark(client):
+def test_benchmark_add_feature_annotates_document_benchmark(client):
+    """Features on a DOCUMENT benchmark rank candidates against it, so adding one must
+    KEEP the document rather than replace it with a feature spec."""
     tab = client.post("/api/tabs", json={"name": "AddFeat3"}).json()
     tid = tab["id"]
     client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
     assert client.post(f"/api/tabs/{tid}/benchmark/features/add",
-                       json={"name": "x", "weight": 1}).status_code == 400
+                       json={"name": "x", "weight": 1}).status_code == 200
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert bm["source"] == "number" and bm["number"] == "US10395648B1"   # document kept
+    assert [f["name"] for f in bm["features"]] == ["x"]
+
+
+def test_written_features_survive_adding_a_document_benchmark(client):
+    """THE regression: features written FIRST, document benchmark added AFTER. The
+    features are the user's own input — what a match must disclose — so replacing the
+    benchmark with a document must never silently delete them."""
+    tab = client.post("/api/tabs", json={"name": "KeepFeat"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                json={"name": "a stacked battery pack", "weight": 5})
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert bm["source"] == "number" and bm["number"] == "US10395648B1"
+    assert [f["name"] for f in bm["features"]] == ["a stacked battery pack"]
+    assert bm["features"][0]["weight"] == 5
+
+
+def test_editing_features_of_a_document_benchmark_keeps_the_document(client):
+    """Re-weighting via the feature editor (POST /benchmark/features) annotates a
+    document benchmark instead of swapping the fetched document out for a spec."""
+    tab = client.post("/api/tabs", json={"name": "EditFeat"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    r = client.post(f"/api/tabs/{tid}/benchmark/features",
+                    json={"features": [{"name": "a busbar", "weight": 3}]})
+    assert r.status_code == 200
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert bm["source"] == "number" and bm["number"] == "US10395648B1"
+    assert bm["features"][0]["weight"] == 3
+
+
+def test_clearing_the_benchmark_drops_features_too(client):
+    """The explicit 'remove the benchmark' action is the ONE place features do go."""
+    tab = client.post("/api/tabs", json={"name": "ClrFeat"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                json={"name": "a busbar", "weight": 2})
+    client.delete(f"/api/tabs/{tid}/benchmark")
+    assert client.get(f"/api/tabs/{tid}/state").json()["benchmark"] is None
 
 
 def test_benchmark_add_feature_creates_when_none(client):
