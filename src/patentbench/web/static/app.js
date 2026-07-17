@@ -550,7 +550,11 @@ function buildAddFeatureBox() {
 // 🔬 Propose a decomposition of the claimed invention into separable elements, then load
 // them into the feature editor for REVIEW. Nothing is stored or scored until the user
 // clicks save — a bad split must never silently poison the whole candidate list.
-async function decomposeBenchmark(bm) {
+// Set when a 🔬 decomposition was started FROM the 🔎 investigation: approving the elements
+// resumes the scan, so the approval gate costs a click rather than losing the trail.
+let combiScanAfterSave = false;
+
+async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false } = {}) {
   if (!activeTab) return;
   const feats = bm.features || [];
   const mand = feats.filter(f => (f.kind || 'M') !== 'A');
@@ -558,7 +562,7 @@ async function decomposeBenchmark(bm) {
   // words); fall back to the benchmark document's claims.
   const source = mand.length ? 'features' : 'benchmark';
   const what = mand.length ? `${mand.length} mandatory feature(s)` : 'the benchmark\'s claims';
-  if (!confirm(`🔬 Decompose ${what} into separable elements?\n\n`
+  if (!skipConfirm && !confirm(`🔬 Decompose ${what} into separable elements?\n\n`
       + `One cheap call. The proposed elements open in the editor for you to review, edit `
       + `and re-weight — NOTHING is saved or scored until you click save.\n\n`
       + (mand.length === 1
@@ -582,9 +586,11 @@ async function decomposeBenchmark(bm) {
   for (const f of feats.filter(f => (f.kind || 'M') === 'A')) {   // keep A-features as they were
     addFeatureRow(f.name, f.weight, 'A', f.sl || 5);
   }
+  combiScanAfterSave = thenScan;      // resume the investigation once these are approved
   $('bm-status').textContent =
     `🔬 Proposed ${els.length} element(s) from ${res.source === 'features' ? 'your features' : 'the benchmark claims'} `
-    + `(${res.model || 'model'}). REVIEW and edit them — nothing is saved or scored until you click save below.`;
+    + `(${res.model || 'model'}). REVIEW and edit them — nothing is saved or scored until you click save below.`
+    + (thenScan ? ' Saving them continues the 🔎 2-document investigation automatically.' : '');
   $('bm-features').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
@@ -635,6 +641,16 @@ $('bm-feat-set').onclick = async () => {
   $('bm-feat-rows').innerHTML = ''; addFeatureRow();
   $('bm-status').textContent = '';
   renderBenchmark(res.benchmark);
+  // Approving a 🔬 decomposition that was started FROM the 🔎 investigation resumes it —
+  // the split was only ever a means to that end, so don't make the user re-find the button.
+  if (combiScanAfterSave) {
+    combiScanAfterSave = false;
+    const mand = ((res.benchmark && res.benchmark.features) || [])
+      .filter(f => (f.kind || 'M') !== 'A');
+    if (mand.length >= 2) await runCombiScan();
+    else appendMsg({ role: 's', text: `🔎 Investigation not resumed: the saved benchmark has `
+      + `${mand.length} mandatory element(s), and a 2-document combination needs at least 2.` });
+  }
 };
 
 const bmDz = $('bm-dropzone');
@@ -906,11 +922,17 @@ async function runCombiScan() {
   if (!activeTab) return;
   const mand = ((currentBm && currentBm.features) || []).filter(f => (f.kind || 'M') !== 'A');
   if (mand.length < 2) {
-    alert('🔎 2-document coverage needs at least TWO mandatory elements.\n\n'
-        + `This benchmark has ${mand.length}. A single monolithic feature cannot be split `
-        + 'between two documents, so no pair can ever "cover everything" — the analysis would '
-        + 'always come back empty.\n\nUse 🔬 Decompose into elements on the benchmark first.');
-    return;
+    // The investigation NEEDS the split, so offer to do it here rather than dead-ending on
+    // "go press the other button". The approval gate still applies: the proposed elements
+    // land in the editor, and the scan only resumes once you save them.
+    if (!confirm(`🔎 2-document coverage needs at least TWO elements — this benchmark has ${mand.length}.\n\n`
+        + `A single monolithic feature cannot be split between two documents, so no pair could `
+        + `ever "cover everything" and the analysis would always come back empty.\n\n`
+        + `Decompose the claim into its elements now?\n`
+        + `One cheap call → you review/edit the elements → save → the investigation continues `
+        + `automatically.`)) return;
+    await decomposeBenchmark(currentBm, { skipConfirm: true, thenScan: true });
+    return;                       // resumes from the save button once you approve
   }
   const eligible = (lastDocs || []).filter(d => d.status === 'fetched' && d.digest_len);
   const gap = (lastDocs || []).filter(d => d.status === 'fetched' && !d.digest_len).length;
