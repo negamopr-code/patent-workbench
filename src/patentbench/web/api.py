@@ -384,6 +384,44 @@ def benchmark_add_feature(tab_id: int, body: schemas.FeatureItem):
     return {"ok": True, "benchmark": _benchmark_view(tab_id)}
 
 
+@app.post("/api/tabs/{tab_id}/benchmark/decompose")
+def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
+    """🔬 PROPOSE a split of the claimed invention into its separable ELEMENTS.
+
+    PROPOSES ONLY — nothing is stored and nothing is scored here. The caller shows the
+    elements for review/edit and saves them through the normal features path, so a bad
+    split can never silently poison the whole candidate list.
+
+    Why it exists: coverage is judged per element. A claim held as ONE monolithic feature
+    can never be combination-analysed — 🧩 combi needs both documents to contribute an
+    element the other lacks, which is impossible with a single feature, so it silently
+    finds nothing. Decomposition is what makes 2-document coverage meaningful."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if body.source == "text":
+        text = (body.text or "").strip()
+        if len(text) < 20:
+            raise HTTPException(400, "paste the claim text to decompose")
+    elif body.source == "features":
+        feats = (bm or {}).get("features") or []
+        if not feats:
+            raise HTTPException(400, "this benchmark has no features to decompose")
+        text = "\n\n".join(f["name"] for f in feats if (f.get("kind") or "M") != "A")
+        if not text.strip():
+            raise HTTPException(400, "no mandatory features to decompose")
+    else:                                     # the benchmark document's own claims
+        if not bm:
+            raise HTTPException(400, "set a benchmark first")
+        text = (bm.get("claims") or bm.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "the benchmark has no claims/text to decompose")
+    res = claude_bridge.decompose_claim(text, model=_read_model(body.model))
+    if "error" in res:
+        raise HTTPException(400, f"decomposition failed: {res['error']}")
+    return {"ok": True, "elements": res["elements"], "model": res.get("model"),
+            "source": body.source, "source_chars": len(text)}
+
+
 @app.post("/api/tabs/{tab_id}/benchmark/upload")
 async def benchmark_upload(tab_id: int, bg: BackgroundTasks,
                            files: list[UploadFile] = File(...),
@@ -3068,6 +3106,194 @@ def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
         f"see the 🟢/🟡 chips and the +bonus in the score.{note}")
     return {"ok": True, "assessed": stored, "requested": len(chosen), "batches": len(batches),
             "failed_batches": len(errors), "a_features": len(a_features), "results": results}
+
+
+# ---------- 🔎 combi investigation: the TOOL finds the 2-document combination ----------
+# Deliberately independent of every other score in the app: its own per-element verdicts
+# (documents.combi_coverage), its own pair rating. It never reads or moves score /
+# feature_scores / additional_scores, so a pair's standing here says nothing about, and is
+# unaffected by, how either document ranks on its own.
+
+def _combi_elements(bm: dict | None) -> list[dict]:
+    """The MANDATORY features = the elements coverage is judged against."""
+    return [f for f in ((bm or {}).get("features") or []) if (f.get("kind") or "M") != "A"]
+
+
+def _cov_map(doc: dict) -> dict:
+    try:
+        return {c["name"]: c.get("status", "no")
+                for c in json.loads(doc.get("combi_coverage") or "[]")}
+    except (ValueError, TypeError, KeyError):
+        return {}
+
+
+def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dict]:
+    """Every GENUINE 2-document combination, computed in code (free, no model call).
+
+    A pair is COMPLETE when the union discloses (YES) every element. It only counts as a
+    combination when BOTH documents uniquely contribute an element the other lacks —
+    otherwise one document simply subsumes the other and there is nothing to combine.
+    The rating is the union's covered weight, on its own 0–10 scale."""
+    total_w = sum(int(e.get("weight", 1)) for e in elements) or 1
+    cov = {d["id"]: _cov_map(d) for d in docs}
+    out = []
+    for i in range(len(docs)):
+        for j in range(i + 1, len(docs)):
+            A, B = docs[i], docs[j]
+            ca, cb = cov[A["id"]], cov[B["id"]]
+            w = 0.0
+            complete = True
+            only_a, only_b = [], []
+            for e in elements:
+                name = e["name"]
+                sa, sb = ca.get(name, "no"), cb.get(name, "no")
+                best = "yes" if "yes" in (sa, sb) else (
+                    "partial" if "partial" in (sa, sb) else "no")
+                if best == "yes":
+                    w += int(e.get("weight", 1))
+                elif best == "partial":
+                    w += int(e.get("weight", 1)) * 0.5
+                    complete = False
+                else:
+                    complete = False
+                if sa == "yes" and sb != "yes":
+                    only_a.append(name)
+                elif sb == "yes" and sa != "yes":
+                    only_b.append(name)
+            if not only_a or not only_b:
+                continue                      # not a combination: one subsumes the other
+            out.append({
+                "a_id": A["id"], "b_id": B["id"],
+                "a": A.get("number"), "b": B.get("number"),
+                "complete": complete,
+                "rating": round(10.0 * w / total_w, 1),   # independent 0–10
+                "covered_w": round(w, 1), "total_w": total_w,
+                "a_only": only_a[:12], "b_only": only_b[:12],
+                "depth": "full" if (A.get("combi_depth") == "full"
+                                    and B.get("combi_depth") == "full") else "digest",
+            })
+    out.sort(key=lambda p: (-p["complete"], -p["rating"], -len(p["a_only"]) - len(p["b_only"])))
+    return out[:limit]
+
+
+@app.post("/api/tabs/{tab_id}/combi-scan")
+def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
+    """🔎 STAGE 1. Map which ELEMENTS each candidate discloses, from stored digests, across
+    EVERY candidate that has one — then derive, in code, the pairs that TOGETHER cover
+    everything. The tool investigates; nothing here depends on the user picking D1/D2.
+
+    Cheap + batched on purpose: the pair that covers everything may rank nowhere near the
+    top, so the scan must span the whole corpus, not a top-N."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    elements = _combi_elements(bm)
+    if len(elements) < 2:
+        raise HTTPException(400, "combination analysis needs at least TWO mandatory elements — "
+                                 "one monolithic feature cannot be split between two documents. "
+                                 "Use 🔬 Decompose to split the claim into its elements first.")
+    docs = [d for d in db.list_documents(tab_id, full=True)
+            if d["status"] == "fetched" and (d.get("digest") or "").strip()]
+    if len(docs) < 2:
+        raise HTTPException(400, "need at least two candidates with a stored digest — "
+                                 "🔁 backfill the missing digests first")
+    model = _read_model(body.model) or claude_bridge.DIGEST_MODEL
+    batches = [docs[i:i + BULK_DIGEST_BATCH] for i in range(0, len(docs), BULK_DIGEST_BATCH)]
+    errors: list[str] = []
+    lock = threading.Lock()
+
+    def one(batch: list[dict]) -> None:
+        res = claude_bridge.combi_coverage_digests(elements, batch, model=model)
+        if "error" in res:
+            with lock:
+                errors.append(res["error"])
+            return
+        got = res.get("results") or {}
+        for d in batch:
+            v = got.get(d["number"])
+            if v is not None:
+                db.update_document(d["id"],
+                                   combi_coverage=json.dumps(v, ensure_ascii=False),
+                                   combi_depth="digest")
+
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(one, batches))
+    fresh = [d for d in db.list_documents(tab_id, full=True) if d.get("combi_coverage")]
+    scanned = len(fresh)
+    if not scanned:
+        raise HTTPException(400, f"combi scan failed: {errors[0] if errors else 'no verdicts parsed'}")
+    pairs = _combi_pairs(elements, fresh, body.top_pairs)
+    complete = [p for p in pairs if p["complete"]]
+    missed = len(docs) - scanned
+    note = (f" ⚠ {missed} candidate(s) not scanned ({len(errors)} batch(es) failed) — a pair "
+            "involving them cannot be found until you re-run." if missed else "")
+    db.append_message(tab_id, "s",
+        f"🔎 Combi scan (stage 1, {model}) over {scanned} candidate(s) in {len(batches)} bulk "
+        f"pass(es), against {len(elements)} element(s) of the claimed invention: "
+        f"{len(complete)} pair(s) cover EVERY element, {len(pairs)} shown. These verdicts are "
+        "from DIGESTS (summaries) — run stage 2 to confirm the finalists against full text. "
+        "This rating is independent of every other score in the app." + note)
+    return {"ok": True, "scanned": scanned, "requested": len(docs), "batches": len(batches),
+            "failed_batches": len(errors), "elements": len(elements),
+            "complete": len(complete), "pairs": pairs, "depth": "digest"}
+
+
+@app.post("/api/tabs/{tab_id}/combi-verify")
+def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest):
+    """🔎 STAGE 2. Re-read the shortlisted finalists' FULL primary text against the elements,
+    REPLACING their stage-1 digest verdicts with citable ones, then recompute the pairs.
+
+    Stage 1 judges from summaries, so it can miss an element the full text does disclose —
+    this is where a shortlisted pair is actually confirmed (or falls away)."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    elements = _combi_elements(bm)
+    if len(elements) < 2:
+        raise HTTPException(400, "combination analysis needs at least TWO mandatory elements — "
+                                 "use 🔬 Decompose first")
+    chosen = []
+    for did in body.doc_ids:
+        d = db.get_document(did)
+        if not d or d["tab_id"] != tab_id:
+            raise HTTPException(404, f"document {did} not found in this tab")
+        if d["status"] == "fetched":
+            chosen.append(d)
+    if not chosen:
+        raise HTTPException(400, "no fetched documents to verify")
+    model = _read_model(body.model) or claude_bridge.CHAT_MODEL
+    errors: list[str] = []
+    lock = threading.Lock()
+
+    def one(d: dict) -> None:
+        res = claude_bridge.combi_coverage_full(elements, d, model=model)
+        if "error" in res:
+            with lock:
+                errors.append(f"{d.get('number')}: {res['error']}")
+            return
+        v = (res.get("results") or {}).get(d["number"])
+        if v is None:                       # model didn't echo the number → don't guess
+            with lock:
+                errors.append(f"{d.get('number')}: no verdict block returned")
+            return
+        db.update_document(d["id"], combi_coverage=json.dumps(v, ensure_ascii=False),
+                           combi_depth="full")
+
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(one, chosen))
+    fresh = [d for d in db.list_documents(tab_id, full=True) if d.get("combi_coverage")]
+    verified = [d for d in fresh if d.get("combi_depth") == "full"]
+    pairs = _combi_pairs(elements, fresh, body.top_pairs)
+    complete = [p for p in pairs if p["complete"]]
+    note = (f" ⚠ {len(errors)} full read(s) failed ({'; '.join(errors[:2])}) — those keep their "
+            "digest-based verdict." if errors else "")
+    db.append_message(tab_id, "s",
+        f"🔎 Combi verify (stage 2, {model}): full primary text re-read for "
+        f"{len(chosen) - len(errors)} finalist(s); {len(verified)} candidate(s) now carry a "
+        f"citable element map. {len(complete)} pair(s) cover EVERY element. A stage-2 verdict "
+        "REPLACES the digest guess, so a shortlisted pair can legitimately fall away here."
+        + note)
+    return {"ok": True, "verified": len(chosen) - len(errors), "failed": len(errors),
+            "elements": len(elements), "complete": len(complete), "pairs": pairs,
+            "depth": "full"}
 
 
 @app.post("/api/tabs/{tab_id}/combi/motivation")

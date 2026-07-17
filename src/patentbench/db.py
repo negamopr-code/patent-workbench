@@ -180,6 +180,11 @@ def _conn():
         if "digest_error" not in dcols:    # why the digest is missing — a dropped digest makes a
             con.execute("ALTER TABLE documents ADD COLUMN digest_error TEXT")  # doc invisible to
             # every digest-based tool (➕ additional read, ♻️ re-check, 🧩 combi); never lose the reason
+        if "combi_coverage" not in dcols:  # 🔎 combi investigation: per-ELEMENT coverage verdicts,
+            con.execute("ALTER TABLE documents ADD COLUMN combi_coverage TEXT")  # deliberately its
+            con.execute("ALTER TABLE documents ADD COLUMN combi_depth TEXT")     # OWN store — this
+            # scoring is independent of score/feature_scores/additional_scores and must never move
+            # them. combi_depth = 'digest' (stage 1) | 'full' (stage 2, citable).
         if "text_model" not in dcols:      # which model OCR'd/transcribed the body (NULL = Google fetch)
             con.execute("ALTER TABLE documents ADD COLUMN text_model TEXT")
         if "content_hash" not in dcols:    # sha256 of the source upload, for hash-based cross-tab reuse

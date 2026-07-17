@@ -841,6 +841,168 @@ def chat(question: str, history: list[dict] | None = None,
     return res
 
 
+# 🔬 Claim decomposition. A claim written as ONE block cannot be combination-analysed:
+# coverage is per element, and two documents can only "together cover everything" if
+# there are separable elements to split between them. This turns the block into that list.
+_DECOMPOSE_PROMPT = (
+    "Split the CLAIMED INVENTION below into its constituent ELEMENTS — the individual "
+    "technical features that a prior-art document could disclose, or fail to disclose, "
+    "INDEPENDENTLY of the others. This is the decomposition a novelty / inventive-step "
+    "analysis works from.\n\n"
+    "RULES:\n"
+    "• One element per distinct technical feature, in the claim's OWN order.\n"
+    "• Use the claim's OWN wording, condensed to a single line. Never invent a feature, "
+    "never generalise beyond what the claim says, never narrow it.\n"
+    "• Split ONLY where separate disclosure is genuinely possible. Do NOT split a single "
+    "indivisible feature into fragments that no document would disclose apart (e.g. keep "
+    "'X electrically connected to Y' together if the connection IS the feature).\n"
+    "• Conversely, do NOT merge two features a document could plausibly disclose "
+    "separately — a merged element makes a real 2-document combination invisible.\n"
+    "• Keep the preamble/category (what the thing IS) as element 1 when the claim has one.\n"
+    "• weight 1-5 = how decisive that element is for the invention: 5 = the characterising "
+    "heart of it, 1 = routine/contextual.\n\n"
+    "OUTPUT — one element per line and NOTHING else (no preamble, no commentary):\n"
+    "<n> | <weight 1-5> | <the element, one line>\n\n"
+    "CLAIMED INVENTION:\n\n{text}")
+
+_DECOMPOSE_RE = re.compile(r"^\s*\d+\s*\|\s*([1-5])\s*\|\s*(.+?)\s*$", re.MULTILINE)
+
+
+def parse_decomposition(text: str) -> list[dict]:
+    """'<n> | <weight> | <element>' lines → weighted M features, ready for the editor."""
+    out = []
+    for m in _DECOMPOSE_RE.finditer(text or ""):
+        name = m.group(2).strip()
+        if name and not name.startswith("<"):        # skip an echoed format template
+            out.append({"name": name[:4000], "weight": int(m.group(1)), "kind": "M", "sl": 5})
+    return out
+
+
+def decompose_claim(invention_text: str, model: str | None = None) -> dict:
+    """🔬 PROPOSE a split of the claimed invention into separable elements. Proposes only —
+    the caller shows them for review; nothing is scored against them until accepted.
+    Returns {elements: [{name, weight, kind, sl}], model} | {error}."""
+    if not (invention_text or "").strip():
+        return {"error": "nothing to decompose"}
+    res = _run_claude(_DECOMPOSE_PROMPT.format(text=invention_text[:MAX_BENCHMARK_CHARS]),
+                      model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    els = parse_decomposition(res["answer"])
+    if not els:
+        return {"error": "the model returned no parsable elements — try a stronger model"}
+    return {"elements": els, "model": res.get("model")}
+
+
+# 🔎 COMBI INVESTIGATION — element-level coverage, judged INDEPENDENTLY of every other
+# score in the app. Stage 1 reads digests (cheap, spans the whole corpus); stage 2 re-reads
+# the finalists' FULL text. Same output shape for both, so one parser serves them and a
+# stage-2 verdict simply overwrites the stage-1 one for that document.
+_COVERAGE_RULES = (
+    "For EACH element answer YES (the document discloses it), PARTIAL (it discloses "
+    "something that reads on the element only in part, or only implicitly) or NO.\n"
+    "• Judge each element INDEPENDENTLY — a document may disclose some and not others; "
+    "that is the point, so never let one element's answer colour another's.\n"
+    "• NEVER invent disclosure. If the material is silent, answer NO.\n"
+    "• This assessment is SELF-CONTAINED: ignore any ranking or score the document may "
+    "already carry elsewhere.\n\n"
+    "=== ELEMENTS OF THE CLAIMED INVENTION ===\n{elements}\n\n")
+
+COMBI_DIGEST_PROMPT = (
+    "You are mapping which ELEMENTS of a claimed invention each candidate patent "
+    "discloses, so that pairs of documents which TOGETHER cover every element can be "
+    "found.\n\n"
+    + _COVERAGE_RULES +
+    "You are given each candidate's DIGEST (a faithful summary of its full text). Judge "
+    "only from the digest. A digest is a SUMMARY: if it is silent on an element, answer "
+    "NO — a later full-text pass will confirm the finalists.\n\n"
+    "=== CANDIDATES (digests) ===\n{docs}\n\n"
+    "OUTPUT — for EVERY candidate, in this EXACT format, nothing else:\n"
+    "=== <PUBLICATION NUMBER> ===\n"
+    "<element number>: YES|PARTIAL|NO — <≤15 words of evidence>\n"
+    "(one line per element, numbered as listed above)")
+
+COMBI_FULL_PROMPT = (
+    "You are confirming, against FULL PRIMARY TEXT, which ELEMENTS of a claimed invention "
+    "this document discloses. A cheap summary-based pass shortlisted it; your verdict "
+    "REPLACES that one, so judge only from the primary text below.\n\n"
+    + _COVERAGE_RULES +
+    "Cite the passage that carries each YES/PARTIAL ([00NN] paragraph marker, claim "
+    "number, or Fig.). An element with no citable passage is NO.\n\n"
+    "=== DOCUMENT (full primary text) ===\n{docs}\n\n"
+    "OUTPUT — in this EXACT format, nothing else:\n"
+    "=== <PUBLICATION NUMBER> ===\n"
+    "<element number>: YES|PARTIAL|NO — <≤20 words, with the [00NN]/claim/Fig. cite>\n"
+    "(one line per element, numbered as listed above)")
+
+_COV_HEADER_RE = re.compile(r"^===\s*([A-Z]{1,3}\d[\dA-Z]*)\s*===\s*$", re.MULTILINE)
+_COV_LINE_RE = re.compile(r"^\s*(\d+)\s*[:.\)]\s*(YES|PARTIAL|NO)\b[\s—:-]*(.*)$",
+                          re.IGNORECASE)
+
+
+def parse_coverage(text: str, elements: list[dict]) -> dict:
+    """'=== NUMBER ===' blocks of '<n>: YES|PARTIAL|NO — evidence' → {number: [{name,
+    weight, status, evidence}]}, indexed back onto `elements`. Unanswered element → 'no'
+    (silence is never disclosure)."""
+    out: dict = {}
+    parts = _COV_HEADER_RE.split(text or "")
+    for i in range(1, len(parts) - 1, 2):
+        num = parts[i].strip()
+        by_idx: dict[int, tuple[str, str]] = {}
+        for line in parts[i + 1].splitlines():
+            m = _COV_LINE_RE.match(line)
+            if not m:
+                continue
+            idx = int(m.group(1)) - 1
+            if 0 <= idx < len(elements):
+                by_idx[idx] = (m.group(2).lower(), m.group(3).strip()[:200])
+        if by_idx:
+            out[num] = [{"name": e.get("name", ""), "weight": int(e.get("weight", 1)),
+                         "status": by_idx.get(j, ("no", ""))[0],
+                         "evidence": by_idx.get(j, ("no", ""))[1]}
+                        for j, e in enumerate(elements)]
+    return out
+
+
+def _element_lines(elements: list[dict]) -> str:
+    return "\n".join(f"{i}. {e['name']}  (importance {e.get('weight', 1)}/5)"
+                     for i, e in enumerate(elements, 1))
+
+
+def combi_coverage_digests(elements: list[dict], docs: list[dict],
+                           model: str | None = None) -> dict:
+    """🔎 STAGE 1 — element coverage for a BATCH of candidates from their stored digests.
+    Cheap enough to span the whole corpus, which is the point: the pair that covers
+    everything may sit far down the ranking. Returns {results, model} | {error}."""
+    if not elements or not docs:
+        return {"results": {}}
+    doc_blocks = "\n\n".join(
+        f"=== {d['number']} ===\n{(d.get('digest') or '(no digest available)')[:6000]}"
+        for d in docs)
+    res = _run_claude(COMBI_DIGEST_PROMPT.format(elements=_element_lines(elements),
+                                                 docs=doc_blocks),
+                      model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"results": parse_coverage(res["answer"], elements), "model": res.get("model")}
+
+
+def combi_coverage_full(elements: list[dict], doc: dict, model: str | None = None) -> dict:
+    """🔎 STAGE 2 — re-read ONE finalist's FULL primary text against the elements. The
+    stage-1 digest verdict is a summary-based approximation; this replaces it with a
+    citable one. Returns {results, model} | {error}."""
+    if not elements or not doc:
+        return {"results": {}}
+    block = f"=== {doc['number']} ===\n" + _document_block(doc, MAX_FULLTEXT_CHARS,
+                                                           clipped=False)
+    res = _run_claude(COMBI_FULL_PROMPT.format(elements=_element_lines(elements),
+                                               docs=block),
+                      model or CHAT_MODEL, timeout=PSA_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"results": parse_coverage(res["answer"], elements), "model": res.get("model")}
+
+
 _PSA_INSTRUCTION = (
     "TASK — PROBLEM-SOLUTION APPROACH.\n"
     "The USER-SUPPLIED METHODOLOGY above is BINDING. Execute it STRICTLY, step by "

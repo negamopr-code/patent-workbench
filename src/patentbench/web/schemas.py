@@ -197,6 +197,31 @@ class DigestRescoreRequest(BaseModel):
     model: str | None = None
 
 
+class CombiScanRequest(BaseModel):
+    """🔎 STAGE 1 of the combi investigation: map element coverage across EVERY candidate with
+    a digest, then derive the pairs that together cover everything. Cheap + batched, so the
+    whole corpus is in scope — the pair that covers everything may rank nowhere near the top."""
+    model: str | None = None
+    top_pairs: int = Field(default=20, ge=1, le=100)   # how many pairs to return
+
+
+class CombiVerifyRequest(BaseModel):
+    """🔎 STAGE 2: re-read the shortlisted finalists' FULL primary text against the elements,
+    replacing their summary-based stage-1 verdicts with citable ones."""
+    doc_ids: list[int] = Field(min_length=1, max_length=24)
+    model: str | None = None
+    top_pairs: int = Field(default=20, ge=1, le=100)
+
+
+class DecomposeRequest(BaseModel):
+    """🔬 Propose a split of the claimed invention into separable elements. Proposes only —
+    the result is reviewed and saved through the normal features path. Source, in order:
+    'features' (the benchmark's mandatory features), 'benchmark' (its claims), 'text'."""
+    source: Literal["features", "benchmark", "text"] = "features"
+    text: str | None = Field(default=None, max_length=MAX_QUESTION)
+    model: str | None = None
+
+
 class DigestBackfillRequest(BaseModel):
     """🔁 Generate the digests that are MISSING, putting those candidates back in scope for
     every digest-based tool. One call per missing document — always user-triggered."""

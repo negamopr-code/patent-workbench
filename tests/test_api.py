@@ -2187,6 +2187,222 @@ def test_additional_read_partial_batch_failure_keeps_the_rest(client, monkeypatc
     assert "2 candidate(s) not assessed" in msg               # the gap is stated, not hidden
 
 
+def _combi_tab(client, monkeypatch, elements=("packs", "bus", "comms")):
+    """A tab whose benchmark has `elements` as mandatory features, and 3 digested docs."""
+    import patentbench.db as _db
+    tab = client.post("/api/tabs", json={"name": "Combi"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": e, "weight": 5, "kind": "M", "sl": 5} for e in elements]})
+    nums = ["EP4400001", "EP4400002", "EP4400003"]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": nums, "source": "image"})
+    for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
+        _db.update_document(d["id"], digest=f"digest of {d['number']}", score=5, scored_at=1)
+    return tid, nums
+
+
+def test_parse_coverage_maps_elements_and_defaults_silence_to_no():
+    from patentbench import claude_bridge as cb
+    els = [{"name": "packs", "weight": 5}, {"name": "bus", "weight": 3},
+           {"name": "comms", "weight": 1}]
+    out = cb.parse_coverage("=== EP4400001 ===\n1: YES — [0021] a plurality of packs\n"
+                            "2: PARTIAL — implicit rail\n", els)
+    got = out["EP4400001"]
+    assert [c["status"] for c in got] == ["yes", "partial", "no"]   # unanswered → no
+    assert got[0]["evidence"].startswith("[0021]")
+
+
+def test_combi_scan_finds_the_pair_that_covers_everything(client, monkeypatch):
+    """The TOOL finds the combination — no user-picked D1/D2. A and B each hold what the
+    other lacks, so together they cover all three elements."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    def fake_cov(elements, docs, model=None):
+        table = {   # A: packs+bus  B: comms  C: packs only (subsumed by A)
+            "EP4400001": ["YES", "YES", "NO"],
+            "EP4400002": ["NO", "NO", "YES"],
+            "EP4400003": ["YES", "NO", "NO"],
+        }
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i].lower(), "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert r["scanned"] == 3 and r["elements"] == 3
+    complete = [p for p in r["pairs"] if p["complete"]]
+    assert len(complete) == 1
+    p = complete[0]
+    assert {p["a"], p["b"]} == {"EP4400001", "EP4400002"}   # the only genuine full cover
+    assert p["rating"] == 10.0 and p["depth"] == "digest"
+    # C+B covers only packs+comms (no bus) → present but NOT complete
+    assert any({q["a"], q["b"]} == {"EP4400003", "EP4400002"} and not q["complete"]
+               for q in r["pairs"])
+
+
+def test_combi_scan_rejects_one_document_subsuming_another(client, monkeypatch):
+    """A pair is only a COMBINATION when each side contributes something the other lacks —
+    A ⊇ C is one document doing the work, not a combination."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    def fake_cov(elements, docs, model=None):
+        table = {"EP4400001": ["YES", "YES", "YES"],    # covers everything alone
+                 "EP4400002": ["YES", "NO", "NO"],      # ⊂ A
+                 "EP4400003": ["YES", "YES", "NO"]}     # ⊂ A
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i].lower(), "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert r["pairs"] == []          # every pair is subsumption, none is a combination
+
+
+def test_combi_scan_needs_at_least_two_elements(client, monkeypatch):
+    """THE tab-36 case: one monolithic feature can never be split between two documents,
+    so the analysis must say so loudly instead of silently returning nothing."""
+    tid, nums = _combi_tab(client, monkeypatch, elements=("one monolithic claim",))
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={})
+    assert r.status_code == 400
+    assert "at least TWO mandatory elements" in r.json()["detail"]
+    assert "Decompose" in r.json()["detail"]           # points at the fix
+
+
+def test_combi_scoring_is_independent_of_every_other_score(client, monkeypatch):
+    """The combi rating must not read from, or write to, score / feature_scores /
+    additional_scores — it is its own investigation."""
+    import patentbench.db as _db
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    before = {d["number"]: (d["score"], d["feature_scores"], d["additional_scores"])
+              for d in docs}
+    def fake_cov(elements, docs_, model=None):
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"], "status": "yes", "evidence": "e"}
+            for e in elements] for d in docs_}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    client.post(f"/api/tabs/{tid}/combi-scan", json={})
+    after = {d["number"]: (d["score"], d["feature_scores"], d["additional_scores"])
+             for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert after == before                              # untouched
+    assert _db.get_document(docs[0]["id"])["combi_coverage"]      # ...stored separately
+
+
+def test_combi_verify_full_text_replaces_the_digest_verdict(client, monkeypatch):
+    """Stage 2 is where a shortlisted pair is confirmed — or legitimately falls away."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    monkeypatch.setattr(cb, "combi_coverage_digests", lambda elements, docs, model=None: {
+        "results": {d["number"]: [{"name": e["name"], "weight": e["weight"],
+                                   "status": "yes", "evidence": "e"} for e in elements]
+                    for d in docs}, "model": "m"})
+    client.post(f"/api/tabs/{tid}/combi-scan", json={})
+    ids = [d["id"] for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]][:2]
+    # the full read does NOT bear the digest out → coverage collapses
+    monkeypatch.setattr(cb, "combi_coverage_full", lambda elements, doc, model=None: {
+        "results": {doc["number"]: [{"name": e["name"], "weight": e["weight"],
+                                     "status": "no", "evidence": ""} for e in elements]},
+        "model": "m"})
+    r = client.post(f"/api/tabs/{tid}/combi-verify", json={"doc_ids": ids}).json()
+    assert r["verified"] == 2 and r["depth"] == "full"
+    import json as _json
+    import patentbench.db as _db
+    row = _db.get_document(ids[0])
+    assert row["combi_depth"] == "full"
+    assert all(c["status"] == "no" for c in _json.loads(row["combi_coverage"]))
+
+
+def test_combi_verify_failure_keeps_the_digest_verdict(client, monkeypatch):
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    monkeypatch.setattr(cb, "combi_coverage_digests", lambda elements, docs, model=None: {
+        "results": {d["number"]: [{"name": e["name"], "weight": e["weight"],
+                                   "status": "yes", "evidence": "e"} for e in elements]
+                    for d in docs}, "model": "m"})
+    client.post(f"/api/tabs/{tid}/combi-scan", json={})
+    ids = [d["id"] for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]][:1]
+    monkeypatch.setattr(cb, "combi_coverage_full",
+                        lambda elements, doc, model=None: {"error": "session limit"})
+    r = client.post(f"/api/tabs/{tid}/combi-verify", json={"doc_ids": ids}).json()
+    assert r["verified"] == 0 and r["failed"] == 1
+    import patentbench.db as _db
+    assert _db.get_document(ids[0])["combi_depth"] == "digest"   # not silently downgraded
+    msg = client.get(f"/api/tabs/{tid}/state").json()["messages"][-1]["text"]
+    assert "full read(s) failed" in msg
+
+
+def test_parse_decomposition_reads_weighted_element_lines():
+    from patentbench import claude_bridge as cb
+    out = cb.parse_decomposition(
+        "1 | 5 | a plurality of battery packs\n"
+        "2 | 4 | power conversion modules in one-to-one correspondence\n"
+        "noise line that is not an element\n"
+        "3 | 1 | a communication unit\n")
+    assert [e["name"] for e in out] == ["a plurality of battery packs",
+                                        "power conversion modules in one-to-one correspondence",
+                                        "a communication unit"]
+    assert [e["weight"] for e in out] == [5, 4, 1]
+    assert all(e["kind"] == "M" for e in out)      # elements are mandatory by construction
+
+
+def test_parse_decomposition_skips_an_echoed_template():
+    from patentbench import claude_bridge as cb
+    assert cb.parse_decomposition("<n> | <weight 1-5> | <the element, one line>") == []
+
+
+def test_decompose_proposes_without_storing_anything(client, monkeypatch):
+    """🔬 decompose PROPOSES only: a bad split must never silently poison 284 documents,
+    so the benchmark is untouched until the user accepts."""
+    from patentbench import claude_bridge as cb
+    monkeypatch.setattr(cb, "_run_claude", lambda *a, **k: {
+        "answer": "1 | 5 | a plurality of battery packs\n2 | 3 | a battery bus",
+        "model": "claude-sonnet-4-6"})
+    tab = client.post("/api/tabs", json={"name": "Dec"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                json={"name": "one monolithic claim block", "weight": 5})
+    r = client.post(f"/api/tabs/{tid}/benchmark/decompose", json={"source": "features"}).json()
+    assert [e["name"] for e in r["elements"]] == ["a plurality of battery packs", "a battery bus"]
+    # the benchmark still holds the ORIGINAL single feature — nothing was stored
+    bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
+    assert [f["name"] for f in bm["features"]] == ["one monolithic claim block"]
+
+
+def test_decompose_from_benchmark_claims(client, monkeypatch):
+    from patentbench import claude_bridge as cb
+    seen = {}
+    def fake_run(prompt, model, **k):
+        seen["p"] = prompt
+        return {"answer": "1 | 5 | an element", "model": model}
+    monkeypatch.setattr(cb, "_run_claude", fake_run)
+    tab = client.post("/api/tabs", json={"name": "DecB"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "EP1111111A1"})
+    r = client.post(f"/api/tabs/{tid}/benchmark/decompose", json={"source": "benchmark"})
+    assert r.status_code == 200
+    assert "1. A method." in seen["p"]              # the benchmark's claims were the source
+
+
+def test_decompose_needs_something_to_decompose(client, monkeypatch):
+    tab = client.post("/api/tabs", json={"name": "DecE"}).json()
+    tid = tab["id"]
+    r = client.post(f"/api/tabs/{tid}/benchmark/decompose", json={"source": "features"})
+    assert r.status_code == 400 and "no features" in r.json()["detail"]
+
+
+def test_decompose_surfaces_an_unparsable_answer(client, monkeypatch):
+    from patentbench import claude_bridge as cb
+    monkeypatch.setattr(cb, "_run_claude",
+                        lambda *a, **k: {"answer": "I think the claim is about batteries.",
+                                         "model": "m"})
+    tab = client.post("/api/tabs", json={"name": "DecU"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features/add", json={"name": "x", "weight": 5})
+    r = client.post(f"/api/tabs/{tid}/benchmark/decompose", json={"source": "features"})
+    assert r.status_code == 400 and "no parsable elements" in r.json()["detail"]
+
+
 def test_digest_failure_is_recorded_not_dropped(client, monkeypatch):
     """A swallowed digest error takes a document out of scope of EVERY digest-based tool
     (➕ additional read, ♻️ re-check, 🧩 combi) invisibly — while runs still report 'all'.

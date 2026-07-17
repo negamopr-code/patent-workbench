@@ -276,6 +276,19 @@ function renderBenchmark(bm) {
     };
     row.appendChild(view);
   }
+  // 🔬 Decompose: a claim held as ONE feature can never be combination-analysed (🧩 combi
+  // needs each document to contribute an element the other lacks). Proposes the split into
+  // the editor for review — nothing is saved or scored until the user accepts.
+  if (bm.status === 'ready') {
+    const dec = document.createElement('button');
+    dec.className = 'btn small'; dec.textContent = '🔬 Decompose into elements';
+    dec.title = 'Split the claimed invention into its separable ELEMENTS, each becoming a weighted feature. '
+      + 'Coverage is judged per element, so this is what makes 🧩 2-document combination analysis possible at all '
+      + '(one monolithic feature can never be split between two documents). '
+      + 'Proposes only — you review and edit before anything is saved or scored.';
+    dec.onclick = () => decomposeBenchmark(bm);
+    row.appendChild(dec);
+  }
   if (bm.source === 'features' || (bm.features || []).length) {
     const edit = document.createElement('button');
     edit.className = 'btn small'; edit.textContent = '✏️ Edit features';
@@ -532,6 +545,47 @@ function buildAddFeatureBox() {
   row.append(txt, controls);
   box.append(lbl, row);
   return box;
+}
+
+// 🔬 Propose a decomposition of the claimed invention into separable elements, then load
+// them into the feature editor for REVIEW. Nothing is stored or scored until the user
+// clicks save — a bad split must never silently poison the whole candidate list.
+async function decomposeBenchmark(bm) {
+  if (!activeTab) return;
+  const feats = bm.features || [];
+  const mand = feats.filter(f => (f.kind || 'M') !== 'A');
+  // Prefer the user's own mandatory features as the source (that IS the claim, in their
+  // words); fall back to the benchmark document's claims.
+  const source = mand.length ? 'features' : 'benchmark';
+  const what = mand.length ? `${mand.length} mandatory feature(s)` : 'the benchmark\'s claims';
+  if (!confirm(`🔬 Decompose ${what} into separable elements?\n\n`
+      + `One cheap call. The proposed elements open in the editor for you to review, edit `
+      + `and re-weight — NOTHING is saved or scored until you click save.\n\n`
+      + (mand.length === 1
+          ? `Note: you currently have ONE mandatory feature, so 🧩 combi can never find a `
+          + `pair (a single feature cannot be split between two documents). Decomposing is `
+          + `what makes 2-document coverage possible.\n\n` : '')
+      + `Continue?`)) return;
+  setBusy(true, 'Decomposing the claimed invention into elements');
+  const res = await api(`/api/tabs/${activeTab}/benchmark/decompose`, {
+    method: 'POST', body: JSON.stringify({ source, model: readModelValue() }) });
+  setBusy(false);
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  const els = res.elements || [];
+  if (!els.length) { appendMsg({ role: 's', text: 'Decomposition returned no elements.' }); return; }
+  // Load into the editor as a PROPOSAL — the existing save button is the approval gate.
+  $('bm-setup').classList.remove('hidden');
+  $('bm-features').open = true;
+  const rows = $('bm-feat-rows');
+  rows.innerHTML = '';
+  for (const e of els) addFeatureRow(e.name, e.weight, 'M', 5);
+  for (const f of feats.filter(f => (f.kind || 'M') === 'A')) {   // keep A-features as they were
+    addFeatureRow(f.name, f.weight, 'A', f.sl || 5);
+  }
+  $('bm-status').textContent =
+    `🔬 Proposed ${els.length} element(s) from ${res.source === 'features' ? 'your features' : 'the benchmark claims'} `
+    + `(${res.model || 'model'}). REVIEW and edit them — nothing is saved or scored until you click save below.`;
+  $('bm-features').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // Re-open the feature editor pre-filled from an existing feature benchmark, so
@@ -841,6 +895,112 @@ function computeCombis() {
   }
   return { pairs, mand, add, totalMandW, totalAddW, ready: true };
 }
+
+// 🔎 COMBI INVESTIGATION — the TOOL finds the pair; the user never picks D1/D2.
+// Two stages, by design: stage 1 is cheap enough to span the WHOLE corpus (the pair that
+// covers everything may rank nowhere near the top), stage 2 confirms the finalists against
+// full text. Its rating is independent of every other score in the app.
+let combiScan = null;
+
+async function runCombiScan() {
+  if (!activeTab) return;
+  const mand = ((currentBm && currentBm.features) || []).filter(f => (f.kind || 'M') !== 'A');
+  if (mand.length < 2) {
+    alert('🔎 2-document coverage needs at least TWO mandatory elements.\n\n'
+        + `This benchmark has ${mand.length}. A single monolithic feature cannot be split `
+        + 'between two documents, so no pair can ever "cover everything" — the analysis would '
+        + 'always come back empty.\n\nUse 🔬 Decompose into elements on the benchmark first.');
+    return;
+  }
+  const eligible = (lastDocs || []).filter(d => d.status === 'fetched' && d.digest_len);
+  const gap = (lastDocs || []).filter(d => d.status === 'fetched' && !d.digest_len).length;
+  if (eligible.length < 2) { appendMsg({ role: 's', text: 'Need ≥2 candidates with a stored digest — 🔁 backfill first.' }); return; }
+  const passes = Math.ceil(eligible.length / 25);
+  if (!confirm(`🔎 Investigate 2-document coverage — STAGE 1\n\n`
+      + `Maps which of the ${mand.length} element(s) each of the ${eligible.length} candidate(s) `
+      + `discloses, from stored digests (~${passes} bulk pass(es)), then derives the pairs that `
+      + `together cover everything.\n\n`
+      + (gap ? `⚠ ${gap} candidate(s) have NO digest and will be SKIPPED — 🔁 backfill to include them.\n\n` : '')
+      + `Verdicts are from SUMMARIES at this stage; stage 2 confirms the finalists against full text.\n\n`
+      + `Continue?`)) return;
+  const btn = $('combi-scan'); btn.disabled = true;
+  setBusy(true, `Combi stage 1: element coverage over ${eligible.length} candidates`);
+  const res = await api(`/api/tabs/${activeTab}/combi-scan`, {
+    method: 'POST', body: JSON.stringify({ model: readModelValue() }) });
+  setBusy(false); btn.disabled = false;
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  combiScan = res;
+  renderCombiScanPanel();
+  await reloadChat();
+}
+
+async function runCombiVerify() {
+  if (!activeTab || !combiScan) return;
+  // Full-read only the documents that actually appear in the shortlisted pairs.
+  const top = (combiScan.pairs || []).filter(p => p.complete).slice(0, 5);
+  const pool = (top.length ? top : (combiScan.pairs || []).slice(0, 5));
+  const ids = [...new Set(pool.flatMap(p => [p.a_id, p.b_id]))].slice(0, 24);
+  if (!ids.length) { appendMsg({ role: 's', text: 'No shortlisted pairs to verify.' }); return; }
+  if (!confirm(`🔎 STAGE 2 — confirm against FULL text\n\n`
+      + `Re-reads the full primary text of ${ids.length} finalist document(s) from the top `
+      + `${pool.length} pair(s), replacing their digest-based verdicts with citable ones.\n\n`
+      + `This is a full read per document — the expensive, accurate pass. A shortlisted pair `
+      + `can legitimately FALL AWAY here if the full text doesn't bear the digest out.\n\nContinue?`)) return;
+  setBusy(true, `Combi stage 2: full-text re-read of ${ids.length} finalists`);
+  const res = await api(`/api/tabs/${activeTab}/combi-verify`, {
+    method: 'POST', body: JSON.stringify({ doc_ids: ids, model: readModelValue() }) });
+  setBusy(false);
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  combiScan = res;
+  renderCombiScanPanel();
+  await reloadChat();
+}
+
+function renderCombiScanPanel() {
+  const panel = $('combi-panel');
+  panel.classList.remove('hidden');
+  panel.innerHTML = '';
+  const r = combiScan;
+  const complete = (r.pairs || []).filter(p => p.complete);
+  const head = document.createElement('div');
+  head.className = 'combi-head';
+  head.innerHTML = `<b>🔎 2-document coverage — found by the tool</b> `
+    + `<span class="muted">(${complete.length} pair(s) cover ALL ${r.elements} element(s); `
+    + `verdicts from ${r.depth === 'full' ? 'FULL TEXT' : 'digests — stage 2 not run yet'}. `
+    + `This rating is independent of every other score.)</span>`;
+  panel.appendChild(head);
+  const actions = document.createElement('div');
+  actions.className = 'combi-actions';
+  const v = document.createElement('button');
+  v.className = 'btn small';
+  v.textContent = '🔬 Stage 2: confirm finalists on FULL text';
+  v.title = 'Re-read the shortlisted pairs\' documents in full and replace their digest-based verdicts with citable ones. A pair can fall away here.';
+  v.onclick = () => runCombiVerify();
+  actions.appendChild(v);
+  panel.appendChild(actions);
+  if (!(r.pairs || []).length) {
+    const m = document.createElement('div');
+    m.className = 'muted';
+    m.textContent = 'No genuine 2-document combination found: no pair where EACH document '
+      + 'contributes an element the other lacks (one document subsuming another is not a combination).';
+    panel.appendChild(m);
+    return;
+  }
+  for (const p of r.pairs.slice(0, 12)) {
+    const row = document.createElement('div');
+    row.className = 'combi-row';
+    row.innerHTML =
+      `<span class="chip ${p.complete ? 'ok' : 'warn'}">${p.complete ? '✓ covers all' : 'partial'}</span>`
+      + `<b>${p.a}</b> + <b>${p.b}</b> `
+      + `<span class="chip">rating ${p.rating}/10</span>`
+      + `<span class="chip" title="digest = summary-based (stage 1); full = re-read against primary text (stage 2)">${p.depth === 'full' ? '📖 full text' : '🧾 digest'}</span>`
+      + `<div class="muted">only in ${p.a}: ${p.a_only.join('; ') || '—'}<br>`
+      + `only in ${p.b}: ${p.b_only.join('; ') || '—'}</div>`;
+    panel.appendChild(row);
+  }
+}
+
+$('combi-scan').onclick = () => runCombiScan();
 
 function runCombi() {
   combiResult = computeCombis();
