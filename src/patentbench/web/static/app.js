@@ -1059,19 +1059,27 @@ async function runCombiScan() {
   await reloadChat();
 }
 
-async function runCombiVerify() {
+async function runCombiVerify({ ids: explicitIds = null } = {}) {
   if (!activeTab || !combiScan) return;
-  // Full-read the SOLO hits first — they are the strongest claim being made, so they are
-  // the ones that most need confirming — then the documents in the shortlisted pairs.
-  const soloIds = (combiScan.solo || []).slice(0, 8).map(s => s.id);
-  const top = (combiScan.pairs || []).filter(p => p.complete).slice(0, 5);
-  const pool = (top.length ? top : (combiScan.pairs || []).slice(0, 5));
-  const ids = [...new Set([...soloIds, ...pool.flatMap(p => [p.a_id, p.b_id])])].slice(0, 24);
-  if (!ids.length) { appendMsg({ role: 's', text: 'No shortlisted solo hits or pairs to verify.' }); return; }
+  let ids, blurb;
+  if (explicitIds) {
+    // Per-pair "🔬 verify this pair" — deep-read exactly the two documents the user picked.
+    ids = [...new Set(explicitIds)];
+    blurb = `the ${ids.length} document(s) of this pair`;
+  } else {
+    // Full-read the SOLO hits first — they are the strongest claim being made, so they are
+    // the ones that most need confirming — then the documents in the shortlisted pairs.
+    const soloIds = (combiScan.solo || []).slice(0, 8).map(s => s.id);
+    const top = (combiScan.pairs || []).filter(p => p.complete).slice(0, 5);
+    const pool = (top.length ? top : (combiScan.pairs || []).slice(0, 5));
+    ids = [...new Set([...soloIds, ...pool.flatMap(p => [p.a_id, p.b_id])])].slice(0, 24);
+    blurb = `${ids.length} finalist document(s)`
+      + (soloIds.length ? ` (${soloIds.length} that cover everything ALONE — the strongest claim, so the most worth confirming)` : '');
+  }
+  if (!ids.length) { appendMsg({ role: 's', text: 'No documents to verify.' }); return; }
   if (!confirm(`🔎 STAGE 2 — confirm against FULL text\n\n`
-      + `Re-reads the full primary text of ${ids.length} finalist document(s)`
-      + (soloIds.length ? ` (${soloIds.length} that cover everything ALONE — the strongest claim, so the most worth confirming)` : '')
-      + `, replacing their digest-based verdicts with citable ones.\n\n`
+      + `Re-reads the full primary text of ${blurb}, replacing their digest/screen verdicts `
+      + `with citable ones.\n\n`
       + `This is a full read per document — the expensive, accurate pass. A solo hit or a pair `
       + `can legitimately FALL AWAY here if the full text doesn't bear the digest out.\n\nContinue?`)) return;
   setBusy(true, `Combi stage 2: full-text re-read of ${ids.length} finalists`);
@@ -1126,7 +1134,7 @@ function renderCombiScanPanel() {
       row.className = 'combi-row';
       row.innerHTML = `<span class="chip ok">✓ alone</span><b>${esc(s.number)}</b> `
         + `<span class="chip">${s.mand_total}/${s.mand_total} mandatory</span>`
-        + (s.add_total ? `<span class="chip" title="Additional (bonus) elements — the tiebreaker among documents that all cover the mandatory set">➕ ${s.add_cov}/${s.add_total} additional</span>` : '')
+        + additionalChip(s)
         + `<span class="chip">${{ full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' }[s.depth] || s.depth}</span>`;
       panel.appendChild(row);
     }
@@ -1151,12 +1159,30 @@ function renderCombiScanPanel() {
       `<span class="chip ${p.complete ? 'ok' : 'warn'}">${p.complete ? '✓ covers all' : 'partial'}</span>`
       + `<b>${p.a}</b> + <b>${p.b}</b> `
       + `<span class="chip">rating ${p.rating}/10</span>`
-      + (p.add_total ? `<span class="chip" title="Additional (bonus) elements the pair covers — they raise the rating, never lower it">➕ ${p.add_cov}/${p.add_total} additional${p.add_bonus ? ` (+${p.add_bonus})` : ''}</span>` : '')
+      + additionalChip(p)
       + `<span class="chip" title="screen = fast generous cut (stage 0); digest = summary-based (stage 1); full = re-read against primary text (stage 2). A pair is only as trustworthy as its weaker document.">${{ full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' }[p.depth] || p.depth}</span>`
       + `<div class="muted">only in ${p.a}: ${p.a_only.join('; ') || '—'}<br>`
       + `only in ${p.b}: ${p.b_only.join('; ') || '—'}</div>`;
+    if (p.depth !== 'full') {
+      const vb = document.createElement('button');
+      vb.className = 'btn small';
+      vb.textContent = '🔬 verify this pair on full text';
+      vb.title = 'Deep-read BOTH documents\' full primary text against every element, replacing their digest/screen verdicts with citable ones. Confirms (or drops) this specific pair.';
+      vb.onclick = () => runCombiVerify({ ids: [p.a_id, p.b_id] });
+      row.appendChild(vb);
+    }
     panel.appendChild(row);
   }
+}
+
+// Additional-coverage chip that DISTINGUISHES full (YES) from partial: '9/9' counting both
+// equally hid that a pair could be 1 solid + 8 stretchy, ranking below a 7-solid pair and
+// looking broken. Now full ✓ and partial ~ are shown apart, matching the bonus-based order.
+function additionalChip(p) {
+  if (!p.add_total) return '';
+  const full = p.add_full ?? p.add_cov, part = p.add_partial ?? 0;
+  const label = part ? `${full}✓ +${part}~ /${p.add_total}` : `${full}/${p.add_total}`;
+  return `<span class="chip" title="Additional (bonus) elements: ✓ = full disclosure, ~ = partial/stretched (half credit). Ranking uses the weighted bonus (+${p.add_bonus || 0}), so several full disclosures beat many partial ones — which is why a lower ✓ count can rank above a higher raw count. Absence never lowers the rating.">➕ ${label} additional${p.add_bonus ? ` (+${p.add_bonus})` : ''}</span>`;
 }
 
 $('combi-scan').onclick = () => runCombiScan();

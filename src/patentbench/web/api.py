@@ -3269,19 +3269,22 @@ def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list
         cov = _cov_map(d)
         if any(cov.get(e["name"], "no") != "yes" for e in mand):
             continue
-        bonus, add_cov = 0.0, 0
+        bonus, add_full, add_part = 0.0, 0, 0
         for e in add:
             s = cov.get(e["name"], "no")
             unit = (int(e.get("weight", 1)) / 5) * ADD_UNIT
             if s == "yes":
                 bonus += unit
-                add_cov += 1
+                add_full += 1
             elif s == "partial":
                 bonus += unit * 0.5
-                add_cov += 1
+                add_part += 1
         out.append({"id": d["id"], "number": d.get("number"),
                     "mand_total": len(mand),
-                    "add_cov": add_cov, "add_total": len(add),
+                    # add_cov = full+partial (kept for compat); add_full / add_partial split
+                    # them so a '9/9' that is mostly stretch reads as weaker than a '7 full'
+                    "add_cov": add_full + add_part, "add_full": add_full,
+                    "add_partial": add_part, "add_total": len(add),
                     "add_bonus": round(min(ADD_CAP, bonus), 2),
                     "depth": d.get("combi_depth") or "screen"})
     out.sort(key=lambda s: (-s["add_bonus"], -s["add_cov"], s["number"] or ""))
@@ -3334,16 +3337,16 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
             if not only_a or not only_b:
                 continue                      # not a combination: one subsumes the other
             # ADDITIONAL: bonus only — never part of `complete`, never a penalty.
-            bonus, add_cov = 0.0, 0
+            bonus, add_full, add_part = 0.0, 0, 0
             for e in add:
                 u, _, _ = best(e["name"])
                 unit = (int(e.get("weight", 1)) / 5) * ADD_UNIT
                 if u == "yes":
                     bonus += unit
-                    add_cov += 1
+                    add_full += 1
                 elif u == "partial":
                     bonus += unit * 0.5
-                    add_cov += 1
+                    add_part += 1
             bonus = min(ADD_CAP, bonus)
             depth = min((A.get("combi_depth") or "screen", B.get("combi_depth") or "screen"),
                         key=lambda d: _DEPTH_RANK.get(d, 0))
@@ -3357,7 +3360,8 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
                 # ranks instead (below), and is reported separately — an honest metric plus
                 # a visible bonus beats one number that quietly means two things.
                 "rating": round(10.0 * w / total_w, 1),
-                "add_bonus": round(bonus, 2), "add_cov": add_cov, "add_total": len(add),
+                "add_bonus": round(bonus, 2), "add_cov": add_full + add_part,
+                "add_full": add_full, "add_partial": add_part, "add_total": len(add),
                 "covered_w": round(w, 1), "total_w": total_w,
                 "a_only": only_a[:12], "b_only": only_b[:12],
                 "depth": depth,
