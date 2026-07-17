@@ -400,10 +400,19 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
     bm = db.get_benchmark(tab_id)
     feats = (bm or {}).get("features") or []
     add_feats: list[dict] = []
+    keep: list[dict] = []          # features passed through untouched (not re-split)
     if body.source == "text":
         text = (body.text or "").strip()
         if len(text) < 20:
             raise HTTPException(400, "paste the claim text to decompose")
+    elif body.source == "additional":
+        # Split ONLY the additional features; mandatory elements are already granular and
+        # re-cutting them would discard wording the user reviewed and accepted.
+        add_feats = [f for f in feats if (f.get("kind") or "M") == "A"]
+        if not add_feats:
+            raise HTTPException(400, "this benchmark has no additional features to decompose")
+        text = ""
+        keep = [f for f in feats if (f.get("kind") or "M") != "A"]
     elif body.source == "features":
         if not feats:
             raise HTTPException(400, "this benchmark has no features to decompose")
@@ -421,7 +430,7 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
         if not text:
             raise HTTPException(400, "the benchmark has no claims/text to decompose")
     model = _read_model(body.model)
-    elements: list[dict] = []
+    elements: list[dict] = list(keep)
     models: list[str] = []
     if text.strip():
         res = claude_bridge.decompose_claim(text, model=model)
@@ -3155,6 +3164,10 @@ def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
 # unaffected by, how either document ranks on its own.
 
 COMBI_SCREEN_BATCH = int(os.environ.get("PB_COMBI_SCREEN_BATCH", "40"))
+# The rigorous coverage pass is FAR heavier per document than a re-score: a full digest each,
+# times every element, with evidence. At 25 it timed out (300s) and lost the whole batch, so
+# it gets its own smaller size — and a failed batch is split and retried rather than dropped.
+COMBI_SCAN_BATCH = int(os.environ.get("PB_COMBI_SCAN_BATCH", "8"))
 # A-feature bonus, mirroring the ➕ additional read's scale (app.js ADD_UNIT/ADD_CAP): a
 # present additional element RAISES a pair's rating, its absence never lowers it.
 ADD_UNIT, ADD_CAP = 0.3, 1.0
@@ -3220,6 +3233,22 @@ def _merge_cov(doc: dict, judged: list[dict], verdicts: list[dict], depth: str,
     weakest = min((r.get("depth") or "screen" for r in keep),
                   key=lambda d: _DEPTH_RANK.get(d, 0), default="screen")
     return json.dumps(keep, ensure_ascii=False), weakest
+
+
+def _rigorous(doc: dict, elements: list[dict]) -> bool:
+    """Has every MANDATORY element of this document been judged at digest depth or better?
+
+    The 🩺 screen is deliberately generous — it over-includes on purpose, because its only
+    job is to rank who deserves a real look. Letting those verdicts through would publish
+    'covers everything' findings built from a guess, so nothing screen-only ever reaches
+    the pairs or the solo list. Additional elements may still be screen-level: they are a
+    bonus and never decide a finding."""
+    have = _cov_records(doc)
+    mand = [e for e in elements if (e.get("kind") or "M") != "A"]
+    if not mand:
+        return False
+    return all(_DEPTH_RANK.get((have.get(e["name"]) or {}).get("depth") or "", -1)
+               >= _DEPTH_RANK["digest"] for e in mand)
 
 
 def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list[dict]:
@@ -3426,9 +3455,10 @@ def combi_screen_ep(tab_id: int, body: schemas.CombiScreenRequest):
     note = (f" ⚠ {missed} candidate(s) NOT screened ({len(errors)} batch(es) failed: {why}) — "
             "they cannot reach the shortlist until you re-run." if missed > 0 else "")
     db.append_message(tab_id, "s",
-        f"🩺 Fast screen (stage 0, {model}) over {len(hits)} candidate(s) in {len(batches)} "
-        f"pass(es) against {len(elements)} element(s)"
-        + (f" — {reused} already assessed, reused rather than re-read" if reused else "")
+        f"🩺 Fast screen (stage 0, {model}) over {len(hits) + reused} candidate(s) in "
+        f"{len(batches)} pass(es) against {len(elements)} element(s)"
+        + (f" — {len(hits)} newly screened, {reused} already assessed and REUSED rather than "
+           "re-read" if reused else "")
         + f": shortlisted the top {len(keep)} for a closer look. Generous by design "
         "(broad/implicit readings included) — this only decides WHO gets the rigorous "
         f"pass, it is not a verdict.{note}")
@@ -3475,17 +3505,26 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
     batches: list[tuple[list[dict], list[dict]]] = []
     for names, group in todo.items():
         subset = [by_name[n] for n in names]
-        for i in range(0, len(group), BULK_DIGEST_BATCH):
-            batches.append((subset, group[i:i + BULK_DIGEST_BATCH]))
+        for i in range(0, len(group), COMBI_SCAN_BATCH):
+            batches.append((subset, group[i:i + COMBI_SCAN_BATCH]))
     errors: list[str] = []
+    done_ids: set[int] = set()
     lock = threading.Lock()
 
     def one(job: tuple[list[dict], list[dict]]) -> None:
+        """Run a batch; on failure SPLIT it and retry the halves. Timeouts scale with batch
+        size, so halving usually turns one dead batch into two that land — far better than
+        losing 25 documents to a single slow call."""
         subset, batch = job
         res = claude_bridge.combi_coverage_digests(subset, batch, model=model)
         if "error" in res:
-            with lock:
-                errors.append(res["error"])
+            if len(batch) > 1:
+                half = len(batch) // 2
+                one((subset, batch[:half]))
+                one((subset, batch[half:]))
+            else:
+                with lock:
+                    errors.append(f"{batch[0].get('number')}: {res['error']}")
             return
         got = res.get("results") or {}
         for d in batch:
@@ -3493,11 +3532,16 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
             if v is not None:
                 cov, depth = _merge_cov(d, subset, v, "digest", elements)
                 db.update_document(d["id"], combi_coverage=cov, combi_depth=depth)
+                with lock:
+                    done_ids.add(d["id"])
 
     with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
         list(ex.map(one, batches))
-    fresh = [d for d in db.list_documents(tab_id, full=True) if d.get("combi_coverage")]
-    scanned = len(fresh)
+    # Findings come ONLY from rigorously-assessed documents. Counting every row that has any
+    # coverage conflated the 🩺 screen's guesses with real verdicts — and made `missed` go
+    # negative (50 shortlisted minus 284 "scanned").
+    fresh = [d for d in db.list_documents(tab_id, full=True) if _rigorous(d, elements)]
+    scanned = reused + len(done_ids)
     if not scanned:
         raise HTTPException(400, f"combi scan failed: {errors[0] if errors else 'no verdicts parsed'}")
     pairs = _combi_pairs(elements, fresh, body.top_pairs)
@@ -3507,10 +3551,10 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
     # Name the actual error: "11 batches failed" without a reason leaves the user staring at
     # results drawn from a fraction of the corpus with no idea why.
     why = "; ".join(sorted({e[:80] for e in errors})[:2])
-    note = (f" ⚠ {missed} of {len(docs)} candidate(s) NOT scanned ({len(errors)} batch(es) "
-            f"failed: {why}) — results below are drawn only from the {scanned} that were, and "
-            "a pair or solo hit among the rest cannot be found until you re-run."
-            if missed else "")
+    note = (f" ⚠ {missed} of {len(docs)} shortlisted candidate(s) NOT assessed ({len(errors)} "
+            f"failed after splitting and retrying: {why}) — findings below are drawn only from "
+            f"the {scanned} that were, and a pair or solo hit among the rest cannot be found "
+            "until you re-run." if missed > 0 else "")
     db.append_message(tab_id, "s",
         f"🔎 Combi scan (stage 1, {model}) in {len(batches)} bulk pass(es) against "
         f"{len(elements)} element(s) of the claimed invention"

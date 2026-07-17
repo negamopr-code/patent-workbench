@@ -558,10 +558,15 @@ async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false } 
   if (!activeTab) return;
   const feats = bm.features || [];
   const mand = feats.filter(f => (f.kind || 'M') !== 'A');
-  // Prefer the user's own mandatory features as the source (that IS the claim, in their
-  // words); fall back to the benchmark document's claims.
-  const source = mand.length ? 'features' : 'benchmark';
-  const what = mand.length ? `${mand.length} mandatory feature(s)` : 'the benchmark\'s claims';
+  const addF = feats.filter(f => (f.kind || 'M') === 'A');
+  // Once the mandatory elements are already granular, re-splitting them would re-cut the
+  // claim and throw away wording that was reviewed and accepted — so only the additional
+  // features are split. Prefer the user's own features as the source (that IS the claim, in
+  // their words); fall back to the benchmark document's claims.
+  const split = mand.length > 2 && addF.length;
+  const source = split ? 'additional' : (mand.length ? 'features' : 'benchmark');
+  const what = split ? `${addF.length} additional feature(s) (your ${mand.length} mandatory elements are already split and stay as they are)`
+             : mand.length ? `${mand.length} mandatory feature(s)` : 'the benchmark\'s claims';
   if (!skipConfirm && !confirm(`🔬 Decompose ${what} into separable elements?\n\n`
       + `One cheap call. The proposed elements open in the editor for you to review, edit `
       + `and re-weight — NOTHING is saved or scored until you click save.\n\n`
@@ -1010,13 +1015,17 @@ async function runCombiScan() {
   const ids = (scr.shortlist || []).map(s => s.id);
   await reloadChat();
   if (ids.length < 2) { setBusy(false); btn.disabled = false; appendMsg({ role: 's', text: '🩺 Screen shortlisted <2 candidates — nothing to combine.' }); return; }
-  // 🔎 stage 1 — rigorous, but only over the shortlist.
-  setBusy(true, `🔎 Stage 1: element coverage over the ${ids.length} shortlisted (of ${scr.screened})`);
+  // 🔎 stage 1 — rigorous, but only over the shortlist. Report screened + REUSED as the pool
+  // considered: with the incremental pass a re-run legitimately screens 0 new candidates,
+  // and "(of 0)" reads as a failure when it actually means "nothing needed re-reading".
+  const pool = (scr.screened || 0) + (scr.reused || 0);
+  setBusy(true, `🔎 Stage 1: element coverage over the ${ids.length} shortlisted `
+    + `(of ${pool}${scr.reused ? `; ${scr.reused} reused, ${scr.screened} newly screened` : ''})`);
   const res = await api(`/api/tabs/${activeTab}/combi-scan`, {
     method: 'POST', body: JSON.stringify({ doc_ids: ids, model: readModelValue() }) });
   setBusy(false); btn.disabled = false;
   if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
-  combiScan = { ...res, screened: scr.screened, dropped: scr.dropped };
+  combiScan = { ...res, screened: (scr.screened || 0) + (scr.reused || 0), dropped: scr.dropped };
   renderCombiScanPanel();
   await reloadChat();
 }

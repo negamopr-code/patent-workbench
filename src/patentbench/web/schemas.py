@@ -227,7 +227,10 @@ class DecomposeRequest(BaseModel):
     """🔬 Propose a split of the claimed invention into separable elements. Proposes only —
     the result is reviewed and saved through the normal features path. Source, in order:
     'features' (the benchmark's mandatory features), 'benchmark' (its claims), 'text'."""
-    source: Literal["features", "benchmark", "text"] = "features"
+    # 'additional' splits ONLY the additional features and returns the mandatory ones
+    # untouched — re-splitting elements that are already granular would re-cut the claim
+    # and throw away wording the user has already reviewed.
+    source: Literal["features", "additional", "benchmark", "text"] = "features"
     text: str | None = Field(default=None, max_length=MAX_QUESTION)
     model: str | None = None
 
