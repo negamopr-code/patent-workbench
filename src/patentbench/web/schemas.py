@@ -1,6 +1,8 @@
 """Pydantic request models for the Patent Workbench API."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -129,6 +131,14 @@ class PsaRequest(BaseModel):
     model: str | None = None           # answer model; None = chat default
     use_discussions: bool = True       # 💬 feed ALL chats' exchanges about D1/D2 into the run
     stretch: bool = False              # 🪄 advocacy mode: argue disclosed, silent on gaps
+    # What the run assesses as the CLAIMED INVENTION. Explicit, never inferred — the
+    # basis used is recorded on the run message so a past run can always be read back.
+    #   'benchmark' (default, unchanged) — the benchmark document
+    #   'features'  — the benchmark's weighted target features
+    #   'text'      — basis_text verbatim (e.g. a feature pasted in the chat box); it
+    #                 REPLACES the benchmark, which is then not sent at all
+    basis: Literal["benchmark", "features", "text"] = "benchmark"
+    basis_text: str | None = Field(default=None, max_length=MAX_QUESTION)
 
 
 class DeepCompareRequest(BaseModel):

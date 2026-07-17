@@ -169,7 +169,14 @@
           <label class="model-pick answer-pick" title="How Claude should shape the answer. Default = concise (or 📝 Full). Other presets impose a structure, e.g. claims grouped by focus → what the reference discloses, with [paragraph]/claim/figure citations.">📐 <select id="answer-format"></select></label>
         </div>
         <button id="best-match" class="btn small" title="Pre-fill a ranking question">🏆 Best match</button>
-        <button id="psa-btn" class="btn small" title="⚖️ Problem-solution approach: runs your uploaded methodology document STRICTLY step-by-step, with the benchmark as the claimed invention and the TWO ticked candidates as D1/D2 (tick their checkboxes in the 📚 Candidates list — first tick = D1, second = D2).">⚖️ Problem-solution</button>
+        <label class="check small" title="BASIS of the ⚖️/🪄 run — what the approach assesses as the CLAIMED INVENTION. 🎯 Benchmark = the benchmark document (the default). 🧩 Benchmark features = its weighted target features. ✍️ Chat box text = whatever you pasted in the chat box below, used VERBATIM as the invention — the benchmark is then not sent at all. The basis is always named on the run, so you can see afterwards what it was based on.">basis:
+          <select id="psa-basis" class="small">
+            <option value="benchmark" selected>🎯 Benchmark document</option>
+            <option value="features">🧩 Benchmark features</option>
+            <option value="text">✍️ Chat box text</option>
+          </select>
+        </label>
+        <button id="psa-btn" class="btn small" title="⚖️ Problem-solution approach: runs your uploaded methodology document STRICTLY step-by-step, with the chosen BASIS as the claimed invention and the TWO ticked candidates as D1/D2 (tick their checkboxes in the 📚 Candidates list — first tick = D1, second = D2). Pick the basis with the 'basis:' selector — it is shown for confirmation before the run.">⚖️ Problem-solution</button>
         <button id="psa-stretch-btn" class="btn small" title="🪄 Argumentation stretch: same problem-solution run (method + format + D1/D2), but drafted as an ADVOCATE — argues affirmatively from what IS disclosed (incl. stretched-but-anchored interpretations), stays silent about non-disclosed features. Everything stated remains true and cite-verifiable; the stretch is in interpretation and emphasis, never in facts.">🪄 Argumentation stretch</button>
         <button id="psa-method-btn" class="btn small" title="Upload/replace the problem-solution METHODOLOGY document (PDF/TXT/MD) — the steps, followed verbatim on every ⚖️ run. Stored permanently, shared by ALL tabs.">📋 method…</button>
         <input type="file" id="psa-file" accept=".pdf,.txt,.md" hidden>

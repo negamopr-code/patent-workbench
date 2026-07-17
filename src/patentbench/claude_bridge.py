@@ -852,7 +852,9 @@ _PSA_INSTRUCTION = (
     "• If a step cannot be executed with the provided material, say so explicitly "
     "under that step's heading (and what is missing), then continue with the next "
     "step — never silently drop it.\n"
-    "• The CLAIMED INVENTION under assessment is the BENCHMARK document. The two "
+    "• The CLAIMED INVENTION under assessment is given above under 'CLAIMED "
+    "INVENTION UNDER ASSESSMENT' — assess THAT, and only that, whether it is a "
+    "whole document or a single feature/claim the user supplied verbatim. The two "
     "selected documents D1 and D2 are the prior art the approach is based on "
     "(e.g. closest prior art and combination document — assign their roles as the "
     "methodology directs).\n"
@@ -884,16 +886,20 @@ _PSA_STRETCH_INSTRUCTION = (
     "version of that step's result.")
 
 
-def psa(method_text: str, benchmark: dict, docs: list[dict],
+def psa(method_text: str, benchmark: dict | None, docs: list[dict],
         model: str | None = None, format_text: str | None = None,
-        discussions: list[dict] | None = None, stretch: bool = False) -> dict:
+        discussions: list[dict] | None = None, stretch: bool = False,
+        invention: dict | None = None) -> dict:
     """⚖️ Problem-solution approach: run the user's uploaded methodology STRICTLY,
-    step by step, over the benchmark (claimed invention) + two user-selected
-    prior-art documents (full primary text). `format_text` = the user's uploaded
-    output-format document, applied in combination with the steps; `discussions`
-    = ALL chats' exchanges about D1/D2, reused as prior findings; `stretch` = 🪄
-    advocacy mode (argue the disclosed, silent on gaps, facts stay true). Same
-    return contract as chat()."""
+    step by step, over the CLAIMED INVENTION + two user-selected prior-art documents
+    (full primary text). `invention` = {'label', 'text'} — an explicit basis (e.g. a
+    feature the user pasted) that REPLACES the benchmark as the claimed invention;
+    the benchmark is then not sent at all, so the run assesses exactly what the user
+    chose and nothing else. Without it the benchmark document is the invention.
+    `format_text` = the user's uploaded output-format document, applied in combination
+    with the steps; `discussions` = ALL chats' exchanges about D1/D2, reused as prior
+    findings; `stretch` = 🪄 advocacy mode (argue the disclosed, silent on gaps, facts
+    stay true). Same return contract as chat()."""
     parts = [_PREAMBLE, _GROUNDING_INSTRUCTION]
     parts.append("USER-SUPPLIED METHODOLOGY (BINDING — the answer must follow it "
                  "verbatim, step by step):\n\n" + (method_text or "")[:MAX_METHOD_CHARS])
@@ -903,8 +909,16 @@ def psa(method_text: str, benchmark: dict, docs: list[dict],
             "follow this document exactly, in combination with the methodology "
             "steps above; where the two conflict on structure, this format "
             "document wins):\n\n" + format_text[:MAX_METHOD_CHARS])
-    parts.append("BENCHMARK DOCUMENT — the claimed invention under assessment:\n\n"
-                 + _benchmark_block(benchmark))
+    if invention:
+        parts.append(
+            f"CLAIMED INVENTION UNDER ASSESSMENT — {invention['label']}. The user "
+            "chose THIS as the basis of the run; it is the invention the approach "
+            "assesses, verbatim. No benchmark document accompanies it — do not ask "
+            "for one and do not assess anything else:\n\n"
+            + (invention.get("text") or "")[:MAX_BENCHMARK_CHARS])
+    else:
+        parts.append("CLAIMED INVENTION UNDER ASSESSMENT — the benchmark document:"
+                     "\n\n" + _benchmark_block(benchmark or {}))
     per = max(MIN_DOC_CHARS, min(MAX_FULLTEXT_CHARS,
                                  MAX_FOCUS_CHARS // max(1, len(docs))))
     for i, d in enumerate(docs, 1):

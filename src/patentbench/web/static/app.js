@@ -1746,13 +1746,35 @@ async function runPsa(stretch) {
     .map(id => (lastDocs.find(d => d.id === id) || {}).number || `#${id}`).join(' + ');
   const head = stretch ? '🪄 Argumentation stretch (problem-solution approach)'
                        : '⚖️ Problem-solution approach';
-  appendMsg({ role: 'q', text: `${head} on ${nums} (method: ${psaDocs.method.name}`
+  // BASIS = what the run assesses as the claimed invention. Explicit, never inferred:
+  // it is confirmed before the call and named on the run message afterwards, so a run
+  // is never a mystery about what it was based on.
+  const basis = $('psa-basis').value;
+  const basisText = basis === 'text' ? $('q').value.trim() : '';
+  if (basis === 'text' && basisText.length < 20) {
+    alert('Basis is ✍️ "Chat box text", but the chat box is empty (or too short).\n\n'
+        + 'Paste the feature / claim text the approach should assess into the chat box '
+        + 'below, or switch the basis selector to 🎯 Benchmark document.');
+    $('q').focus();
+    return;
+  }
+  const basisLabel = { benchmark: '🎯 benchmark document',
+                       features: `🧩 benchmark features (${(currentBm && currentBm.features || []).length})`,
+                       text: `✍️ pasted text (${basisText.length} chars)` }[basis];
+  if (!confirm(`${head}\n\n`
+      + `BASIS (the claimed invention assessed): ${basisLabel}\n`
+      + (basis === 'text' ? `  "${basisText.slice(0, 160)}${basisText.length > 160 ? '…' : ''}"\n`
+                          + '  The benchmark document will NOT be sent.\n' : '')
+      + `\nD1/D2 (prior art): ${nums}\n`
+      + `Method: ${psaDocs.method.name}${psaDocs.format ? `\nFormat: ${psaDocs.format.name}` : ''}\n\nRun?`)) return;
+  appendMsg({ role: 'q', text: `${head} on ${nums} (basis: ${basisLabel}, method: ${psaDocs.method.name}`
     + (psaDocs.format ? `, format: ${psaDocs.format.name}` : '') + ')' });
   setBusy(true, stretch ? 'Argumentation stretch' : 'Problem-solution approach');
   const res = await api(`/api/tabs/${tabAtSend}/psa`, {
     method: 'POST',
     body: JSON.stringify({ doc_ids: [...docSelection], model: $('model').value,
                            use_discussions: $('psa-discuss').checked,
+                           basis, basis_text: basisText || null,
                            stretch }),
   });
   setBusy(false);

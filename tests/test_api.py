@@ -2596,6 +2596,89 @@ def test_psa_runs_method_over_benchmark_and_two_docs(psa_client, monkeypatch):
     assert r["messages"][-1]["text"].startswith("STEP 1")
 
 
+def _psa_tab_with_docs(psa_client, name="Basis"):
+    _upload_method(psa_client)
+    tab = psa_client.post("/api/tabs", json={"name": name}).json()
+    psa_client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP1111111A1"})
+    psa_client.post(f"/api/tabs/{tab['id']}/documents",
+                    json={"text": "CN113964850 US11909216B2"})
+    ids = [d["id"] for d in
+           psa_client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]]
+    return tab["id"], ids
+
+
+def _capture_psa(monkeypatch):
+    seen = {}
+    def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
+                 discussions=None, stretch=False, invention=None):
+        seen.update(benchmark=benchmark, invention=invention)
+        return {"answer": "STEP 1: …", "model": model}
+    monkeypatch.setattr(claude_bridge, "psa", fake_psa)
+    return seen
+
+
+def test_psa_basis_defaults_to_the_benchmark(psa_client, monkeypatch):
+    """Unchanged default: no basis given → the benchmark document is the invention."""
+    seen = _capture_psa(monkeypatch)
+    tid, ids = _psa_tab_with_docs(psa_client)
+    psa_client.post(f"/api/tabs/{tid}/psa", json={"doc_ids": ids})
+    assert seen["invention"] is None                       # → bridge renders the benchmark
+    assert seen["benchmark"]["number"] == "EP1111111A1"
+    msgs = psa_client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    q = [m for m in msgs if m["role"] == "q"][-1]
+    assert "basis: 🎯 benchmark EP1111111A1" in q["text"]   # the basis is on the record
+
+
+def test_psa_basis_text_replaces_the_benchmark(psa_client, monkeypatch):
+    """✍️ pasted text IS the claimed invention — the benchmark must NOT be sent, so the
+    run assesses exactly what the user chose."""
+    seen = _capture_psa(monkeypatch)
+    tid, ids = _psa_tab_with_docs(psa_client)
+    r = psa_client.post(f"/api/tabs/{tid}/psa", json={
+        "doc_ids": ids, "basis": "text",
+        "basis_text": "a hardware discharge-channel lockout during concurrent charging"})
+    assert r.status_code == 200
+    assert seen["benchmark"] is None                        # benchmark withheld
+    assert seen["invention"]["text"].startswith("a hardware discharge-channel lockout")
+    msgs = psa_client.get(f"/api/tabs/{tid}/state").json()["messages"]
+    q = [m for m in msgs if m["role"] == "q"][-1]
+    assert "basis: ✍️ pasted text (" in q["text"]           # readable back months later
+    c = [m for m in msgs if m["role"] == "c"][-1]
+    assert any(p["title"].startswith("basis: ✍️") for p in c["participants"])
+
+
+def test_psa_basis_text_requires_actual_text(psa_client, monkeypatch):
+    """Choosing ✍️ text with an empty chat box must fail LOUDLY, not silently fall back
+    to the benchmark — a silent fallback is exactly the 'based on what?' confusion."""
+    _capture_psa(monkeypatch)
+    tid, ids = _psa_tab_with_docs(psa_client)
+    r = psa_client.post(f"/api/tabs/{tid}/psa",
+                        json={"doc_ids": ids, "basis": "text", "basis_text": "  "})
+    assert r.status_code == 400 and "paste the text" in r.json()["detail"]
+
+
+def test_psa_basis_features_uses_the_feature_spec(psa_client, monkeypatch):
+    seen = _capture_psa(monkeypatch)
+    tid, ids = _psa_tab_with_docs(psa_client, name="BasisF")
+    # a document benchmark that ALSO carries features (the two now coexist)
+    psa_client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                    json={"name": "a stacked battery pack", "weight": 5})
+    r = psa_client.post(f"/api/tabs/{tid}/psa", json={"doc_ids": ids, "basis": "features"})
+    assert r.status_code == 200
+    assert seen["benchmark"] is None
+    assert "a stacked battery pack" in seen["invention"]["text"]
+    q = [m for m in psa_client.get(f"/api/tabs/{tid}/state").json()["messages"]
+         if m["role"] == "q"][-1]
+    assert "basis: 🧩 benchmark features (1)" in q["text"]
+
+
+def test_psa_basis_features_needs_features(psa_client, monkeypatch):
+    _capture_psa(monkeypatch)
+    tid, ids = _psa_tab_with_docs(psa_client, name="BasisNoF")
+    r = psa_client.post(f"/api/tabs/{tid}/psa", json={"doc_ids": ids, "basis": "features"})
+    assert r.status_code == 400 and "no target features" in r.json()["detail"]
+
+
 def test_psa_prompt_is_strict_and_carries_all_parts(monkeypatch):
     captured = {}
     monkeypatch.setattr(claude_bridge, "_run_claude",
@@ -2608,11 +2691,33 @@ def test_psa_prompt_is_strict_and_carries_all_parts(monkeypatch):
     p = captured["p"]
     assert "USER-SUPPLIED METHODOLOGY (BINDING" in p
     assert "STEP 1: closest prior art." in p
-    assert "BENCHMARK DOCUMENT — the claimed invention" in p
+    assert "CLAIMED INVENTION UNDER ASSESSMENT — the benchmark document" in p
+    assert "[BENCHMARK — EP1 — Bench]" in p       # ...rendered from the benchmark
     assert "D1 — selected prior-art document 1 of 2" in p
     assert "D2 — selected prior-art document 2 of 2" in p
     assert "do not skip, merge, reorder" in p
     assert "never silently drop it" in p
+
+
+def test_psa_invention_replaces_the_benchmark_in_the_prompt(monkeypatch):
+    """A chosen basis (e.g. a pasted feature) IS the claimed invention: it goes in under
+    the same heading and the benchmark document is NOT sent at all — the run must assess
+    exactly what the user picked and nothing else."""
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, extra_args=None, cwd=None, timeout=None:
+                        captured.update(p=prompt) or {"answer": "ok", "model": model})
+    claude_bridge.psa("STEP 1: closest prior art.",
+                      {"number": "EP1", "title": "Bench", "claims": "1. A thing."},
+                      [{"number": "D1DOC", "title": "a", "claims": "1. x"},
+                       {"number": "D2DOC", "title": "b", "claims": "1. y"}],
+                      invention={"label": "text supplied by the user for this run",
+                                 "text": "a hardware discharge-channel lockout"})
+    p = captured["p"]
+    assert "CLAIMED INVENTION UNDER ASSESSMENT — text supplied by the user" in p
+    assert "a hardware discharge-channel lockout" in p
+    assert "EP1" not in p and "[BENCHMARK" not in p    # benchmark NOT sent
+    assert "D1 — selected prior-art document 1 of 2" in p   # prior art still there
 
 
 def test_psa_scanned_pdf_falls_back_to_vision_ocr(psa_client, monkeypatch):
@@ -2765,7 +2870,7 @@ def test_psa_prompt_discussions_block(monkeypatch):
 def test_psa_stretch_mode(psa_client, monkeypatch):
     seen = {}
     def fake_psa(method_text, benchmark, docs, model=None, format_text=None,
-                 discussions=None, stretch=False):
+                 discussions=None, stretch=False, invention=None):
         seen["stretch"] = stretch
         return {"answer": "advocacy draft", "model": model}
     monkeypatch.setattr(claude_bridge, "psa", fake_psa)

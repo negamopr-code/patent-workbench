@@ -2100,10 +2100,44 @@ async def psa_doc_upload(kind: str, bg: BackgroundTasks, file: UploadFile = File
     return {"ok": True, **meta}
 
 
+def _psa_invention(benchmark: dict | None,
+                   body: schemas.PsaRequest) -> tuple[dict | None, str]:
+    """Resolve what the ⚖️ run assesses, from the basis the user PICKED — never guessed.
+    Returns (invention | None, label): None = the benchmark document (the default), so
+    the caller sends it as before; otherwise {'label','text'} replaces it entirely.
+    The label is what the run message shows, so the basis is always readable back."""
+    if body.basis == "text":
+        text = (body.basis_text or "").strip()
+        if len(text) < 20:
+            raise HTTPException(400, "paste the text the approach should assess into the "
+                                     "chat box first — it is the claimed invention of "
+                                     "this run (basis: ✍️ text)")
+        return ({"label": "text supplied by the user for this run", "text": text},
+                f"✍️ pasted text ({len(text)} chars)")
+    if body.basis == "features":
+        feats = (benchmark or {}).get("features") or []
+        if not feats:
+            raise HTTPException(400, "this benchmark has no target features — define "
+                                     "them first, or run with basis: 🎯 benchmark")
+        return ({"label": "the benchmark's target feature combination",
+                 "text": _compose_feature_spec(feats)},
+                f"🧩 benchmark features ({len(feats)})")
+    if not benchmark or not (benchmark.get("text") or benchmark.get("claims")
+                             or benchmark.get("description")):
+        raise HTTPException(400, "set a benchmark (with content) first — it is "
+                                 "the claimed invention the approach assesses")
+    return None, f"🎯 benchmark {benchmark.get('number') or benchmark.get('title') or ''}".strip()
+
+
 @app.post("/api/tabs/{tab_id}/psa")
 def psa_run(tab_id: int, body: schemas.PsaRequest):
-    """⚖️ Run the uploaded methodology STRICTLY step-by-step: benchmark = claimed
-    invention, the two selected candidates = D1/D2. Appends to the tab's chat."""
+    """⚖️ Run the uploaded methodology STRICTLY step-by-step over the CLAIMED INVENTION
+    (the chosen basis) + the two selected candidates as D1/D2. Appends to the tab's chat.
+
+    The basis is EXPLICIT, never inferred: the benchmark document (default), the
+    benchmark's features, or text the user pasted — which replaces the benchmark
+    entirely. Whichever it is, it is named on the run message, so a past run can always
+    be read back to see what it assessed."""
     _tab_or_404(tab_id)
     method = _psa_doc("method")
     if not method:
@@ -2111,10 +2145,9 @@ def psa_run(tab_id: int, body: schemas.PsaRequest):
                                  "problem-solution document first (📋)")
     fmt = _psa_doc("format")   # optional: the answer's structure, if uploaded
     benchmark = db.get_benchmark(tab_id)
-    if not benchmark or not (benchmark.get("text") or benchmark.get("claims")
-                             or benchmark.get("description")):
-        raise HTTPException(400, "set a benchmark (with content) first — it is "
-                                 "the claimed invention the approach assesses")
+    invention, basis_label = _psa_invention(benchmark, body)
+    if invention:
+        benchmark = None       # the chosen basis IS the invention — send nothing else
     docs = []
     for did in body.doc_ids:
         d = db.get_document(did)
@@ -2144,19 +2177,23 @@ def psa_run(tab_id: int, body: schemas.PsaRequest):
     n_ex = sum(len(g["exchanges"]) for g in discussions) if discussions else 0
     head = ("🪄 Argumentation stretch (problem-solution approach)" if body.stretch
             else "⚖️ Problem-solution approach")
+    # Name the basis on the run itself: 'what was this based on?' must be answerable
+    # from the chat months later, without re-deriving it from the tab's current state.
     db.append_message(tab_id, "q", f"{head} on {nums} "
-                                   f"(method: {method['name']}"
+                                   f"(basis: {basis_label}, method: {method['name']}"
                                    + (f", format: {fmt['name']}" if fmt else "")
                                    + (f", 💬 {n_ex} prior exchange(s)" if n_ex else "")
                                    + ")")
     res = claude_bridge.psa(method["text"], benchmark, docs, model=model,
                             format_text=fmt["text"] if fmt else None,
-                            discussions=discussions or None, stretch=body.stretch)
+                            discussions=discussions or None, stretch=body.stretch,
+                            invention=invention)
     out = []
     if "error" in res:
         out.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
         return {"messages": out, "error": res["error"]}
     participants = [{"kind": "model", "title": model},
+                    {"kind": "psa", "title": f"basis: {basis_label}"},
                     {"kind": "psa", "title": method["name"]}]
     if body.stretch:
         participants.append({"kind": "psa", "title": "🪄 argumentation stretch"})
