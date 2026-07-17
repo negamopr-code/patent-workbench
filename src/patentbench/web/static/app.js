@@ -591,7 +591,55 @@ async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false } 
     `🔬 Proposed ${els.length} element(s) from ${res.source === 'features' ? 'your features' : 'the benchmark claims'} `
     + `(${res.model || 'model'}). REVIEW and edit them — nothing is saved or scored until you click save below.`
     + (thenScan ? ' Saving them continues the 🔎 2-document investigation automatically.' : '');
+  // The editor lives in the 🎯 Benchmark pane, which the user may have COLLAPSED (persisted
+  // in localStorage) — and they are looking at the chat, where they clicked. Force the pane
+  // open AND show the proposal where the click happened; otherwise the result is invisible
+  // and the run reads as "nothing happened".
+  expandPane('bm');
+  renderDecomposeProposal(els, res, thenScan);
   $('bm-features').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// Show a 🔬 proposal in the CHAT pane — where the user clicked — so approving it never
+// means hunting for an editor in another pane. Editing still happens in the benchmark
+// pane's rows; this is the fast path plus the visible receipt.
+function renderDecomposeProposal(els, res, thenScan) {
+  const panel = $('combi-panel');
+  panel.classList.remove('hidden');
+  panel.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'combi-head';
+  head.innerHTML = `<b>🔬 Proposed ${els.length} element(s)</b> `
+    + `<span class="muted">from ${res.source === 'features' ? 'your feature text' : 'the benchmark claims'} `
+    + `(${res.model || 'model'}) — nothing is saved or scored yet. Review below, or edit them in the `
+    + `🎯 Benchmark pane.</span>`;
+  panel.appendChild(head);
+  for (const [i, e] of els.entries()) {
+    const r = document.createElement('div');
+    r.className = 'combi-row';
+    r.innerHTML = `<span class="chip">M${i + 1} ·${'★'.repeat(e.weight)}</span> ${esc(e.name)}`;
+    panel.appendChild(r);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'combi-actions';
+  const ok = document.createElement('button');
+  ok.className = 'btn small primary';
+  ok.textContent = thenScan ? `✅ Accept ${els.length} & run the investigation`
+                            : `✅ Accept ${els.length} element(s)`;
+  ok.title = 'Save these as the benchmark\'s mandatory elements' + (thenScan ? ', then run the 2-document coverage investigation.' : '.');
+  ok.onclick = () => { $('bm-feat-set').click(); };   // the one save path — no duplicate logic
+  actions.appendChild(ok);
+  const edit = document.createElement('button');
+  edit.className = 'btn small';
+  edit.textContent = '✏️ Edit them first';
+  edit.title = 'Jump to the rows in the 🎯 Benchmark pane to reword, re-weight or delete elements before saving.';
+  edit.onclick = () => { expandPane('bm'); $('bm-features').scrollIntoView({ behavior: 'smooth', block: 'center' }); };
+  actions.appendChild(edit);
+  panel.appendChild(actions);
+  appendMsg({ role: 's', text: `🔬 Proposed ${els.length} element(s) from the claimed invention `
+    + `(${res.model || 'model'}). They are listed above the chat and loaded into the 🎯 Benchmark `
+    + `pane's editor — nothing is saved or scored yet. Review them, then click `
+    + `"✅ Accept"${thenScan ? ' to save and continue the 🔎 2-document investigation' : ''}.` });
 }
 
 // Re-open the feature editor pre-filled from an existing feature benchmark, so
@@ -3180,6 +3228,15 @@ function applyLayout() {
 }
 function togglePane(key) {
   layout[key] = !layout[key];
+  localStorage.setItem('pb-layout', JSON.stringify(layout));
+  applyLayout();
+}
+// Force a pane OPEN. Collapse state is persisted, so a pane the user collapsed days ago
+// silently swallows anything rendered into it — never write a result into a 38px strip
+// and call it shown.
+function expandPane(key) {
+  if (!layout[key]) return;
+  layout[key] = false;
   localStorage.setItem('pb-layout', JSON.stringify(layout));
   applyLayout();
 }
