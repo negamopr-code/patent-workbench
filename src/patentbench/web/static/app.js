@@ -1160,6 +1160,16 @@ function renderCombiScanPanel() {
 }
 
 $('combi-scan').onclick = () => runCombiScan();
+// 🔬 Decompose is ALSO in the chat toolbar, not only on the 🎯 Benchmark card — that card
+// lives in a pane the user may have collapsed, so the button was effectively hidden.
+$('decompose-btn').onclick = () => {
+  if (!activeTab) return;
+  if (!currentBm || currentBm.status !== 'ready') {
+    appendMsg({ role: 's', text: 'Set a benchmark first — 🔬 Decompose splits the claimed invention into elements.' });
+    return;
+  }
+  decomposeBenchmark(currentBm);
+};
 
 function runCombi() {
   combiResult = computeCombis();
