@@ -582,10 +582,9 @@ async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false } 
   $('bm-features').open = true;
   const rows = $('bm-feat-rows');
   rows.innerHTML = '';
-  for (const e of els) addFeatureRow(e.name, e.weight, 'M', 5);
-  for (const f of feats.filter(f => (f.kind || 'M') === 'A')) {   // keep A-features as they were
-    addFeatureRow(f.name, f.weight, 'A', f.sl || 5);
-  }
+  // elements carry their own kind/SL: the additional feature is split too, and its
+  // elements inherit its stretch level
+  for (const e of els) addFeatureRow(e.name, e.weight, e.kind || 'M', e.sl || 5);
   combiScanAfterSave = thenScan;      // resume the investigation once these are approved
   $('bm-status').textContent =
     `🔬 Proposed ${els.length} element(s) from ${res.source === 'features' ? 'your features' : 'the benchmark claims'} `
@@ -610,14 +609,19 @@ function renderDecomposeProposal(els, res, thenScan) {
   const head = document.createElement('div');
   head.className = 'combi-head';
   head.innerHTML = `<b>🔬 Proposed ${els.length} element(s)</b> `
-    + `<span class="muted">from ${res.source === 'features' ? 'your feature text' : 'the benchmark claims'} `
+    + `<span class="muted">${res.mandatory || 0} mandatory`
+    + (res.additional ? ` + ${res.additional} additional` : '')
+    + ` from ${res.source === 'features' ? 'your feature text' : 'the benchmark claims'} `
     + `(${res.model || 'model'}) — nothing is saved or scored yet. Review below, or edit them in the `
     + `🎯 Benchmark pane.</span>`;
   panel.appendChild(head);
-  for (const [i, e] of els.entries()) {
+  let m = 0, a = 0;
+  for (const e of els) {
+    const isA = (e.kind || 'M') === 'A';
+    const label = isA ? `A${++a} ·SL${e.sl || 5}` : `M${++m}`;
     const r = document.createElement('div');
     r.className = 'combi-row';
-    r.innerHTML = `<span class="chip">M${i + 1} ·${'★'.repeat(e.weight)}</span> ${esc(e.name)}`;
+    r.innerHTML = `<span class="chip${isA ? ' feat-a' : ''}">${label} ·${'★'.repeat(e.weight)}</span> ${esc(e.name)}`;
     panel.appendChild(r);
   }
   const actions = document.createElement('div');
@@ -1019,15 +1023,18 @@ async function runCombiScan() {
 
 async function runCombiVerify() {
   if (!activeTab || !combiScan) return;
-  // Full-read only the documents that actually appear in the shortlisted pairs.
+  // Full-read the SOLO hits first — they are the strongest claim being made, so they are
+  // the ones that most need confirming — then the documents in the shortlisted pairs.
+  const soloIds = (combiScan.solo || []).slice(0, 8).map(s => s.id);
   const top = (combiScan.pairs || []).filter(p => p.complete).slice(0, 5);
   const pool = (top.length ? top : (combiScan.pairs || []).slice(0, 5));
-  const ids = [...new Set(pool.flatMap(p => [p.a_id, p.b_id]))].slice(0, 24);
-  if (!ids.length) { appendMsg({ role: 's', text: 'No shortlisted pairs to verify.' }); return; }
+  const ids = [...new Set([...soloIds, ...pool.flatMap(p => [p.a_id, p.b_id])])].slice(0, 24);
+  if (!ids.length) { appendMsg({ role: 's', text: 'No shortlisted solo hits or pairs to verify.' }); return; }
   if (!confirm(`🔎 STAGE 2 — confirm against FULL text\n\n`
-      + `Re-reads the full primary text of ${ids.length} finalist document(s) from the top `
-      + `${pool.length} pair(s), replacing their digest-based verdicts with citable ones.\n\n`
-      + `This is a full read per document — the expensive, accurate pass. A shortlisted pair `
+      + `Re-reads the full primary text of ${ids.length} finalist document(s)`
+      + (soloIds.length ? ` (${soloIds.length} that cover everything ALONE — the strongest claim, so the most worth confirming)` : '')
+      + `, replacing their digest-based verdicts with citable ones.\n\n`
+      + `This is a full read per document — the expensive, accurate pass. A solo hit or a pair `
       + `can legitimately FALL AWAY here if the full text doesn't bear the digest out.\n\nContinue?`)) return;
   setBusy(true, `Combi stage 2: full-text re-read of ${ids.length} finalists`);
   const res = await api(`/api/tabs/${activeTab}/combi-verify`, {
@@ -1047,8 +1054,9 @@ function renderCombiScanPanel() {
   const complete = (r.pairs || []).filter(p => p.complete);
   const head = document.createElement('div');
   head.className = 'combi-head';
-  head.innerHTML = `<b>🔎 2-document coverage — found by the tool</b> `
-    + `<span class="muted">(${complete.length} pair(s) cover ALL mandatory element(s)`
+  head.innerHTML = `<b>🔎 Coverage — found by the tool</b> `
+    + `<span class="muted">(${(r.solo || []).length} document(s) cover everything ALONE; `
+    + `${complete.length} pair(s) cover ALL mandatory element(s)`
     + (r.screened ? `; 🩺 screened ${r.screened} → ${r.screened - (r.dropped || 0)} shortlisted` : '')
     + `; verdicts from ${r.depth === 'full' ? 'FULL TEXT' : 'digests — stage 2 not run yet'}. `
     + `Additional elements add a bonus, never a penalty. This rating is independent of every `
@@ -1059,10 +1067,37 @@ function renderCombiScanPanel() {
   const v = document.createElement('button');
   v.className = 'btn small';
   v.textContent = '🔬 Stage 2: confirm finalists on FULL text';
-  v.title = 'Re-read the shortlisted pairs\' documents in full and replace their digest-based verdicts with citable ones. A pair can fall away here.';
+  v.title = 'Re-read the shortlisted documents in full and replace their digest-based verdicts with citable ones. A solo hit or a pair can fall away here.';
   v.onclick = () => runCombiVerify();
   actions.appendChild(v);
   panel.appendChild(actions);
+  // 🎯 SOLO first: one document disclosing the whole invention is a NOVELTY-grade hit —
+  // strictly stronger than any combination, which is only an obviousness argument and
+  // still needs a motivation to combine. Never rank the two against each other.
+  const solo = r.solo || [];
+  if (solo.length) {
+    const sh = document.createElement('div');
+    sh.className = 'combi-head';
+    sh.innerHTML = `<b>🎯 Covers EVERYTHING alone — ${solo.length} document(s)</b> `
+      + `<span class="muted">strongest: a single document disclosing every mandatory element `
+      + `(novelty-grade), vs a pair below which needs a motivation to combine. Ordered by `
+      + `additional coverage — that is what separates them once all cover the mandatory set.</span>`;
+    panel.appendChild(sh);
+    for (const s of solo) {
+      const row = document.createElement('div');
+      row.className = 'combi-row';
+      row.innerHTML = `<span class="chip ok">✓ alone</span><b>${esc(s.number)}</b> `
+        + `<span class="chip">${s.mand_total}/${s.mand_total} mandatory</span>`
+        + (s.add_total ? `<span class="chip" title="Additional (bonus) elements — the tiebreaker among documents that all cover the mandatory set">➕ ${s.add_cov}/${s.add_total} additional</span>` : '')
+        + `<span class="chip">${{ full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' }[s.depth] || s.depth}</span>`;
+      panel.appendChild(row);
+    }
+    const ph = document.createElement('div');
+    ph.className = 'combi-head';
+    ph.innerHTML = `<b>🧩 Two-document combinations</b> <span class="muted">— each needs a `
+      + `motivation to combine; weaker than a solo hit above.</span>`;
+    panel.appendChild(ph);
+  }
   if (!(r.pairs || []).length) {
     const m = document.createElement('div');
     m.className = 'muted';

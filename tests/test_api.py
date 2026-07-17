@@ -2289,6 +2289,150 @@ def test_combi_scoring_is_independent_of_every_other_score(client, monkeypatch):
     assert _db.get_document(docs[0]["id"])["combi_coverage"]      # ...stored separately
 
 
+def test_combi_surfaces_documents_that_cover_everything_alone(client, monkeypatch):
+    """A document disclosing the WHOLE invention is novelty-grade — strictly stronger than
+    any combination. _combi_pairs drops subsumed pairs, so without the solo list the
+    strongest finding would vanish from the results entirely."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    def fake_cov(elements, docs, model=None):
+        table = {"EP4400001": ["yes", "yes", "yes"],   # covers everything ALONE
+                 "EP4400002": ["yes", "no", "no"],
+                 "EP4400003": ["no", "yes", "no"]}
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i], "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert [s["number"] for s in r["solo"]] == ["EP4400001"]
+    assert r["solo"][0]["mand_total"] == 3
+    # EP4400002+EP4400003 is still only a partial pair; the solo hit is the real answer
+    assert not any(p["complete"] for p in r["pairs"])
+
+
+def test_combi_solo_ranked_by_additional_coverage(client, monkeypatch):
+    """Once several documents each cover the mandatory set, the ADDITIONAL elements are
+    what separate them — that is the whole point of splitting them."""
+    from patentbench import claude_bridge as cb
+    import patentbench.db as _db
+    tab = client.post("/api/tabs", json={"name": "Solo"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "packs", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "bus", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "a1", "weight": 5, "kind": "A", "sl": 10},
+        {"name": "a2", "weight": 5, "kind": "A", "sl": 10},
+    ]})
+    nums = ["EP4400001", "EP4400002"]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": nums, "source": "image"})
+    for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
+        _db.update_document(d["id"], digest="d", score=5, scored_at=1)
+    def fake_cov(elements, docs, model=None):
+        #                          packs  bus    a1     a2
+        table = {"EP4400001": ["yes", "yes", "no", "no"],     # covers M alone, no additional
+                 "EP4400002": ["yes", "yes", "yes", "yes"]}   # covers M alone AND both A
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i], "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert [s["number"] for s in r["solo"]] == ["EP4400002", "EP4400001"]   # A decides
+    assert r["solo"][0]["add_cov"] == 2 and r["solo"][1]["add_cov"] == 0
+
+
+def test_decompose_splits_the_additional_feature_too(client, monkeypatch):
+    """The additional feature is monolithic for the same reason the claim was — split it,
+    and its elements inherit ITS stretch level."""
+    from patentbench import claude_bridge as cb
+    calls = []
+    def fake_dec(text, model=None):
+        calls.append(text[:20])
+        if text.startswith("LOCKOUT"):
+            return {"elements": [{"name": "wave-by-wave limiting", "weight": 4, "kind": "M", "sl": 5},
+                                 {"name": "threshold forced to zero", "weight": 3, "kind": "M", "sl": 5}],
+                    "model": "m"}
+        return {"elements": [{"name": "packs", "weight": 5, "kind": "M", "sl": 5}], "model": "m"}
+    monkeypatch.setattr(cb, "decompose_claim", fake_dec)
+    tab = client.post("/api/tabs", json={"name": "DecA"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "a monolithic claim", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "LOCKOUT mechanism, one big block", "weight": 3, "kind": "A", "sl": 10},
+    ]})
+    r = client.post(f"/api/tabs/{tid}/benchmark/decompose", json={"source": "features"}).json()
+    assert r["mandatory"] == 1 and r["additional"] == 2
+    a_els = [e for e in r["elements"] if e["kind"] == "A"]
+    assert [e["name"] for e in a_els] == ["wave-by-wave limiting", "threshold forced to zero"]
+    assert all(e["sl"] == 10 for e in a_els)          # inherits the A feature's stretch level
+
+
+def test_decompose_keeps_an_additional_feature_whose_split_failed(client, monkeypatch):
+    """A failed A split must leave that feature WHOLE, never drop it silently."""
+    from patentbench import claude_bridge as cb
+    def fake_dec(text, model=None):
+        if text.startswith("LOCKOUT"):
+            return {"error": "session limit"}
+        return {"elements": [{"name": "packs", "weight": 5, "kind": "M", "sl": 5}], "model": "m"}
+    monkeypatch.setattr(cb, "decompose_claim", fake_dec)
+    tab = client.post("/api/tabs", json={"name": "DecA2"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "a monolithic claim", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "LOCKOUT mechanism", "weight": 3, "kind": "A", "sl": 10},
+    ]})
+    r = client.post(f"/api/tabs/{tid}/benchmark/decompose", json={"source": "features"}).json()
+    a_els = [e for e in r["elements"] if e["kind"] == "A"]
+    assert [e["name"] for e in a_els] == ["LOCKOUT mechanism"]     # kept whole, not lost
+
+
+def test_combi_rescan_only_assesses_the_NEW_elements(client, monkeypatch):
+    """Re-running after splitting the additional feature must NOT re-judge the mandatory
+    elements already assessed — that is the whole token cost."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch, elements=("packs", "bus", "comms"))
+    asked = []
+    def fake_cov(elements, docs, model=None):
+        asked.append([e["name"] for e in elements])
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"], "status": "yes", "evidence": "e"}
+            for e in elements] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    client.post(f"/api/tabs/{tid}/combi-scan", json={})
+    assert asked and set(asked[0]) == {"packs", "bus", "comms"}
+    # now ADD an element (as splitting the additional feature does) and re-run
+    asked.clear()
+    client.post(f"/api/tabs/{tid}/benchmark/features/add",
+                json={"name": "lockout", "weight": 3, "kind": "A", "sl": 10})
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert asked, "expected the new element to be assessed"
+    assert all(set(a) == {"lockout"} for a in asked)     # ONLY the new one — nothing re-read
+    # ...and the earlier mandatory verdicts survived the merge
+    import patentbench.db as _db, json as _json
+    rec = {c["name"]: c for c in _json.loads(
+        [d for d in _db.list_documents(tid, full=True)][0]["combi_coverage"])}
+    assert set(rec) == {"packs", "bus", "comms", "lockout"}
+    assert rec["packs"]["status"] == "yes" and rec["packs"]["depth"] == "digest"
+
+
+def test_combi_rescan_with_nothing_new_reuses_everything(client, monkeypatch):
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    calls = {"n": 0}
+    def fake_cov(elements, docs, model=None):
+        calls["n"] += 1
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"], "status": "yes", "evidence": "e"}
+            for e in elements] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    client.post(f"/api/tabs/{tid}/combi-scan", json={})
+    first = calls["n"]
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert calls["n"] == first          # zero new model calls
+    assert r["solo"] or r["pairs"]      # ...and results still computed from stored coverage
+
+
 def test_parse_screen_reads_terse_number_lines():
     from patentbench import claude_bridge as cb
     els = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
