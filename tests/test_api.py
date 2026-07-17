@@ -375,6 +375,34 @@ def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch)
     assert after["CN114853847"]["score_model"] == "claude-sonnet-4-6"   # records which model read it
 
 
+def test_deep_compare_batch_reads_top_N_by_prior_score(client, monkeypatch):
+    """Best match's batching: cap the run to the top-N still needing a read, MOST-PROMISING
+    first (by prior score), so 50-at-a-time spends on the best candidates and reports how
+    many remain for the next launch."""
+    tab = client.post("/api/tabs", json={"name": "Batch"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"text": "EP3667902A1 CN114853847B CN114547092 CN117241689"})
+    docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    # give distinct prior scores so ordering is unambiguous (all STALE → all need re-read)
+    for num, sc in [("EP3667902A1", 9), ("CN114853847", 3), ("CN114547092", 7), ("CN117241689", 1)]:
+        db.update_document(docs[num]["id"], score=sc, scored_at=1, score_model="claude-haiku-4-5")
+    read = []
+    monkeypatch.setattr(claude_bridge, "deep_map",
+                        lambda bm, d, model=None, features=None: read.append(d["number"]) or {"verdict": f"MATCH SCORE: 6 for {d['number']}"})
+    monkeypatch.setattr(claude_bridge, "deep_reduce", lambda *a, **k: {"answer": "ranking"})
+    r = client.post(f"/api/tabs/{tid}/deep-compare", json={"batch": 2}).json()
+    assert r["batch_size"] == 2 and r["remaining_after"] == 2
+    _wait_read(client, tid)
+    assert set(read) == {"EP3667902A1", "CN114547092"}   # the two HIGHEST prior scores (9, 7)
+    # a second launch reads the next two
+    read.clear()
+    client.post(f"/api/tabs/{tid}/deep-compare", json={"batch": 2, "skip_scored": True})
+    _wait_read(client, tid)
+    assert set(read) == {"CN114853847", "CN117241689"}   # the remaining lower-scored pair
+
+
 def test_continue_is_model_aware_upgrades_weaker_reads(client, monkeypatch):
     """The interrupted-sonnet-over-221 case: Continue with a STRONGER reading model
     re-reads candidates still on a weaker model (haiku) but skips ones already read by

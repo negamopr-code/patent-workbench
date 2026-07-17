@@ -148,6 +148,10 @@ class DeepCompareRequest(BaseModel):
     doc_ids: list[int] | None = None   # subset to analyze; None/empty = all candidates
     reading_model: str | None = None   # model that reads full texts; None = cheapest
     skip_scored: bool = False          # CONTINUE mode: only read candidates not yet full-read
+    # batch = cap this run to the top-N candidates that still need reading, most-promising
+    # first (by prior score). Lets 'Best match' process 50 at a time — intermediate results,
+    # re-launchable — instead of one long pass. 0/None = no cap (read the whole set).
+    batch: int | None = Field(default=None, ge=1, le=500)
 
 
 class NlmRateRequest(BaseModel):

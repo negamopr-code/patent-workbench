@@ -4185,10 +4185,15 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
                             + (" among the selected ones" if body.doc_ids else ""))
     if _claude_read_running(tab_id):
         return {"started": False, "running": True, **_claude_read_counts(tab_id)}
+    # most-promising first (by prior score), so a capped batch spends on the best candidates
+    to_read.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)
+    remaining_after = 0
+    if body.batch and len(to_read) > body.batch:       # this run = the top `batch` only
+        remaining_after = len(to_read) - body.batch
+        to_read = to_read[:body.batch]
     target_ids = [d["id"] for d in to_read]
     model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
     question = (body.question or "").strip() or DEEP_DEFAULT_QUESTION
-    to_read.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)
     if to_read:
         scope = (f"{len(to_read)} of {len(all_docs)}"
                  if len(to_read) != len(all_docs) else f"all {len(to_read)}")
@@ -4215,7 +4220,8 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
     threading.Thread(target=_run_claude_read,
                      args=(tab_id, target_ids, model, read_model, list(body.skills), question, scope),
                      daemon=True).start()
-    return {"started": True, "running": True, **_claude_read_counts(tab_id)}
+    return {"started": True, "running": True, "batch_size": len(target_ids),
+            "remaining_after": remaining_after, **_claude_read_counts(tab_id)}
 
 
 @app.get("/api/tabs/{tab_id}/deep-compare/status")

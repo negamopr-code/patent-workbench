@@ -1045,29 +1045,40 @@ async function runCombiScan() {
       + `🔬 STAGE 2 — you then confirm the finalists on full text.\n\n`
       + (gap ? `⚠ ${gap} candidate(s) have NO digest and will be SKIPPED — 🔁 backfill to include them.\n\n` : '')
       + `Continue?`)) return;
-  const btn = $('combi-scan'); btn.disabled = true;
-  // 🩺 stage 0 — the fast cut. Judging every candidate at full rigour is the slow part;
-  // this decides who deserves it, cheaply.
+  await combiScanCore();
+}
+
+// The screen→scan→render core, WITHOUT the confirms/prerequisite prompts. runCombiScan is
+// the interactive wrapper; 'Best match' calls this directly to assess the combination after
+// each 50-batch (it already confirmed, and must not prompt mid-flow). Returns true if it ran.
+async function combiScanCore({ quiet = false } = {}) {
+  const mand = ((currentBm && currentBm.features) || []).filter(f => (f.kind || 'M') !== 'A');
+  if (mand.length < 2) {                       // can't combine without ≥2 elements — skip quietly
+    if (!quiet) appendMsg({ role: 's', text: '🔎 Needs ≥2 mandatory elements — use 🔬 Decompose first.' });
+    return false;
+  }
+  const eligible = (lastDocs || []).filter(d => d.status === 'fetched' && d.digest_len);
+  if (eligible.length < 2) return false;
+  const KEEP = Math.min(50, eligible.length);
+  const btn = $('combi-scan'); if (btn) btn.disabled = true;
   setBusy(true, `🩺 Stage 0: fast screen over ${eligible.length} candidates`);
-  const scr = await api(`/api/tabs/${activeTab}/combi-screen`, {
-    method: 'POST', body: JSON.stringify({ top_n: KEEP }) });
-  if (scr.error) { setBusy(false); btn.disabled = false; appendMsg({ role: 's', text: `Error: ${scr.error}` }); return; }
+  const scr = await api(`/api/tabs/${activeTab}/combi-screen`,
+                        { method: 'POST', body: JSON.stringify({ top_n: KEEP }) });
+  if (scr.error) { setBusy(false); if (btn) btn.disabled = false; appendMsg({ role: 's', text: `Error: ${scr.error}` }); return false; }
   const ids = (scr.shortlist || []).map(s => s.id);
   await reloadChat();
-  if (ids.length < 2) { setBusy(false); btn.disabled = false; appendMsg({ role: 's', text: '🩺 Screen shortlisted <2 candidates — nothing to combine.' }); return; }
-  // 🔎 stage 1 — rigorous, but only over the shortlist. Report screened + REUSED as the pool
-  // considered: with the incremental pass a re-run legitimately screens 0 new candidates,
-  // and "(of 0)" reads as a failure when it actually means "nothing needed re-reading".
+  if (ids.length < 2) { setBusy(false); if (btn) btn.disabled = false; return false; }
   const pool = (scr.screened || 0) + (scr.reused || 0);
   setBusy(true, `🔎 Stage 1: element coverage over the ${ids.length} shortlisted `
     + `(of ${pool}${scr.reused ? `; ${scr.reused} reused, ${scr.screened} newly screened` : ''})`);
-  const res = await api(`/api/tabs/${activeTab}/combi-scan`, {
-    method: 'POST', body: JSON.stringify({ doc_ids: ids, model: readModelValue() }) });
-  setBusy(false); btn.disabled = false;
-  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
-  combiScan = { ...res, screened: (scr.screened || 0) + (scr.reused || 0), dropped: scr.dropped };
+  const res = await api(`/api/tabs/${activeTab}/combi-scan`,
+                        { method: 'POST', body: JSON.stringify({ doc_ids: ids, model: readModelValue() }) });
+  setBusy(false); if (btn) btn.disabled = false;
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return false; }
+  combiScan = { ...res, screened: pool, dropped: scr.dropped };
   renderCombiScanPanel();
   await reloadChat();
+  return true;
 }
 
 async function runCombiVerify({ ids: explicitIds = null } = {}) {
@@ -1315,12 +1326,33 @@ async function judgeCombinability(pairs) {
   renderCombiPanel();
 }
 
+// The candidate's DOCUMENT-match, 0–10: Claude's deep-read score of the candidate against
+// the benchmark's document text (_benchmark_fulltext = its claims/description). null = unread.
+function documentScore(d) { return d.score ?? null; }
+// The candidate's FEATURE-match, normalized 0–10 from the weighted coverage. null when there
+// are no features or the candidate has no per-feature verdicts yet.
+function featureScore10(d) {
+  const fst = featureStats(d);
+  if (!fst || !fst.total) return null;
+  return (fst.weighted / fst.total) * 10;
+}
+// BLENDED match: when a benchmark has BOTH a document and features, a candidate must match
+// BOTH to rank top — average the two 0–10 signals. With only one present, use that one, so a
+// feature-only benchmark (no document) and a document-only benchmark both still rank sensibly.
+// Returns {value, doc, feat} | null.
+function blendedMatch(d) {
+  const doc = documentScore(d), feat = featureScore10(d);
+  if (doc == null && feat == null) return null;
+  if (doc != null && feat != null) return { value: (doc + feat) / 2, doc, feat };
+  return { value: doc != null ? doc : feat, doc, feat };
+}
 function scoreSortValue(d, key) {
   if (key === 'weighted') {
+    const bm = blendedMatch(d);
+    if (!bm) return -1;
+    // primary = blended (doc+feature) match; tiebreak = #features literally matched
     const fst = featureStats(d);
-    if (!fst) return -1;
-    // primary = weighted points, tiebreak = #matched features, then combined score
-    return fst.weighted * 1e6 + fst.matched * 1e3 + (combinedScore(d) ?? 0) * 10;
+    return bm.value * 1e6 + (fst ? fst.matched : 0) * 1e3 + (documentScore(d) ?? 0) * 10;
   }
   if (key === 'nlm') return d.nlm_score ?? -1;
   if (key === 'delta') return (d.score != null && d.nlm_score != null) ? Math.abs(d.score - d.nlm_score) : -1;
@@ -1617,8 +1649,16 @@ function renderDocs(allDocs) {
       const consensus = isConsensus(d);
       const pos = rankIndex.get(d.id);            // ordinal position in the ranking
       if (pos) parts.push(`<span class="rankpos">#${pos}</span>`);
-      // combined ("common") score leads when both engines rated it
-      if (d.score != null && d.nlm_score != null) parts.push(`<span class="combined">🥇 ${combinedScore(d).toFixed(1)}</span>`);
+      // BLENDED match leads when the benchmark has BOTH a document and features: the rank is
+      // (document match + feature coverage)/2, so a candidate must do well on both. Shown with
+      // its two parts so the number is never opaque.
+      const bmv = featureMode() ? blendedMatch(d) : null;
+      if (bmv && bmv.doc != null && bmv.feat != null) {
+        parts.push(`<span class="combined" title="Blended match = (document ${bmv.doc.toFixed(1)} + features ${bmv.feat.toFixed(1)}) / 2. Both the benchmark document and its feature list count — a candidate must match both to rank top.">🎯 ${bmv.value.toFixed(1)} <span class="muted">(📄${bmv.doc.toFixed(1)} 🧩${bmv.feat.toFixed(1)})</span></span>`);
+      } else if (d.score != null && d.nlm_score != null) {
+        // combined ("common") score leads when both engines rated it
+        parts.push(`<span class="combined">🥇 ${combinedScore(d).toFixed(1)}</span>`);
+      }
       const addl = additionalBonus(d);
       if (d.score != null) {
         // base + 🤝 consensus taper + ➕ additional bonus, capped at 10
@@ -2267,9 +2307,12 @@ async function pollRead() {
   } else if (readWasRunning) {
     readWasRunning = false;
     if (pauseBtn) pauseBtn.classList.add('hidden');
-    el.textContent = `✓ assessment stopped — see chat (▶️ Continue assesses any left)`;
+    el.textContent = bestMatch
+      ? `✓ batch read — assessing the 2-document combination…`
+      : `✓ assessment stopped — see chat (▶️ Continue assesses any left)`;
     refreshDocs();
     reloadChat();
+    if (bestMatch) afterBestMatchBatch();      // 🏆 chain: combination assessment + next-50 offer
   } else {
     if (pauseBtn) pauseBtn.classList.add('hidden');
     el.classList.add('muted'); el.textContent = '';
@@ -2325,8 +2368,65 @@ async function crossTabScanThen(next) {
   };
   poll();
 }
-$('best-match').onclick = () =>
-  crossTabScanThen(() => runDeepCompare(docSelection.size ? [...docSelection] : null));
+// 🏆 Best match, batched: deep-read the next 50 candidates (most-promising first, by prior
+// score), then assess the 2-document COMBINATION over everything read so far, then stop with
+// a "next 50" affordance. Tokens are spent on the best candidates first; intermediate results
+// land each round; you re-launch for the next 50 until satisfied.
+const BEST_MATCH_BATCH = 50;
+let bestMatch = null;   // { remaining } while a best-match batch is in flight; null otherwise
+
+async function runBestMatch() {
+  if (!activeTab) return;
+  const sel = docSelection.size ? [...docSelection] : null;
+  if (sel) {   // an explicit selection → assess exactly those (no batching), then combine
+    crossTabScanThen(() => runDeepCompare(sel));
+    return;
+  }
+  if (!confirm(`🏆 Best match (batched)\n\n`
+      + `Reads the next ${BEST_MATCH_BATCH} candidates in FULL vs the benchmark — most-promising `
+      + `first (by current score) — then assesses the 2-document COMBINATION over everything read `
+      + `so far.\n\n`
+      + `Stops after the batch with the intermediate ranking + combinations; re-launch for the `
+      + `next ${BEST_MATCH_BATCH}. Both the benchmark document AND its features drive the ranking.\n\n`
+      + `Start?`)) return;
+  crossTabScanThen(async () => {
+    const res = await api(`/api/tabs/${activeTab}/deep-compare`, {
+      method: 'POST',
+      body: JSON.stringify({
+        model: $('model').value,
+        skills: [...document.querySelectorAll('#skills input:checked')].map(i => i.value),
+        reading_model: readModelValue(),
+        skip_scored: true,               // read only what's not yet fresh, top-50 by score
+        batch: BEST_MATCH_BATCH,
+      }) });
+    if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+    if (!res.started) {
+      // nothing needed reading (all fresh) → go straight to the combination + re-rank
+      bestMatch = { remaining: 0 };
+      await afterBestMatchBatch();
+      return;
+    }
+    bestMatch = { remaining: res.remaining_after || 0 };
+    pollRead();                          // progress; completion triggers afterBestMatchBatch()
+  });
+}
+
+// After a best-match deep-read batch finishes: assess the 2-document combination over
+// everything read so far, then offer the next 50 (or say the corpus is exhausted).
+async function afterBestMatchBatch() {
+  const remaining = bestMatch ? bestMatch.remaining : 0;
+  bestMatch = null;                      // clear before the (awaited) combi so a reload is clean
+  await combiScanCore({ quiet: true });  // solo + pairs over all assessed so far
+  if (remaining > 0) {
+    appendMsg({ role: 's', text: `🏆 Best match: batch done — ranking + combinations updated over `
+      + `the assessed set. ${remaining} candidate(s) remain; click 🏆 Best match again for the next `
+      + `${Math.min(BEST_MATCH_BATCH, remaining)} (most-promising first).` });
+  } else {
+    appendMsg({ role: 's', text: `🏆 Best match: every candidate is now assessed — ranking and `
+      + `2-document combinations are complete over the full set.` });
+  }
+}
+$('best-match').onclick = () => runBestMatch();
 $('claude-rate-all').onclick = () => runDeepCompare(null);            // re-read EVERY candidate
 $('claude-continue').onclick = () => runDeepCompare(null, true);      // only the not-yet-read ones
 $('deep-selected').onclick = () => {
