@@ -185,11 +185,15 @@ class DigestRescoreRequest(BaseModel):
 
 
 class AdditionalReadRequest(BaseModel):
-    """➕ Additional read: check the benchmark's ADDITIONAL (A) features against the top
-    candidates' stored digests in ONE bulk pass (no full-text re-read). doc_ids = the exact
-    set (the UI sends its top-N in ranked order); None → top_n by Claude score."""
+    """➕ Additional read: check the benchmark's ADDITIONAL (A) features against candidates'
+    stored digests in bulk passes (no full-text re-read). Scope, in priority order:
+    all_docs → EVERY candidate with a digest; doc_ids → that exact set (the UI sends its
+    top-N in ranked order); else top_n by Claude score."""
     doc_ids: list[int] | None = None
     top_n: int = Field(default=10, ge=1, le=50)
+    # all_docs has no count cap on purpose — the endpoint batches, so the scope is bounded
+    # by how many candidates actually have a digest, not by the prompt budget.
+    all_docs: bool = False
     model: str | None = None
 
 

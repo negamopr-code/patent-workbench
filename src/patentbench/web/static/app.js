@@ -2138,6 +2138,26 @@ $('additional-read').onclick = async () => {
   await refreshDocs();   // re-render with the new A-feature chips + bonus
   await reloadChat();
 };
+// ➕ Additional read over EVERY candidate with a stored digest, not just the displayed
+// top-N: a low-ranked document can only earn its A-feature bonus (and climb) if it was
+// actually assessed. The server batches (25/pass) and saves each batch as it lands.
+$('additional-read-all').onclick = async () => {
+  if (!activeTab) return;
+  const eligible = (lastDocs || []).filter(d => d.status === 'fetched' && d.digest_len);
+  if (!eligible.length) { appendMsg({ role: 's', text: 'No candidates with a stored digest yet — run a 🏆 deep-compare / full read first.' }); return; }
+  const passes = Math.ceil(eligible.length / 25);
+  if (!confirm(`➕ Additional read over ALL ${eligible.length} candidate(s) with a digest`
+             + `\n\n≈ ${passes} bulk sonnet pass(es) over stored digests (no full-text re-read).`
+             + `\nEach pass is saved as it lands. Continue?`)) return;
+  const btn = $('additional-read-all'); btn.disabled = true;
+  setBusy(true, `Additional read over ALL ${eligible.length} candidates (${passes} bulk pass(es) over digests)`);
+  const res = await api(`/api/tabs/${activeTab}/additional-read`, {
+    method: 'POST', body: JSON.stringify({ all_docs: true }) });
+  setBusy(false); btn.disabled = false;
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  await refreshDocs();
+  await reloadChat();
+};
 // 🧩 Combi — compute (free, in code) the best 2-document combinations from the stored
 // per-feature read verdicts, show the panel + each doc's best-partner hint.
 $('combi').onclick = () => { if (activeTab) runCombi(); };

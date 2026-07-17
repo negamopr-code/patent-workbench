@@ -2886,12 +2886,19 @@ def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest):
     return {"ok": True, "updated": updated, "results": results}
 
 
+# ➕ additional read batch size: one bulk call per this many candidates. Sized like the
+# cross-tab scan — the whole point of batching is that 'all documents' (hundreds) cannot
+# blow the prompt budget the way a single call over every digest would.
+ADDITIONAL_BATCH = int(os.environ.get("PB_ADDITIONAL_BATCH", "25"))
+
+
 @app.post("/api/tabs/{tab_id}/additional-read")
 def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
-    """➕ ADDITIONAL READ. Check the benchmark's ADDITIONAL (A) features against the top
-    candidates in ONE bulk call over their STORED DIGESTS — no full-text re-read, so it's
-    cheap (≈ one chat turn). Stores per-doc additional_scores; the UI turns those into a
-    bonus that only RAISES the score (absence never lowers it)."""
+    """➕ ADDITIONAL READ. Check the benchmark's ADDITIONAL (A) features against candidates
+    in bulk calls over their STORED DIGESTS — no full-text re-read, so it's cheap. Scope is
+    the displayed top-N, or EVERY candidate with a digest (all_docs). Stores per-doc
+    additional_scores; the UI turns those into a bonus that only RAISES the score (absence
+    never lowers it)."""
     _tab_or_404(tab_id)
     bm = db.get_benchmark(tab_id)
     a_features = [f for f in ((bm or {}).get("features") or []) if f.get("kind") == "A"]
@@ -2900,30 +2907,56 @@ def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
     fetched = [d for d in db.list_documents(tab_id, full=True)
                if d["status"] == "fetched" and (d.get("digest") or "").strip()]
     by_id = {d["id"]: d for d in fetched}
-    if body.doc_ids:                                    # the UI's exact top-N, in ranked order
+    if body.all_docs:                                   # EVERY candidate with a digest
+        chosen = sorted(fetched, key=lambda d: -(d.get("score") or 0))
+    elif body.doc_ids:                                  # the UI's exact top-N, in ranked order
         chosen = [by_id[i] for i in body.doc_ids if i in by_id]
     else:                                               # fall back to Claude's top_n by score
         chosen = [by_id[i] for i in db.top_scored_documents(tab_id, body.top_n) if i in by_id]
     if not chosen:
         raise HTTPException(400, "no candidates with a stored digest — run a 🏆 deep-compare / "
                                  "full read first so there's material to check against")
-    res = claude_bridge.additional_read(a_features, chosen,
-                                        model=_read_model(body.model) or claude_bridge.DIGEST_MODEL)
-    if "error" in res:
-        raise HTTPException(400, f"additional read failed: {res['error']}")
-    results = res.get("results") or {}
-    stored = 0
-    for d in chosen:
-        feats = results.get(d["number"])
-        if feats is not None:
-            db.update_document(d["id"], additional_scores=json.dumps(feats, ensure_ascii=False))
-            stored += 1
+    model = _read_model(body.model) or claude_bridge.DIGEST_MODEL
+    batches = [chosen[i:i + ADDITIONAL_BATCH] for i in range(0, len(chosen), ADDITIONAL_BATCH)]
+    results: dict = {}
+    errors: list[str] = []
+    used_model: list[str] = []
+    lock = threading.Lock()
+
+    def one(batch: list[dict]) -> None:
+        res = claude_bridge.additional_read(a_features, batch, model=model)
+        if "error" in res:
+            with lock:
+                errors.append(res["error"])       # a failed batch loses only its own docs
+            return
+        got = res.get("results") or {}
+        for d in batch:                           # persist per batch: a kill loses little
+            feats = got.get(d["number"])
+            if feats is not None:
+                db.update_document(d["id"], additional_scores=json.dumps(feats, ensure_ascii=False))
+        with lock:
+            results.update(got)
+            if res.get("model"):
+                used_model.append(res["model"])
+
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(one, batches))
+    stored = sum(1 for d in chosen if results.get(d["number"]) is not None)
+    if not stored:
+        raise HTTPException(400, f"additional read failed: {errors[0] if errors else 'no verdicts parsed'}")
     names = ", ".join(f["name"] for f in a_features[:6]) + (" …" if len(a_features) > 6 else "")
+    # Say plainly when batches failed — a partial run must never read as full coverage.
+    missed = len(chosen) - stored
+    note = (f" ⚠ {missed} candidate(s) not assessed ({len(errors)} batch(es) failed) — re-run to "
+            "fill them in." if missed else "")
     db.append_message(tab_id, "s",
-        f"➕ Additional read ({res.get('model') or 'sonnet'}) over {stored} candidate(s) for "
-        f"{len(a_features)} additional feature(s): {names}. Present/stretched features now ADD to "
-        "each doc's score (absence never lowers it) — see the 🟢/🟡 chips and the +bonus in the score.")
-    return {"ok": True, "assessed": stored, "a_features": len(a_features), "results": results}
+        f"➕ Additional read ({used_model[0] if used_model else 'sonnet'}) over {stored} "
+        f"candidate(s){' — ALL with a digest' if body.all_docs else ''} in "
+        f"{len(batches)} bulk pass(es) for {len(a_features)} additional feature(s): {names}. "
+        "Present/stretched features now ADD to each doc's score (absence never lowers it) — "
+        f"see the 🟢/🟡 chips and the +bonus in the score.{note}")
+    return {"ok": True, "assessed": stored, "requested": len(chosen), "batches": len(batches),
+            "failed_batches": len(errors), "a_features": len(a_features), "results": results}
 
 
 @app.post("/api/tabs/{tab_id}/combi/motivation")

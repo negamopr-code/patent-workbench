@@ -2101,6 +2101,100 @@ def test_additional_read_needs_a_features(client, monkeypatch):
     assert client.post(f"/api/tabs/{tid}/additional-read", json={}).status_code == 400
 
 
+def _add_read_tab(client, n_docs, batch=None, monkeypatch=None):
+    """A tab with one A-feature and `n_docs` fetched candidates that all have a digest,
+    scored DESCENDING (doc i scores 10-i) so the low ones fall outside any top-N."""
+    import patentbench.db as _db
+    tab = client.post("/api/tabs", json={"name": f"AddAll{n_docs}"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "core divider", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "detachable pack", "weight": 4, "kind": "A", "sl": 7},
+    ]})
+    nums = [f"EP430000{i}" for i in range(n_docs)]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": nums, "source": "image"})
+    for i, d in enumerate(client.get(f"/api/tabs/{tid}/documents").json()["documents"]):
+        _db.update_document(d["id"], digest=f"digest of {d['number']}",
+                            score=max(1, 10 - i), scored_at=1, score_model="opus")
+    if batch is not None:
+        monkeypatch.setattr(api, "ADDITIONAL_BATCH", batch)
+    return tid, nums
+
+
+def test_additional_read_all_docs_covers_every_candidate(client, monkeypatch):
+    """➕ additional read (ALL): every candidate with a digest is assessed — including the
+    low-scored ones the top-N never reaches, which is the whole point (an A-feature bonus
+    can only lift a document that was actually looked at)."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _add_read_tab(client, 12)
+    seen = []
+    def fake_add(a_features, docs, model=None):
+        seen.extend(d["number"] for d in docs)
+        return {"results": {d["number"]: [{"name": "detachable pack", "weight": 4, "sl": 7,
+                                           "status": "present", "evidence": "e"}] for d in docs},
+                "model": "claude-sonnet-4-6"}
+    monkeypatch.setattr(cb, "additional_read", fake_add)
+
+    # default scope: only the top-N by score — the tail is untouched
+    r = client.post(f"/api/tabs/{tid}/additional-read", json={"top_n": 3}).json()
+    assert r["assessed"] == 3 and len(seen) == 3
+
+    seen.clear()
+    r = client.post(f"/api/tabs/{tid}/additional-read", json={"all_docs": True}).json()
+    assert r["ok"] and r["assessed"] == 12 and r["requested"] == 12
+    assert sorted(seen) == sorted(nums)                      # EVERY candidate, none skipped
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    assert all(d["additional_scores"] for d in docs)         # ...and every one persisted
+
+
+def test_additional_read_all_docs_batches_the_bulk_calls(client, monkeypatch):
+    """'All documents' must not become one giant prompt: the scope is split into batches,
+    so hundreds of digests stay inside the budget."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _add_read_tab(client, 7, batch=2, monkeypatch=monkeypatch)
+    sizes = []
+    def fake_add(a_features, docs, model=None):
+        sizes.append(len(docs))
+        return {"results": {d["number"]: [{"name": "detachable pack", "weight": 4, "sl": 7,
+                                           "status": "absent", "evidence": ""}] for d in docs},
+                "model": "claude-sonnet-4-6"}
+    monkeypatch.setattr(cb, "additional_read", fake_add)
+    r = client.post(f"/api/tabs/{tid}/additional-read", json={"all_docs": True}).json()
+    assert r["assessed"] == 7 and r["batches"] == 4          # 7 docs / batch 2 → 4 passes
+    assert max(sizes) <= 2 and sum(sizes) == 7               # none oversized, none dropped
+
+
+def test_additional_read_partial_batch_failure_keeps_the_rest(client, monkeypatch):
+    """A failed batch must lose only its own documents — and the run must SAY so rather
+    than reporting a partial pass as full coverage."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _add_read_tab(client, 6, batch=2, monkeypatch=monkeypatch)
+    calls = {"n": 0}
+    lock = __import__("threading").Lock()
+    def fake_add(a_features, docs, model=None):
+        with lock:
+            calls["n"] += 1
+            first = calls["n"] == 1
+        if first:
+            return {"error": "session limit"}
+        return {"results": {d["number"]: [{"name": "detachable pack", "weight": 4, "sl": 7,
+                                           "status": "present", "evidence": "e"}] for d in docs},
+                "model": "claude-sonnet-4-6"}
+    monkeypatch.setattr(cb, "additional_read", fake_add)
+    r = client.post(f"/api/tabs/{tid}/additional-read", json={"all_docs": True}).json()
+    assert r["assessed"] == 4 and r["requested"] == 6 and r["failed_batches"] == 1
+    msg = client.get(f"/api/tabs/{tid}/state").json()["messages"][-1]["text"]
+    assert "2 candidate(s) not assessed" in msg               # the gap is stated, not hidden
+
+
+def test_additional_read_all_docs_errors_when_every_batch_fails(client, monkeypatch):
+    from patentbench import claude_bridge as cb
+    tid, nums = _add_read_tab(client, 3)
+    monkeypatch.setattr(cb, "additional_read", lambda *a, **k: {"error": "session limit"})
+    r = client.post(f"/api/tabs/{tid}/additional-read", json={"all_docs": True})
+    assert r.status_code == 400 and "session limit" in r.json()["detail"]
+
+
 def test_parse_digest_rescore():
     from patentbench import claude_bridge as cb
     text = ("=== CN117321873 ===\nSCORE: 8\nWHY: gauge divider + independent paths\n"
