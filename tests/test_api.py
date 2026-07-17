@@ -2289,6 +2289,146 @@ def test_combi_scoring_is_independent_of_every_other_score(client, monkeypatch):
     assert _db.get_document(docs[0]["id"])["combi_coverage"]      # ...stored separately
 
 
+def test_parse_screen_reads_terse_number_lines():
+    from patentbench import claude_bridge as cb
+    els = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
+    out = cb.parse_screen("EP4400001: 1,3\nEP4400002: NONE\nEP4400003: 2 3 99\n", els)
+    assert out == {"EP4400001": [0, 2], "EP4400002": [], "EP4400003": [1, 2]}  # 99 ignored
+
+
+def test_combi_screen_shortlists_the_top_candidates(client, monkeypatch):
+    """🩺 stage 0: the fast cut. Judging every candidate at full rigour is the slow part —
+    this decides who deserves it, and hands back only the shortlist."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    def fake_screen(features, docs, model=None):
+        table = {"EP4400001": [0, 1, 2], "EP4400002": [0], "EP4400003": []}
+        return {"results": {d["number"]: table[d["number"]] for d in docs}, "model": "haiku"}
+    monkeypatch.setattr(cb, "combi_fast_screen", fake_screen)
+    r = client.post(f"/api/tabs/{tid}/combi-screen", json={"top_n": 2}).json()
+    assert r["screened"] == 3 and r["dropped"] == 1
+    assert [s["number"] for s in r["shortlist"]] == ["EP4400001", "EP4400002"]  # best first
+    # stored at depth 'screen' so nothing downstream mistakes it for a rigorous read
+    import patentbench.db as _db
+    d = [x for x in _db.list_documents(tid, full=True) if x["number"] == "EP4400001"][0]
+    assert d["combi_depth"] == "screen"
+
+
+def test_combi_scan_honours_the_screen_shortlist(client, monkeypatch):
+    """The rigorous pass runs over the shortlist only — that is what makes it fast."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    seen = []
+    def fake_cov(elements, docs, model=None):
+        seen.extend(d["number"] for d in docs)
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"], "status": "yes", "evidence": "e"}
+            for e in elements] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    ids = [d["id"] for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]][:2]
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={"doc_ids": ids}).json()
+    assert r["scanned"] >= 2
+    assert sorted(seen) == sorted(nums[:2])          # the third was never read
+
+
+def test_combi_takes_the_additional_feature_into_account(client, monkeypatch):
+    """A pair that ALSO brings the additional element must outrank an equal pair that
+    doesn't — but the additional element never decides completeness, and its absence is
+    never a penalty."""
+    from patentbench import claude_bridge as cb
+    import patentbench.db as _db
+    tab = client.post("/api/tabs", json={"name": "CombiA"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "packs", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "bus", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "lockout", "weight": 5, "kind": "A", "sl": 10},
+    ]})
+    nums = ["EP4400001", "EP4400002", "EP4400003"]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": nums, "source": "image"})
+    for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
+        _db.update_document(d["id"], digest=f"digest of {d['number']}", score=5, scored_at=1)
+    def fake_cov(elements, docs, model=None):
+        #                packs  bus    lockout(A)
+        table = {"EP4400001": ["yes", "no",  "no"],
+                 "EP4400002": ["no",  "yes", "yes"],   # brings the A element
+                 "EP4400003": ["no",  "yes", "no"]}    # same M cover, no A
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i], "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    by = {frozenset([p["a"], p["b"]]): p for p in r["pairs"]}
+    with_a = by[frozenset(["EP4400001", "EP4400002"])]
+    without = by[frozenset(["EP4400001", "EP4400003"])]
+    assert with_a["complete"] and without["complete"]      # A never decides completeness
+    assert with_a["add_cov"] == 1 and without["add_cov"] == 0
+    assert with_a["add_bonus"] > 0 and without["add_bonus"] == 0
+    # rating stays MANDATORY coverage (both cover it fully) — the A element ranks instead,
+    # because folding it into a rating that already sits at 10 would hide it entirely
+    assert with_a["rating"] == without["rating"] == 10.0
+    assert r["pairs"][0]["a_id"] == with_a["a_id"]         # the A-covering pair ranks FIRST
+    assert r["pairs"][0]["b_id"] == with_a["b_id"]
+
+
+def test_combi_additional_alone_never_makes_a_pair_complete(client, monkeypatch):
+    """Only mandatory elements decide whether a pair covers the invention."""
+    from patentbench import claude_bridge as cb
+    import patentbench.db as _db
+    tab = client.post("/api/tabs", json={"name": "CombiA2"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "packs", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "bus", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "third", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "lockout", "weight": 5, "kind": "A", "sl": 10},
+    ]})
+    nums = ["EP4400001", "EP4400002"]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": nums, "source": "image"})
+    for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
+        _db.update_document(d["id"], digest="d", score=5, scored_at=1)
+    def fake_cov(elements, docs, model=None):
+        table = {"EP4400001": ["yes", "no", "no", "yes"],
+                 "EP4400002": ["no", "yes", "no", "yes"]}   # 'third' covered by neither
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i], "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert r["complete"] == 0
+    assert r["pairs"][0]["add_cov"] == 1 and not r["pairs"][0]["complete"]
+
+
+def test_combi_pair_depth_is_that_of_its_weaker_document(client, monkeypatch):
+    """A pair is only as trustworthy as its weaker read — screen < digest < full."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    # each document holds exactly ONE distinct element, so every pair is a genuine
+    # combination (a document disclosing everything would subsume the others and no pair
+    # would survive the filter at all)
+    OWN = {"EP4400001": 0, "EP4400002": 1, "EP4400003": 2}
+    monkeypatch.setattr(cb, "combi_fast_screen", lambda features, docs, model=None: {
+        "results": {d["number"]: [OWN[d["number"]]] for d in docs}, "model": "haiku"})
+    client.post(f"/api/tabs/{tid}/combi-screen", json={"top_n": 3})
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    # upgrade TWO of the three to digest depth (the scan needs ≥2); the third stays 'screen'
+    monkeypatch.setattr(cb, "combi_coverage_digests", lambda elements, docs_, model=None: {
+        "results": {d["number"]: [{"name": e["name"], "weight": e["weight"],
+                                   "status": "yes" if i == OWN[d["number"]] else "no",
+                                   "evidence": "e"}
+                                  for i, e in enumerate(elements)] for d in docs_},
+        "model": "m"})
+    upgraded = [docs[0]["id"], docs[1]["id"]]
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={"doc_ids": upgraded}).json()
+    by = {(p["a_id"], p["b_id"]): p for p in r["pairs"]}
+    both_up = [p for k, p in by.items() if set(k) == set(upgraded)]
+    mixed = [p for k, p in by.items() if len(set(k) & set(upgraded)) == 1]
+    assert all(p["depth"] == "digest" for p in both_up)  # both sides rigorous
+    assert mixed and all(p["depth"] == "screen" for p in mixed)   # weaker side wins
+
+
 def test_combi_verify_full_text_replaces_the_digest_verdict(client, monkeypatch):
     """Stage 2 is where a shortlisted pair is confirmed — or legitimately falls away."""
     from patentbench import claude_bridge as cb

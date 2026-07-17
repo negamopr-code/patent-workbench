@@ -58,6 +58,10 @@ SKILLS_DIR = os.environ.get("CLAUDE_SKILLS_DIR", os.path.expanduser("~/.claude/s
 # stays cheap on READ_MODEL (volume dominates, context self-corrects); the
 # analytical read does not, so quality wins here. Override with PB_DIGEST_MODEL.
 DIGEST_MODEL = os.environ.get("PB_DIGEST_MODEL", "claude-sonnet-4-6")
+# 🩺 the fast recall screen runs on the CHEAPEST model over a SHORT digest extract: it only
+# ranks who deserves a rigorous pass, and terse output is what makes it quick.
+SCREEN_MODEL = os.environ.get("PB_SCREEN_MODEL", "claude-haiku-4-5")
+SCREEN_DIGEST_CHARS = int(os.environ.get("PB_SCREEN_DIGEST_CHARS", "1500"))
 DIGEST_TIMEOUT = float(os.environ.get("PB_DIGEST_TIMEOUT", "300"))
 # The reduce phase compiles EVERY candidate's verdict in one call — far heavier
 # than a normal chat turn — so it gets its own, much longer timeout. Its prompt
@@ -903,10 +907,66 @@ _COVERAGE_RULES = (
     "something that reads on the element only in part, or only implicitly) or NO.\n"
     "• Judge each element INDEPENDENTLY — a document may disclose some and not others; "
     "that is the point, so never let one element's answer colour another's.\n"
+    "• Elements marked [ADDITIONAL, stretch level N/10] are BONUS: their absence counts "
+    "against nothing. SL says how generous a reading you may give — SL 9–10 = accept a "
+    "broad/implicit/equivalent realisation, SL 5 = a fair reading, SL 1–2 = near-literal. "
+    "Answer PARTIAL for a reading that only holds on a stretch WITHIN that element's SL.\n"
     "• NEVER invent disclosure. If the material is silent, answer NO.\n"
     "• This assessment is SELF-CONTAINED: ignore any ranking or score the document may "
     "already carry elsewhere.\n\n"
     "=== ELEMENTS OF THE CLAIMED INVENTION ===\n{elements}\n\n")
+
+# 🩺 STAGE 0 — the fast recall screen. Its ONLY job is to decide who deserves a closer
+# look, so it is deliberately cheap and generous: a terse output (numbers, no evidence)
+# on a short digest extract, on the cheapest model. Precision comes later; what this
+# stage drops is never looked at again, so it must err towards including.
+COMBI_SCREEN_PROMPT = (
+    "FAST RECALL SCREEN. For each candidate patent, list which ELEMENTS of the claimed "
+    "invention it could PLAUSIBLY disclose.\n\n"
+    "This is a first cut that only decides who gets a closer look — a later, rigorous pass "
+    "verifies every hit. So be GENEROUS: include an element on a broad, implicit, "
+    "functional or equivalent reading. Anything you leave out here is never examined "
+    "again, so when in doubt, INCLUDE. Do not include an element the text gives you no "
+    "basis for at all.\n\n"
+    "=== ELEMENTS ===\n{elements}\n\n"
+    "=== CANDIDATES (digest extracts) ===\n{docs}\n\n"
+    "OUTPUT — exactly ONE line per candidate, nothing else. No evidence, no commentary:\n"
+    "<PUBLICATION NUMBER>: <element numbers, comma-separated, or NONE>")
+
+_SCREEN_LINE_RE = re.compile(r"^\s*([A-Z]{1,3}\d[\dA-Z]*)\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def parse_screen(text: str, features: list[dict]) -> dict:
+    """'<NUMBER>: 1,3,5' → {number: [element index, …]}. Out-of-range numbers ignored."""
+    out: dict = {}
+    for m in _SCREEN_LINE_RE.finditer(text or ""):
+        hits = []
+        for tok in re.split(r"[,\s]+", m.group(2)):
+            if tok.isdigit():
+                i = int(tok) - 1
+                if 0 <= i < len(features):
+                    hits.append(i)
+        out[m.group(1)] = sorted(set(hits))
+    return out
+
+
+def combi_fast_screen(features: list[dict], docs: list[dict],
+                      model: str | None = None) -> dict:
+    """🩺 STAGE 0 — cheap, generous screen over a BATCH of candidates' digest EXTRACTS.
+    Terse by design (element numbers only, short extract, cheapest model): the whole point
+    is to cut hundreds of candidates down to the few dozen worth a rigorous pass, fast.
+    Returns {results: {number: [element index, …]}, model} | {error}."""
+    if not features or not docs:
+        return {"results": {}}
+    doc_blocks = "\n\n".join(
+        f"=== {d['number']} ===\n{(d.get('digest') or '')[:SCREEN_DIGEST_CHARS]}"
+        for d in docs)
+    res = _run_claude(COMBI_SCREEN_PROMPT.format(elements=_element_lines(features),
+                                                 docs=doc_blocks),
+                      model or SCREEN_MODEL, timeout=DIGEST_TIMEOUT)
+    if "error" in res:
+        return res
+    return {"results": parse_screen(res["answer"], features), "model": res.get("model")}
 
 COMBI_DIGEST_PROMPT = (
     "You are mapping which ELEMENTS of a claimed invention each candidate patent "
@@ -965,8 +1025,14 @@ def parse_coverage(text: str, elements: list[dict]) -> dict:
 
 
 def _element_lines(elements: list[dict]) -> str:
-    return "\n".join(f"{i}. {e['name']}  (importance {e.get('weight', 1)}/5)"
-                     for i, e in enumerate(elements, 1))
+    """Numbered elements. ADDITIONAL ones are marked with their stretch level, so the model
+    reads them under the bonus/stretch rules rather than as must-haves."""
+    out = []
+    for i, e in enumerate(elements, 1):
+        tag = (f"  [ADDITIONAL, stretch level {e.get('sl', 5)}/10 — bonus, absence counts "
+               "against nothing]" if (e.get("kind") or "M") == "A" else "")
+        out.append(f"{i}. {e['name']}  (importance {e.get('weight', 1)}/5){tag}")
+    return "\n".join(out)
 
 
 def combi_coverage_digests(elements: list[dict], docs: list[dict],

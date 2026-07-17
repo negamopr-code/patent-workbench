@@ -3114,8 +3114,25 @@ def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
 # feature_scores / additional_scores, so a pair's standing here says nothing about, and is
 # unaffected by, how either document ranks on its own.
 
+COMBI_SCREEN_BATCH = int(os.environ.get("PB_COMBI_SCREEN_BATCH", "40"))
+# A-feature bonus, mirroring the ➕ additional read's scale (app.js ADD_UNIT/ADD_CAP): a
+# present additional element RAISES a pair's rating, its absence never lowers it.
+ADD_UNIT, ADD_CAP = 0.3, 1.0
+# screen → digest → full. A pair is only as trustworthy as its weaker document.
+_DEPTH_RANK = {"screen": 0, "digest": 1, "full": 2}
+
+
 def _combi_elements(bm: dict | None) -> list[dict]:
-    """The MANDATORY features = the elements coverage is judged against."""
+    """Every feature the coverage pass judges — MANDATORY *and* ADDITIONAL.
+
+    The additional ones ride along on purpose: a combination that also brings the bonus
+    element is a better combination, and it costs nothing to ask for it in the same pass.
+    They are kept apart when RATING (see _combi_pairs): only mandatory elements decide
+    whether a pair covers the invention."""
+    return list((bm or {}).get("features") or [])
+
+
+def _combi_mandatory(bm: dict | None) -> list[dict]:
     return [f for f in ((bm or {}).get("features") or []) if (f.get("kind") or "M") != "A"]
 
 
@@ -3130,50 +3147,156 @@ def _cov_map(doc: dict) -> dict:
 def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dict]:
     """Every GENUINE 2-document combination, computed in code (free, no model call).
 
-    A pair is COMPLETE when the union discloses (YES) every element. It only counts as a
-    combination when BOTH documents uniquely contribute an element the other lacks —
-    otherwise one document simply subsumes the other and there is nothing to combine.
-    The rating is the union's covered weight, on its own 0–10 scale."""
-    total_w = sum(int(e.get("weight", 1)) for e in elements) or 1
+    MANDATORY elements decide coverage: a pair is COMPLETE when the union discloses (YES)
+    every one of them. ADDITIONAL elements never affect completeness — their presence adds
+    a bonus that RAISES the rating (same scale as the ➕ additional read), their absence
+    costs nothing. So a pair that also brings the bonus element outranks an equal pair
+    that doesn't.
+
+    A pair only counts as a combination when BOTH documents uniquely contribute a
+    mandatory element the other lacks — otherwise one document simply subsumes the other
+    and there is nothing to combine."""
+    mand = [e for e in elements if (e.get("kind") or "M") != "A"]
+    add = [e for e in elements if (e.get("kind") or "M") == "A"]
+    total_w = sum(int(e.get("weight", 1)) for e in mand) or 1
     cov = {d["id"]: _cov_map(d) for d in docs}
     out = []
     for i in range(len(docs)):
         for j in range(i + 1, len(docs)):
             A, B = docs[i], docs[j]
             ca, cb = cov[A["id"]], cov[B["id"]]
+
+            def best(name):
+                sa, sb = ca.get(name, "no"), cb.get(name, "no")
+                return ("yes" if "yes" in (sa, sb)
+                        else "partial" if "partial" in (sa, sb) else "no"), sa, sb
+
             w = 0.0
             complete = True
             only_a, only_b = [], []
-            for e in elements:
-                name = e["name"]
-                sa, sb = ca.get(name, "no"), cb.get(name, "no")
-                best = "yes" if "yes" in (sa, sb) else (
-                    "partial" if "partial" in (sa, sb) else "no")
-                if best == "yes":
+            for e in mand:
+                u, sa, sb = best(e["name"])
+                if u == "yes":
                     w += int(e.get("weight", 1))
-                elif best == "partial":
+                elif u == "partial":
                     w += int(e.get("weight", 1)) * 0.5
                     complete = False
                 else:
                     complete = False
                 if sa == "yes" and sb != "yes":
-                    only_a.append(name)
+                    only_a.append(e["name"])
                 elif sb == "yes" and sa != "yes":
-                    only_b.append(name)
+                    only_b.append(e["name"])
             if not only_a or not only_b:
                 continue                      # not a combination: one subsumes the other
+            # ADDITIONAL: bonus only — never part of `complete`, never a penalty.
+            bonus, add_cov = 0.0, 0
+            for e in add:
+                u, _, _ = best(e["name"])
+                unit = (int(e.get("weight", 1)) / 5) * ADD_UNIT
+                if u == "yes":
+                    bonus += unit
+                    add_cov += 1
+                elif u == "partial":
+                    bonus += unit * 0.5
+                    add_cov += 1
+            bonus = min(ADD_CAP, bonus)
+            depth = min((A.get("combi_depth") or "screen", B.get("combi_depth") or "screen"),
+                        key=lambda d: _DEPTH_RANK.get(d, 0))
             out.append({
                 "a_id": A["id"], "b_id": B["id"],
                 "a": A.get("number"), "b": B.get("number"),
                 "complete": complete,
-                "rating": round(10.0 * w / total_w, 1),   # independent 0–10
+                # rating = MANDATORY coverage only, on its own 0–10 scale. The additional
+                # bonus is deliberately NOT added in: complete pairs already sit at 10, so
+                # adding it there would saturate and hide the very thing it measures. It
+                # ranks instead (below), and is reported separately — an honest metric plus
+                # a visible bonus beats one number that quietly means two things.
+                "rating": round(10.0 * w / total_w, 1),
+                "add_bonus": round(bonus, 2), "add_cov": add_cov, "add_total": len(add),
                 "covered_w": round(w, 1), "total_w": total_w,
                 "a_only": only_a[:12], "b_only": only_b[:12],
-                "depth": "full" if (A.get("combi_depth") == "full"
-                                    and B.get("combi_depth") == "full") else "digest",
+                "depth": depth,
             })
-    out.sort(key=lambda p: (-p["complete"], -p["rating"], -len(p["a_only"]) - len(p["b_only"])))
+    # Additional coverage breaks ties: between two pairs that cover the invention equally,
+    # the one that ALSO brings the bonus element is the better combination.
+    out.sort(key=lambda p: (-p["complete"], -p["rating"], -p["add_bonus"],
+                            -len(p["a_only"]) - len(p["b_only"])))
     return out[:limit]
+
+
+@app.post("/api/tabs/{tab_id}/combi-screen")
+def combi_screen_ep(tab_id: int, body: schemas.CombiScreenRequest):
+    """🩺 STAGE 0 — the FAST cut. Rank every digested candidate by how many elements it could
+    PLAUSIBLY disclose, then hand back the top N for the rigorous pass.
+
+    Deliberately cheap and generous: cheapest model, a short digest extract, terse output
+    (element numbers, no evidence). Judging 284 candidates × 12 elements at full rigour is
+    the slow part — this decides WHO deserves that in a fraction of the time. Recall is what
+    matters here, so it stretches: what this stage drops is never looked at again."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    elements = _combi_elements(bm)
+    if not elements:
+        raise HTTPException(400, "the benchmark has no features to screen against")
+    docs = [d for d in db.list_documents(tab_id, full=True)
+            if d["status"] == "fetched" and (d.get("digest") or "").strip()]
+    if not docs:
+        raise HTTPException(400, "no candidates with a stored digest — 🔁 backfill first")
+    model = _read_model(body.model) or claude_bridge.SCREEN_MODEL
+    batches = [docs[i:i + COMBI_SCREEN_BATCH]
+               for i in range(0, len(docs), COMBI_SCREEN_BATCH)]
+    hits: dict[str, list] = {}
+    errors: list[str] = []
+    lock = threading.Lock()
+
+    def one(batch: list[dict]) -> None:
+        res = claude_bridge.combi_fast_screen(elements, batch, model=model)
+        if "error" in res:
+            with lock:
+                errors.append(res["error"])
+            return
+        got = res.get("results") or {}
+        for d in batch:
+            idxs = got.get(d["number"])
+            if idxs is None:
+                continue
+            # Screen verdicts are coarse and generous — stored at depth 'screen' so nothing
+            # downstream mistakes them for a rigorous read.
+            cov = [{"name": e["name"], "weight": int(e.get("weight", 1)),
+                    "status": "yes" if i in idxs else "no", "evidence": ""}
+                   for i, e in enumerate(elements)]
+            db.update_document(d["id"], combi_coverage=json.dumps(cov, ensure_ascii=False),
+                               combi_depth="screen")
+            with lock:
+                hits[d["number"]] = idxs
+
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(one, batches))
+    if not hits:
+        raise HTTPException(400, f"combi screen failed: {errors[0] if errors else 'nothing parsed'}")
+    mand_idx = {i for i, e in enumerate(elements) if (e.get("kind") or "M") != "A"}
+    scored = []
+    for d in docs:
+        idxs = hits.get(d["number"])
+        if idxs is None:
+            continue
+        w = sum(int(elements[i].get("weight", 1)) for i in idxs if i in mand_idx)
+        scored.append({"id": d["id"], "number": d.get("number"), "hits": len(idxs),
+                       "mand_hits": len([i for i in idxs if i in mand_idx]), "weight": w})
+    scored.sort(key=lambda x: (-x["weight"], -x["mand_hits"]))
+    keep = scored[:body.top_n]
+    missed = len(docs) - len(hits)
+    note = (f" ⚠ {missed} candidate(s) not screened ({len(errors)} batch(es) failed) — re-run "
+            "to include them." if missed else "")
+    db.append_message(tab_id, "s",
+        f"🩺 Fast screen (stage 0, {model}) over {len(hits)} candidate(s) in {len(batches)} "
+        f"pass(es) against {len(elements)} element(s): shortlisted the top {len(keep)} for a "
+        f"closer look. Generous by design (broad/implicit readings included) — this only "
+        f"decides WHO gets the rigorous pass, it is not a verdict.{note}")
+    return {"ok": True, "screened": len(hits), "requested": len(docs),
+            "batches": len(batches), "failed_batches": len(errors),
+            "elements": len(elements), "shortlist": keep, "dropped": len(scored) - len(keep)}
 
 
 @app.post("/api/tabs/{tab_id}/combi-scan")
@@ -3187,12 +3310,15 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
     _tab_or_404(tab_id)
     bm = db.get_benchmark(tab_id)
     elements = _combi_elements(bm)
-    if len(elements) < 2:
+    if len(_combi_mandatory(bm)) < 2:
         raise HTTPException(400, "combination analysis needs at least TWO mandatory elements — "
                                  "one monolithic feature cannot be split between two documents. "
                                  "Use 🔬 Decompose to split the claim into its elements first.")
     docs = [d for d in db.list_documents(tab_id, full=True)
             if d["status"] == "fetched" and (d.get("digest") or "").strip()]
+    if body.doc_ids:                       # the 🩺 screen's shortlist — the usual path
+        keep = set(body.doc_ids)
+        docs = [d for d in docs if d["id"] in keep]
     if len(docs) < 2:
         raise HTTPException(400, "need at least two candidates with a stored digest — "
                                  "🔁 backfill the missing digests first")
@@ -3247,7 +3373,7 @@ def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest):
     _tab_or_404(tab_id)
     bm = db.get_benchmark(tab_id)
     elements = _combi_elements(bm)
-    if len(elements) < 2:
+    if len(_combi_mandatory(bm)) < 2:
         raise HTTPException(400, "combination analysis needs at least TWO mandatory elements — "
                                  "use 🔬 Decompose first")
     chosen = []

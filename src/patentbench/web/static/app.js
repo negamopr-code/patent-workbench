@@ -985,21 +985,34 @@ async function runCombiScan() {
   const eligible = (lastDocs || []).filter(d => d.status === 'fetched' && d.digest_len);
   const gap = (lastDocs || []).filter(d => d.status === 'fetched' && !d.digest_len).length;
   if (eligible.length < 2) { appendMsg({ role: 's', text: 'Need ≥2 candidates with a stored digest — 🔁 backfill first.' }); return; }
-  const passes = Math.ceil(eligible.length / 25);
-  if (!confirm(`🔎 Investigate 2-document coverage — STAGE 1\n\n`
-      + `Maps which of the ${mand.length} element(s) each of the ${eligible.length} candidate(s) `
-      + `discloses, from stored digests (~${passes} bulk pass(es)), then derives the pairs that `
-      + `together cover everything.\n\n`
+  const add = ((currentBm && currentBm.features) || []).filter(f => (f.kind || 'M') === 'A');
+  const KEEP = Math.min(50, eligible.length);
+  if (!confirm(`🔎 Investigate 2-document coverage\n\n`
+      + `🩺 STAGE 0 — fast screen: cuts ${eligible.length} candidates down to ~${KEEP} worth a `
+      + `closer look. Cheapest model, short digest extracts, GENEROUS (broad/implicit readings `
+      + `count) — quick, and not a verdict.\n`
+      + `🔎 STAGE 1 — then maps the ${mand.length} mandatory element(s)`
+      + (add.length ? ` + ${add.length} additional` : '') + ` rigorously across the shortlist.\n`
+      + `🔬 STAGE 2 — you then confirm the finalists on full text.\n\n`
       + (gap ? `⚠ ${gap} candidate(s) have NO digest and will be SKIPPED — 🔁 backfill to include them.\n\n` : '')
-      + `Verdicts are from SUMMARIES at this stage; stage 2 confirms the finalists against full text.\n\n`
       + `Continue?`)) return;
   const btn = $('combi-scan'); btn.disabled = true;
-  setBusy(true, `Combi stage 1: element coverage over ${eligible.length} candidates`);
+  // 🩺 stage 0 — the fast cut. Judging every candidate at full rigour is the slow part;
+  // this decides who deserves it, cheaply.
+  setBusy(true, `🩺 Stage 0: fast screen over ${eligible.length} candidates`);
+  const scr = await api(`/api/tabs/${activeTab}/combi-screen`, {
+    method: 'POST', body: JSON.stringify({ top_n: KEEP }) });
+  if (scr.error) { setBusy(false); btn.disabled = false; appendMsg({ role: 's', text: `Error: ${scr.error}` }); return; }
+  const ids = (scr.shortlist || []).map(s => s.id);
+  await reloadChat();
+  if (ids.length < 2) { setBusy(false); btn.disabled = false; appendMsg({ role: 's', text: '🩺 Screen shortlisted <2 candidates — nothing to combine.' }); return; }
+  // 🔎 stage 1 — rigorous, but only over the shortlist.
+  setBusy(true, `🔎 Stage 1: element coverage over the ${ids.length} shortlisted (of ${scr.screened})`);
   const res = await api(`/api/tabs/${activeTab}/combi-scan`, {
-    method: 'POST', body: JSON.stringify({ model: readModelValue() }) });
+    method: 'POST', body: JSON.stringify({ doc_ids: ids, model: readModelValue() }) });
   setBusy(false); btn.disabled = false;
   if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
-  combiScan = res;
+  combiScan = { ...res, screened: scr.screened, dropped: scr.dropped };
   renderCombiScanPanel();
   await reloadChat();
 }
@@ -1035,9 +1048,11 @@ function renderCombiScanPanel() {
   const head = document.createElement('div');
   head.className = 'combi-head';
   head.innerHTML = `<b>🔎 2-document coverage — found by the tool</b> `
-    + `<span class="muted">(${complete.length} pair(s) cover ALL ${r.elements} element(s); `
-    + `verdicts from ${r.depth === 'full' ? 'FULL TEXT' : 'digests — stage 2 not run yet'}. `
-    + `This rating is independent of every other score.)</span>`;
+    + `<span class="muted">(${complete.length} pair(s) cover ALL mandatory element(s)`
+    + (r.screened ? `; 🩺 screened ${r.screened} → ${r.screened - (r.dropped || 0)} shortlisted` : '')
+    + `; verdicts from ${r.depth === 'full' ? 'FULL TEXT' : 'digests — stage 2 not run yet'}. `
+    + `Additional elements add a bonus, never a penalty. This rating is independent of every `
+    + `other score.)</span>`;
   panel.appendChild(head);
   const actions = document.createElement('div');
   actions.className = 'combi-actions';
@@ -1063,7 +1078,8 @@ function renderCombiScanPanel() {
       `<span class="chip ${p.complete ? 'ok' : 'warn'}">${p.complete ? '✓ covers all' : 'partial'}</span>`
       + `<b>${p.a}</b> + <b>${p.b}</b> `
       + `<span class="chip">rating ${p.rating}/10</span>`
-      + `<span class="chip" title="digest = summary-based (stage 1); full = re-read against primary text (stage 2)">${p.depth === 'full' ? '📖 full text' : '🧾 digest'}</span>`
+      + (p.add_total ? `<span class="chip" title="Additional (bonus) elements the pair covers — they raise the rating, never lower it">➕ ${p.add_cov}/${p.add_total} additional${p.add_bonus ? ` (+${p.add_bonus})` : ''}</span>` : '')
+      + `<span class="chip" title="screen = fast generous cut (stage 0); digest = summary-based (stage 1); full = re-read against primary text (stage 2). A pair is only as trustworthy as its weaker document.">${{ full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' }[p.depth] || p.depth}</span>`
       + `<div class="muted">only in ${p.a}: ${p.a_only.join('; ') || '—'}<br>`
       + `only in ${p.b}: ${p.b_only.join('; ') || '—'}</div>`;
     panel.appendChild(row);

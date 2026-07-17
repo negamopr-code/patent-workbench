@@ -197,11 +197,21 @@ class DigestRescoreRequest(BaseModel):
     model: str | None = None
 
 
-class CombiScanRequest(BaseModel):
-    """🔎 STAGE 1 of the combi investigation: map element coverage across EVERY candidate with
-    a digest, then derive the pairs that together cover everything. Cheap + batched, so the
-    whole corpus is in scope — the pair that covers everything may rank nowhere near the top."""
+class CombiScreenRequest(BaseModel):
+    """🩺 STAGE 0 — the fast, generous cut: rank every digested candidate by how many elements
+    it could plausibly disclose and keep the top_n for the rigorous pass. Cheapest model,
+    short digest extract, terse output. Recall over precision: what it drops is never seen
+    again."""
     model: str | None = None
+    top_n: int = Field(default=50, ge=2, le=284)
+
+
+class CombiScanRequest(BaseModel):
+    """🔎 STAGE 1: map element coverage rigorously, then derive the pairs that together cover
+    everything. doc_ids = the 🩺 screen's shortlist (the usual path); omit to scan EVERY
+    digested candidate — thorough but slow on a large corpus."""
+    model: str | None = None
+    doc_ids: list[int] | None = None
     top_pairs: int = Field(default=20, ge=1, le=100)   # how many pairs to return
 
 
