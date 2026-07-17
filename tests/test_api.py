@@ -2337,6 +2337,77 @@ def test_combi_surfaces_documents_that_cover_everything_alone(client, monkeypatc
     assert not any(p["complete"] for p in r["pairs"])
 
 
+def test_combi_solo_counts_partial_as_covering(client, monkeypatch):
+    """The CN111181207 case: a document strong on most limbs but PARTIAL (implicit/pack-level)
+    on a couple still anticipates — a partial can meet a limitation. It must appear as a solo
+    coverer, flagged, not vanish because it wasn't literal-YES on every element. Only a real
+    'no' disqualifies. Literal coverers rank above stretched ones."""
+    from patentbench import claude_bridge as cb
+    import patentbench.db as _db
+    tab = client.post("/api/tabs", json={"name": "SoloP"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "preamble", "weight": 1, "kind": "M", "sl": 5},
+        {"name": "packs", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "cell-voltage", "weight": 4, "kind": "M", "sl": 5},
+    ]})
+    nums = ["CN102122826", "CN111181207", "EPweak000"]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": nums, "source": "image"})
+    for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
+        _db.update_document(d["id"], digest="d", score=5, scored_at=1)
+    def fake_cov(elements, docs, model=None):
+        table = {  #             preamble  packs   cell-voltage
+            "CN102122826": ["yes", "yes", "yes"],       # literal on all 3
+            "CN111181207": ["partial", "yes", "partial"],  # covers all, 2 partial (the real case)
+            "EPweak000":   ["yes", "yes", "no"],        # a genuine gap → NOT a solo coverer
+        }
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i], "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    solo = {s["number"]: s for s in r["solo"]}
+    assert set(solo) == {"CN102122826", "CN111181207"}      # the partial one IS included
+    assert "EPweak000" not in solo                          # the one with a real 'no' is not
+    assert [s["number"] for s in r["solo"]] == ["CN102122826", "CN111181207"]  # literal first
+    p = solo["CN111181207"]
+    assert p["mand_full"] == 1 and p["mand_partial"] == 2
+    assert sorted(p["partial_names"]) == ["cell-voltage", "preamble"]   # named to argue
+
+
+def test_combi_pair_counts_partial_toward_covers_all(client, monkeypatch):
+    """Pairs use the same standard: the union covering an element at YES *or* PARTIAL makes
+    the pair complete, and the rating (partial=half) keeps a stretched cover below a literal
+    one so they never read as equal."""
+    from patentbench import claude_bridge as cb
+    import patentbench.db as _db
+    tab = client.post("/api/tabs", json={"name": "PairP"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "packs", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "bus", "weight": 5, "kind": "M", "sl": 5},
+    ]})
+    nums = ["EP4400001", "EP4400002"]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": nums, "source": "image"})
+    for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
+        _db.update_document(d["id"], digest="d", score=5, scored_at=1)
+    def fake_cov(elements, docs, model=None):
+        table = {"EP4400001": ["yes", "no"],       # packs solid, no bus
+                 "EP4400002": ["no", "partial"]}   # bus only partial
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i], "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert len(r["pairs"]) == 1
+    p = r["pairs"][0]
+    assert p["complete"] is True                    # union covers both (one via partial)
+    assert p["mand_full"] == 1 and p["mand_partial"] == 1
+    assert p["rating"] == 7.5                        # 5 + 5*0.5 = 7.5 of 10 — below a literal 10
+
+
 def test_combi_solo_ranked_by_additional_coverage(client, monkeypatch):
     """Once several documents each cover the mandatory set, the ADDITIONAL elements are
     what separate them — that is the whole point of splitting them."""

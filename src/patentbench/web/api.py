@@ -3258,8 +3258,13 @@ def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list
     a novelty-grade hit, where a pair is only an obviousness argument that still needs a
     motivation to combine. _combi_pairs deliberately drops any pair where one document
     subsumes the other, so without this list a solo full-coverer would vanish from the
-    results entirely — the strongest finding, invisible. Ordered by additional coverage,
-    which is what separates them once they all cover the mandatory elements."""
+    results entirely — the strongest finding, invisible.
+
+    A document COVERS a mandatory element at YES *or* PARTIAL: a partial/implicit/pack-level
+    disclosure can still MEET a limitation — that is the anticipation standard, not literal
+    identity — so requiring every element at YES hid genuine single-reference anticipations
+    (e.g. one strong on 9 limbs, pack-level on 2). Only a "no" means the document truly lacks
+    the element. Literal coverers (more YES) rank first; the ✓/~ split stays visible."""
     mand = [e for e in elements if (e.get("kind") or "M") != "A"]
     add = [e for e in elements if (e.get("kind") or "M") == "A"]
     if not mand:
@@ -3267,8 +3272,12 @@ def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list
     out = []
     for d in docs:
         cov = _cov_map(d)
-        if any(cov.get(e["name"], "no") != "yes" for e in mand):
+        statuses = [cov.get(e["name"], "no") for e in mand]
+        if any(s == "no" for s in statuses):        # a real gap → not a single-ref coverer
             continue
+        mand_full = sum(1 for s in statuses if s == "yes")
+        mand_part = sum(1 for s in statuses if s == "partial")
+        partial_names = [e["name"] for e, s in zip(mand, statuses) if s == "partial"]
         bonus, add_full, add_part = 0.0, 0, 0
         for e in add:
             s = cov.get(e["name"], "no")
@@ -3280,14 +3289,14 @@ def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list
                 bonus += unit * 0.5
                 add_part += 1
         out.append({"id": d["id"], "number": d.get("number"),
-                    "mand_total": len(mand),
-                    # add_cov = full+partial (kept for compat); add_full / add_partial split
-                    # them so a '9/9' that is mostly stretch reads as weaker than a '7 full'
+                    "mand_total": len(mand), "mand_full": mand_full,
+                    "mand_partial": mand_part, "partial_names": partial_names[:12],
                     "add_cov": add_full + add_part, "add_full": add_full,
                     "add_partial": add_part, "add_total": len(add),
                     "add_bonus": round(min(ADD_CAP, bonus), 2),
                     "depth": d.get("combi_depth") or "screen"})
-    out.sort(key=lambda s: (-s["add_bonus"], -s["add_cov"], s["number"] or ""))
+    # literal coverers first (most mandatory YES), then additional bonus, then more partial
+    out.sort(key=lambda s: (-s["mand_full"], -s["add_bonus"], -s["add_cov"], s["number"] or ""))
     return out[:limit]
 
 
@@ -3318,21 +3327,31 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
                 return ("yes" if "yes" in (sa, sb)
                         else "partial" if "partial" in (sa, sb) else "no"), sa, sb
 
+            # A document COVERS an element at YES or PARTIAL (partial can still meet a
+            # limitation — the anticipation standard). `complete` = the union leaves NO
+            # mandatory element uncovered; mand_full / mand_partial record the quality, and
+            # the rating (weighted, partial=half) separates a literal cover from a stretched
+            # one so the two never look equal.
+            def has(s):
+                return s in ("yes", "partial")
+
             w = 0.0
+            mand_full = mand_part = 0
             complete = True
             only_a, only_b = [], []
             for e in mand:
                 u, sa, sb = best(e["name"])
                 if u == "yes":
                     w += int(e.get("weight", 1))
+                    mand_full += 1
                 elif u == "partial":
                     w += int(e.get("weight", 1)) * 0.5
-                    complete = False
+                    mand_part += 1
                 else:
-                    complete = False
-                if sa == "yes" and sb != "yes":
+                    complete = False          # a real gap in BOTH → not covered
+                if has(sa) and not has(sb):
                     only_a.append(e["name"])
-                elif sb == "yes" and sa != "yes":
+                elif has(sb) and not has(sa):
                     only_b.append(e["name"])
             if not only_a or not only_b:
                 continue                      # not a combination: one subsumes the other
@@ -3360,6 +3379,7 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
                 # ranks instead (below), and is reported separately — an honest metric plus
                 # a visible bonus beats one number that quietly means two things.
                 "rating": round(10.0 * w / total_w, 1),
+                "mand_full": mand_full, "mand_partial": mand_part, "mand_total": len(mand),
                 "add_bonus": round(bonus, 2), "add_cov": add_full + add_part,
                 "add_full": add_full, "add_partial": add_part, "add_total": len(add),
                 "covered_w": round(w, 1), "total_w": total_w,

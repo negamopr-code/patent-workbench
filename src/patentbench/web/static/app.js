@@ -1137,16 +1137,28 @@ function renderCombiScanPanel() {
     sh.className = 'combi-head';
     sh.innerHTML = `<b>🎯 Covers EVERYTHING alone — ${solo.length} document(s)</b> `
       + `<span class="muted">strongest: a single document disclosing every mandatory element `
-      + `(novelty-grade), vs a pair below which needs a motivation to combine. Ordered by `
-      + `additional coverage — that is what separates them once all cover the mandatory set.</span>`;
+      + `(novelty-grade), vs a pair below which needs a motivation to combine. A partial (~) `
+      + `limb still counts as disclosed (the anticipation standard) — literal (✓) coverers `
+      + `rank first, and the ~ limbs are named so you see what to argue.</span>`;
     panel.appendChild(sh);
     for (const s of solo) {
       const row = document.createElement('div');
       row.className = 'combi-row';
-      row.innerHTML = `<span class="chip ok">✓ alone</span><b>${esc(s.number)}</b> `
-        + `<span class="chip">${s.mand_total}/${s.mand_total} mandatory</span>`
+      const mfull = s.mand_full ?? s.mand_total, mpart = s.mand_partial ?? 0;
+      row.innerHTML = `<span class="chip ${mpart ? 'warn' : 'ok'}">${mpart ? '≈ alone' : '✓ alone'}</span><b>${esc(s.number)}</b> `
+        + `<span class="chip" title="Mandatory elements met: ✓ = literal/full disclosure, ~ = partial/implicit (still meets the limitation under the anticipation standard). All ${s.mand_total} are covered — none is a 'no'.">${mpart ? `${mfull}✓ +${mpart}~` : `${mfull}✓`}/${s.mand_total} mandatory</span>`
         + additionalChip(s)
-        + `<span class="chip">${{ full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' }[s.depth] || s.depth}</span>`;
+        + `<span class="chip">${{ full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' }[s.depth] || s.depth}</span>`
+        + ((s.partial_names || []).length ? `<div class="muted">partial (argue these): ${s.partial_names.map(esc).join('; ')}</div>` : '');
+      // 🔬 verify a solo hit on full text — the strongest single-reference claim, most worth grounding
+      if (s.depth !== 'full') {
+        const vb = document.createElement('button');
+        vb.className = 'btn small';
+        vb.textContent = '🔬 verify on full text';
+        vb.title = 'Deep-read this document\'s full primary text against every element, replacing its digest/screen verdict with a citable one.';
+        vb.onclick = () => runCombiVerify({ ids: [s.id] });
+        row.appendChild(vb);
+      }
       panel.appendChild(row);
     }
     const ph = document.createElement('div');
@@ -1167,7 +1179,7 @@ function renderCombiScanPanel() {
     const row = document.createElement('div');
     row.className = 'combi-row';
     row.innerHTML =
-      `<span class="chip ${p.complete ? 'ok' : 'warn'}">${p.complete ? '✓ covers all' : 'partial'}</span>`
+      `<span class="chip ${p.complete ? (p.mand_partial ? 'warn' : 'ok') : 'warn'}" title="${p.complete ? `Together the two disclose every mandatory element: ${p.mand_full ?? '?'} literal (✓)${p.mand_partial ? ` + ${p.mand_partial} partial (~, still meets the limitation)` : ''}.` : 'The union still leaves a mandatory element uncovered.'}">${p.complete ? (p.mand_partial ? `✓ covers all (${p.mand_full}✓ ${p.mand_partial}~)` : '✓ covers all') : 'incomplete'}</span>`
       + `<b>${p.a}</b> + <b>${p.b}</b> `
       + `<span class="chip">rating ${p.rating}/10</span>`
       + additionalChip(p)
