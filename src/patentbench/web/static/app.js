@@ -221,6 +221,17 @@ async function selectTab(id) {
   pollRate();                     // resume showing progress if an NLM rating job is in flight
   pollRead();                     // resume showing progress if a Claude deep-read is in flight
   attachPipeline();               // re-attach / offer ▶️ Resume if a pipeline job is in flight
+  rehydrateCombi(id);             // restore the 🔎 investigation panel from stored coverage
+}
+
+// The 🔎 panel is otherwise pure client state (a scan's response held in memory), so a page
+// reload empties it even though every verdict is safe in the DB. Re-derive the last findings
+// from stored coverage so they survive a refresh / tab switch.
+async function rehydrateCombi(tabAtCall) {
+  const r = await api(`/api/tabs/${tabAtCall}/combi-results`);
+  if (activeTab !== tabAtCall || r.error || !r.has_results) return;
+  combiScan = r;
+  renderCombiScanPanel();
 }
 
 /* ---------- benchmark (reference document) ---------- */

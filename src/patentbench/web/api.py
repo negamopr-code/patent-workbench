@@ -3373,6 +3373,26 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
     return out[:limit]
 
 
+@app.get("/api/tabs/{tab_id}/combi-results")
+def combi_results_ep(tab_id: int, top_pairs: int = 20):
+    """The LAST investigation's findings, re-derived from STORED coverage — so a page reload
+    doesn't lose them. The panel is otherwise pure client state (a scan's response held in
+    memory), which a refresh wipes even though every verdict is safely in the DB. This lets
+    the UI rehydrate the panel on load. Nothing is computed by a model here."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    elements = _combi_elements(bm)
+    fresh = [d for d in db.list_documents(tab_id, full=True) if _rigorous(d, elements)]
+    if not fresh:
+        return {"ok": True, "has_results": False, "pairs": [], "solo": [], "elements": len(elements)}
+    pairs = _combi_pairs(elements, fresh, top_pairs)
+    solo = _combi_solo(elements, fresh)
+    depth = "full" if fresh and all(d.get("combi_depth") == "full" for d in fresh) else "digest"
+    return {"ok": True, "has_results": True, "assessed": len(fresh),
+            "elements": len(elements), "complete": len([p for p in pairs if p["complete"]]),
+            "pairs": pairs, "solo": solo, "depth": depth}
+
+
 @app.post("/api/tabs/{tab_id}/combi-screen")
 def combi_screen_ep(tab_id: int, body: schemas.CombiScreenRequest):
     """🩺 STAGE 0 — the FAST cut. Rank every digested candidate by how many elements it could

@@ -2289,6 +2289,32 @@ def test_combi_scoring_is_independent_of_every_other_score(client, monkeypatch):
     assert _db.get_document(docs[0]["id"])["combi_coverage"]      # ...stored separately
 
 
+def test_combi_results_rehydrate_from_stored_coverage(client, monkeypatch):
+    """The findings survive a reload: GET /combi-results re-derives pairs+solo from stored
+    coverage (no model call), so the panel isn't lost when the in-memory scan state is."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    # nothing scanned yet → no results
+    r0 = client.get(f"/api/tabs/{tid}/combi-results").json()
+    assert r0["has_results"] is False and r0["pairs"] == [] and r0["solo"] == []
+    # run a scan, then fetch results WITHOUT re-running anything
+    monkeypatch.setattr(cb, "combi_coverage_digests", lambda elements, docs, model=None: {
+        "results": {d["number"]: [{"name": e["name"], "weight": e["weight"],
+                                   "status": "yes", "evidence": "e"} for e in elements]
+                    for d in docs}, "model": "m"})
+    client.post(f"/api/tabs/{tid}/combi-scan", json={})
+    r = client.get(f"/api/tabs/{tid}/combi-results").json()
+    assert r["has_results"] is True and r["assessed"] == 3
+    assert len(r["solo"]) == 3        # all three cover everything → all solo hits
+    # a screen-only tab must NOT rehydrate findings (generous guess, not a verdict)
+    tid2, _ = _combi_tab(client, monkeypatch)
+    monkeypatch.setattr(cb, "combi_fast_screen", lambda features, docs, model=None: {
+        "results": {d["number"]: [0, 1, 2] for d in docs}, "model": "haiku"})
+    client.post(f"/api/tabs/{tid2}/combi-screen", json={"top_n": 3})
+    r2 = client.get(f"/api/tabs/{tid2}/combi-results").json()
+    assert r2["has_results"] is False   # screen-only → nothing rigorous to show
+
+
 def test_combi_surfaces_documents_that_cover_everything_alone(client, monkeypatch):
     """A document disclosing the WHOLE invention is novelty-grade — strictly stronger than
     any combination. _combi_pairs drops subsumed pairs, so without the solo list the
@@ -2545,32 +2571,71 @@ def test_combi_additional_alone_never_makes_a_pair_complete(client, monkeypatch)
     assert r["pairs"][0]["add_cov"] == 1 and not r["pairs"][0]["complete"]
 
 
+def test_screen_only_documents_never_produce_findings(client, monkeypatch):
+    """The 🩺 screen is deliberately generous — it over-includes so nothing real is dropped
+    before the rigorous pass. Those guesses must NEVER surface as pairs or solo hits: doing
+    so publishes 'covers everything' built from a guess. Only digest+ verdicts count."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    # screen says every document plausibly discloses everything (the generous extreme)
+    monkeypatch.setattr(cb, "combi_fast_screen", lambda features, docs, model=None: {
+        "results": {d["number"]: [0, 1, 2] for d in docs}, "model": "haiku"})
+    r = client.post(f"/api/tabs/{tid}/combi-screen", json={"top_n": 3}).json()
+    assert r["screened"] == 3
+    # ...yet the scan, with every rigorous batch failing, must report NO findings at all
+    monkeypatch.setattr(cb, "combi_coverage_digests",
+                        lambda elements, docs_, model=None: {"error": "claude chat timed out"})
+    r2 = client.post(f"/api/tabs/{tid}/combi-scan", json={})
+    assert r2.status_code == 400                       # loud, not a screen-built answer
+    assert "timed out" in r2.json()["detail"]
+
+
+def test_combi_scan_splits_and_retries_a_failed_batch(client, monkeypatch):
+    """A timeout scales with batch size, so a dead batch is halved and retried rather than
+    losing every document in it."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    monkeypatch.setattr(api, "COMBI_SCAN_BATCH", 3)
+    sizes = []
+    def fake_cov(elements, docs_, model=None):
+        sizes.append(len(docs_))
+        if len(docs_) > 1:                       # the big batch always times out
+            return {"error": "claude chat timed out"}
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"], "status": "yes", "evidence": "e"}
+            for e in elements] for d in docs_}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    assert r["scanned"] == 3                     # all three landed via the split
+    assert max(sizes) == 3 and sizes.count(1) == 3   # halved down to singletons
+
+
 def test_combi_pair_depth_is_that_of_its_weaker_document(client, monkeypatch):
-    """A pair is only as trustworthy as its weaker read — screen < digest < full."""
+    """A pair is only as trustworthy as its weaker read — digest < full."""
     from patentbench import claude_bridge as cb
     tid, nums = _combi_tab(client, monkeypatch)
     # each document holds exactly ONE distinct element, so every pair is a genuine
     # combination (a document disclosing everything would subsume the others and no pair
     # would survive the filter at all)
     OWN = {"EP4400001": 0, "EP4400002": 1, "EP4400003": 2}
-    monkeypatch.setattr(cb, "combi_fast_screen", lambda features, docs, model=None: {
-        "results": {d["number"]: [OWN[d["number"]]] for d in docs}, "model": "haiku"})
-    client.post(f"/api/tabs/{tid}/combi-screen", json={"top_n": 3})
-    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
-    # upgrade TWO of the three to digest depth (the scan needs ≥2); the third stays 'screen'
+    def cov(elements, doc_nums):
+        return {n: [{"name": e["name"], "weight": e["weight"],
+                     "status": "yes" if i == OWN[n] else "no", "evidence": "e"}
+                    for i, e in enumerate(elements)] for n in doc_nums}
     monkeypatch.setattr(cb, "combi_coverage_digests", lambda elements, docs_, model=None: {
-        "results": {d["number"]: [{"name": e["name"], "weight": e["weight"],
-                                   "status": "yes" if i == OWN[d["number"]] else "no",
-                                   "evidence": "e"}
-                                  for i, e in enumerate(elements)] for d in docs_},
-        "model": "m"})
+        "results": cov(elements, [d["number"] for d in docs_]), "model": "m"})
+    client.post(f"/api/tabs/{tid}/combi-scan", json={})       # all three at digest depth
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    # now upgrade TWO of the three to FULL depth; the third stays at digest
+    monkeypatch.setattr(cb, "combi_coverage_full", lambda elements, doc, model=None: {
+        "results": cov(elements, [doc["number"]]), "model": "m"})
     upgraded = [docs[0]["id"], docs[1]["id"]]
-    r = client.post(f"/api/tabs/{tid}/combi-scan", json={"doc_ids": upgraded}).json()
+    r = client.post(f"/api/tabs/{tid}/combi-verify", json={"doc_ids": upgraded}).json()
     by = {(p["a_id"], p["b_id"]): p for p in r["pairs"]}
     both_up = [p for k, p in by.items() if set(k) == set(upgraded)]
     mixed = [p for k, p in by.items() if len(set(k) & set(upgraded)) == 1]
-    assert all(p["depth"] == "digest" for p in both_up)  # both sides rigorous
-    assert mixed and all(p["depth"] == "screen" for p in mixed)   # weaker side wins
+    assert both_up and all(p["depth"] == "full" for p in both_up)   # both sides verified
+    assert mixed and all(p["depth"] == "digest" for p in mixed)     # weaker side wins
 
 
 def test_combi_verify_full_text_replaces_the_digest_verdict(client, monkeypatch):
