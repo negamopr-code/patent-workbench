@@ -529,6 +529,10 @@ def benchmark_clear(tab_id: int):
 # ---------- documents ----------
 
 DIGEST_WORKERS = int(os.environ.get("PB_DIGEST_WORKERS", "4"))
+# Bulk digest passes (➕ additional read, ♻️ re-check): one call per this many candidates.
+# Sized like the cross-tab scan. Batching is what lets those tools span ALL documents —
+# a single call over hundreds of digests would blow the prompt budget.
+BULK_DIGEST_BATCH = int(os.environ.get("PB_BULK_DIGEST_BATCH", "25"))
 
 
 def _fetch_into_db(doc_id: int) -> None:
@@ -549,19 +553,26 @@ def _fetch_into_db(doc_id: int) -> None:
 
 def _digest_doc(doc_id: int, model: str | None = None) -> None:
     """Cheap-model pass over the candidate's FULL text → stored digest, so the
-    chat is description-aware for every candidate from the get-go."""
+    chat is description-aware for every candidate from the get-go.
+
+    A FAILED digest is RECORDED, never dropped: every digest-based tool (➕ additional
+    read, ♻️ re-check, 🧩 combi) silently skips a document without one, so a swallowed
+    error takes the document out of scope invisibly — and the run still reports 'all'."""
     doc = db.get_document(doc_id)
     if not doc or doc["status"] != "fetched" or doc.get("digest"):
         return
     fulltext = "\n\n".join(filter(None, [doc.get("abstract"), doc.get("claims"),
                                          doc.get("description")]))
     if not fulltext:
+        db.update_document(doc_id, digest_error="no primary text to digest")
         return
     res = claude_bridge.digest_document(doc["number"], doc.get("title") or "", fulltext,
                                         model=model)
     if "digest" in res:
-        db.update_document(doc_id, digest=res["digest"],
+        db.update_document(doc_id, digest=res["digest"], digest_error=None,
                            digest_model=model or claude_bridge.DIGEST_MODEL)
+    else:
+        db.update_document(doc_id, digest_error=(res.get("error") or "digest failed")[:300])
 
 
 def _process_figures(doc_id: int, model: str | None = None, force: bool = False) -> int:
@@ -2883,10 +2894,11 @@ def cross_tab_scan_status(tab_id: int):
 
 @app.post("/api/tabs/{tab_id}/digest-rescore")
 def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest):
-    """♻️ RE-CHECK. After a benchmark change, re-score the top candidates against the CURRENT
-    benchmark from their STORED DIGESTS in ONE bulk call — no full-text re-read, no downgrade
-    from a slow full pass. Updates score/score_note (score_model tagged '·digest' so it's clear
-    these are the cheap digest-based scores, not a fresh full read)."""
+    """♻️ RE-CHECK. After a benchmark change, re-score candidates against the CURRENT benchmark
+    from their STORED DIGESTS — no full-text re-read, no downgrade from a slow full pass. Scope
+    is the top-N or EVERY candidate with a digest (all_docs), batched so hundreds of digests
+    cannot blow the prompt budget. Updates score/score_note (score_model tagged '·digest' so
+    it's clear these are the cheap digest-based scores, not a fresh full read)."""
     _tab_or_404(tab_id)
     bm = db.get_benchmark(tab_id)
     if not bm or bm.get("status") != "ready":
@@ -2894,7 +2906,9 @@ def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest):
     fetched = [d for d in db.list_documents(tab_id, full=True)
                if d["status"] == "fetched" and (d.get("digest") or "").strip()]
     by_id = {d["id"]: d for d in fetched}
-    if body.doc_ids:
+    if body.all_docs:                                   # EVERY candidate with a digest
+        chosen = sorted(fetched, key=lambda d: -(d.get("score") or 0))
+    elif body.doc_ids:
         chosen = [by_id[i] for i in body.doc_ids if i in by_id]
     else:
         chosen = [by_id[i] for i in db.top_scored_documents(tab_id, body.top_n) if i in by_id]
@@ -2904,29 +2918,89 @@ def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest):
         raise HTTPException(400, "no candidates with a stored digest — run a 🏆 deep-compare / "
                                  "full read once so there are digests to re-check against")
     model = _read_model(body.model) or claude_bridge.DIGEST_MODEL
-    res = claude_bridge.digest_rescore(bm, chosen, model=model)
-    if "error" in res:
-        raise HTTPException(400, f"re-check failed: {res['error']}")
-    results = res.get("results") or {}
+    batches = [chosen[i:i + BULK_DIGEST_BATCH] for i in range(0, len(chosen), BULK_DIGEST_BATCH)]
+    results: dict = {}
+    errors: list[str] = []
+    used_model: list[str] = []
     now = int(time.time())
-    updated = 0
-    for d in chosen:
-        r = results.get(d["number"])
-        if r and r.get("score") is not None:
-            db.update_document(d["id"], score=r["score"], score_note=r.get("note") or None,
-                               scored_at=now, score_model=f"{res.get('model') or model}·digest")
-            updated += 1
+    lock = threading.Lock()
+
+    def one(batch: list[dict]) -> None:
+        res = claude_bridge.digest_rescore(bm, batch, model=model)
+        if "error" in res:
+            with lock:
+                errors.append(res["error"])       # a failed batch loses only its own docs
+            return
+        got = res.get("results") or {}
+        tag = f"{res.get('model') or model}·digest"
+        for d in batch:                           # persist per batch: a kill loses little
+            r = got.get(d["number"])
+            if r and r.get("score") is not None:
+                db.update_document(d["id"], score=r["score"], score_note=r.get("note") or None,
+                                   scored_at=now, score_model=tag)
+        with lock:
+            results.update(got)
+            if res.get("model"):
+                used_model.append(res["model"])
+
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(one, batches))
+    updated = sum(1 for d in chosen
+                  if (results.get(d["number"]) or {}).get("score") is not None)
+    if not updated:
+        raise HTTPException(400, f"re-check failed: {errors[0] if errors else 'no scores parsed'}")
+    # Say plainly when batches failed — a partial run must never read as full coverage.
+    missed = len(chosen) - updated
+    note = (f" ⚠ {missed} candidate(s) not re-checked ({len(errors)} batch(es) failed) — re-run "
+            "to fill them in." if missed else "")
     db.append_message(tab_id, "s",
-        f"♻️ Re-checked {updated} candidate(s) against the current benchmark from their stored "
-        f"digests ({res.get('model') or model}) — NO full-text re-read. Scores are tagged ·digest "
-        "(cheap re-check); run a 🏆 full deep-compare when you want the rigorous opus read back.")
-    return {"ok": True, "updated": updated, "results": results}
+        f"♻️ Re-checked {updated} candidate(s){' — ALL with a digest' if body.all_docs else ''} "
+        f"against the current benchmark from their stored digests "
+        f"({used_model[0] if used_model else model}) in {len(batches)} bulk pass(es) — NO "
+        "full-text re-read. Scores are tagged ·digest (cheap re-check); run a 🏆 full "
+        f"deep-compare when you want the rigorous opus read back.{note}")
+    return {"ok": True, "updated": updated, "requested": len(chosen), "batches": len(batches),
+            "failed_batches": len(errors), "results": results}
 
 
-# ➕ additional read batch size: one bulk call per this many candidates. Sized like the
-# cross-tab scan — the whole point of batching is that 'all documents' (hundreds) cannot
-# blow the prompt budget the way a single call over every digest would.
-ADDITIONAL_BATCH = int(os.environ.get("PB_ADDITIONAL_BATCH", "25"))
+@app.get("/api/tabs/{tab_id}/digest-gap")
+def digest_gap_ep(tab_id: int):
+    """How many candidates are OUT OF SCOPE of every digest-based tool (➕ additional read,
+    ♻️ re-check, 🧩 combi) because they have no stored digest. Surfaced in the UI so the gap
+    is never invisible: a run over 'all documents' silently means 'all WITH a digest'."""
+    _tab_or_404(tab_id)
+    fetched = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    missing = [d for d in fetched if not (d.get("digest") or "").strip()]
+    return {"ok": True, "fetched": len(fetched), "with_digest": len(fetched) - len(missing),
+            "missing": len(missing),
+            "docs": [{"id": d["id"], "number": d.get("number"),
+                      "error": d.get("digest_error")} for d in missing[:200]]}
+
+
+@app.post("/api/tabs/{tab_id}/digest-backfill")
+def digest_backfill_ep(tab_id: int, body: schemas.DigestBackfillRequest):
+    """🔁 Generate the MISSING digests, so 'all documents' finally means all of them. One
+    cheap call per candidate (that is what a digest is), run concurrently. Explicitly
+    user-triggered: it costs one call per missing document, so it never fires on its own."""
+    _tab_or_404(tab_id)
+    fetched = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
+    missing = [d for d in fetched if not (d.get("digest") or "").strip()]
+    if not missing:
+        return {"ok": True, "backfilled": 0, "still_missing": 0,
+                "note": "every fetched candidate already has a digest"}
+    model = _read_model(body.model)
+    ids = [d["id"] for d in missing]
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(lambda i: _digest_doc(i, model), ids))
+    after = {d["id"]: d for d in db.list_documents(tab_id, full=True)}
+    done = [i for i in ids if (after.get(i, {}).get("digest") or "").strip()]
+    failed = [after[i] for i in ids if i not in done and i in after]
+    why = ", ".join(sorted({(d.get("digest_error") or "?")[:60] for d in failed})[:3])
+    db.append_message(tab_id, "s",
+        f"🔁 Digest backfill: {len(done)} of {len(ids)} missing digest(s) generated — those "
+        f"candidates are now in scope for ➕ additional read, ♻️ re-check and 🧩 combi."
+        + (f" ⚠ {len(failed)} still failed ({why}) — re-run to retry them." if failed else ""))
+    return {"ok": True, "backfilled": len(done), "still_missing": len(failed), "why": why}
 
 
 @app.post("/api/tabs/{tab_id}/additional-read")
@@ -2954,7 +3028,7 @@ def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
         raise HTTPException(400, "no candidates with a stored digest — run a 🏆 deep-compare / "
                                  "full read first so there's material to check against")
     model = _read_model(body.model) or claude_bridge.DIGEST_MODEL
-    batches = [chosen[i:i + ADDITIONAL_BATCH] for i in range(0, len(chosen), ADDITIONAL_BATCH)]
+    batches = [chosen[i:i + BULK_DIGEST_BATCH] for i in range(0, len(chosen), BULK_DIGEST_BATCH)]
     results: dict = {}
     errors: list[str] = []
     used_model: list[str] = []

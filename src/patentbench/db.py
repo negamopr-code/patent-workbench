@@ -177,6 +177,9 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN additional_scores TEXT")
         if "digest_model" not in dcols:    # which model produced the digest (for cross-tab reuse label)
             con.execute("ALTER TABLE documents ADD COLUMN digest_model TEXT")
+        if "digest_error" not in dcols:    # why the digest is missing — a dropped digest makes a
+            con.execute("ALTER TABLE documents ADD COLUMN digest_error TEXT")  # doc invisible to
+            # every digest-based tool (➕ additional read, ♻️ re-check, 🧩 combi); never lose the reason
         if "text_model" not in dcols:      # which model OCR'd/transcribed the body (NULL = Google fetch)
             con.execute("ALTER TABLE documents ADD COLUMN text_model TEXT")
         if "content_hash" not in dcols:    # sha256 of the source upload, for hash-based cross-tab reuse

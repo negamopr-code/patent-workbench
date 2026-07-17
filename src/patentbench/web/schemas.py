@@ -186,11 +186,20 @@ class CrossTabScanRequest(BaseModel):
 
 
 class DigestRescoreRequest(BaseModel):
-    """♻️ Re-check: re-score the top candidates against the CURRENT benchmark from their stored
-    digests in ONE bulk pass — no full-text re-read. doc_ids = the UI's ranked top-N; else top_n
-    by current score."""
+    """♻️ Re-check: re-score candidates against the CURRENT benchmark from their stored digests
+    — no full-text re-read. Scope, in priority order: all_docs → EVERY candidate with a digest
+    (batched); doc_ids → the UI's ranked top-N; else top_n by current score."""
     doc_ids: list[int] | None = None
     top_n: int = Field(default=49, ge=1, le=50)
+    # no count cap: the endpoint batches, so scope is bounded by how many candidates have a
+    # digest, not by the prompt budget.
+    all_docs: bool = False
+    model: str | None = None
+
+
+class DigestBackfillRequest(BaseModel):
+    """🔁 Generate the digests that are MISSING, putting those candidates back in scope for
+    every digest-based tool. One call per missing document — always user-triggered."""
     model: str | None = None
 
 

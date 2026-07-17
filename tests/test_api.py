@@ -2117,7 +2117,7 @@ def _add_read_tab(client, n_docs, batch=None, monkeypatch=None):
         _db.update_document(d["id"], digest=f"digest of {d['number']}",
                             score=max(1, 10 - i), scored_at=1, score_model="opus")
     if batch is not None:
-        monkeypatch.setattr(api, "ADDITIONAL_BATCH", batch)
+        monkeypatch.setattr(api, "BULK_DIGEST_BATCH", batch)
     return tid, nums
 
 
@@ -2185,6 +2185,101 @@ def test_additional_read_partial_batch_failure_keeps_the_rest(client, monkeypatc
     assert r["assessed"] == 4 and r["requested"] == 6 and r["failed_batches"] == 1
     msg = client.get(f"/api/tabs/{tid}/state").json()["messages"][-1]["text"]
     assert "2 candidate(s) not assessed" in msg               # the gap is stated, not hidden
+
+
+def test_digest_failure_is_recorded_not_dropped(client, monkeypatch):
+    """A swallowed digest error takes a document out of scope of EVERY digest-based tool
+    (➕ additional read, ♻️ re-check, 🧩 combi) invisibly — while runs still report 'all'.
+    The failure must be recorded so the gap is findable."""
+    from patentbench import claude_bridge as cb
+    monkeypatch.setattr(cb, "digest_document",
+                        lambda n, t, x, model=None: {"error": "session limit"})
+    tab = client.post("/api/tabs", json={"name": "DigFail"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4338615"], "source": "image"})
+    d = client.get(f"/api/tabs/{tid}/documents").json()["documents"][0]
+    api._digest_doc(d["id"])
+    import patentbench.db as _db
+    row = _db.get_document(d["id"])
+    assert not (row.get("digest") or "")
+    assert "session limit" in (row.get("digest_error") or "")     # the reason survives
+    gap = client.get(f"/api/tabs/{tid}/digest-gap").json()
+    assert gap["missing"] == 1 and gap["with_digest"] == 0
+    assert gap["docs"][0]["number"] == "EP4338615"
+
+
+def test_digest_backfill_fills_the_gap(client, monkeypatch):
+    """🔁 backfill puts the skipped candidates back in scope."""
+    from patentbench import claude_bridge as cb
+    monkeypatch.setattr(cb, "digest_document",
+                        lambda n, t, x, model=None: {"error": "session limit"})
+    tab = client.post("/api/tabs", json={"name": "DigBF"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4338615", "EP4338616"], "source": "image"})
+    for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
+        api._digest_doc(d["id"])
+    assert client.get(f"/api/tabs/{tid}/digest-gap").json()["missing"] == 2
+    # the transient failure clears → backfill succeeds
+    monkeypatch.setattr(cb, "digest_document",
+                        lambda n, t, x, model=None: {"digest": f"digest of {n}"})
+    r = client.post(f"/api/tabs/{tid}/digest-backfill", json={}).json()
+    assert r["backfilled"] == 2 and r["still_missing"] == 0
+    assert client.get(f"/api/tabs/{tid}/digest-gap").json()["missing"] == 0
+
+
+def test_digest_backfill_reports_what_still_fails(client, monkeypatch):
+    from patentbench import claude_bridge as cb
+    monkeypatch.setattr(cb, "digest_document",
+                        lambda n, t, x, model=None: {"error": "session limit"})
+    tab = client.post("/api/tabs", json={"name": "DigBF2"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4338615"], "source": "image"})
+    d = client.get(f"/api/tabs/{tid}/documents").json()["documents"][0]
+    api._digest_doc(d["id"])
+    r = client.post(f"/api/tabs/{tid}/digest-backfill", json={}).json()
+    assert r["backfilled"] == 0 and r["still_missing"] == 1
+    msg = client.get(f"/api/tabs/{tid}/state").json()["messages"][-1]["text"]
+    assert "still failed" in msg                     # not silently reported as done
+
+
+def test_digest_rescore_all_docs_covers_every_digested_candidate(client, monkeypatch):
+    """♻️ re-check (ALL): after a benchmark change the WHOLE list is stale, not just the
+    documents that happened to rank on top."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _add_read_tab(client, 7, batch=2, monkeypatch=monkeypatch)
+    seen = []
+    def fake_rescore(bm, docs, model=None):
+        seen.extend(d["number"] for d in docs)
+        return {"results": {d["number"]: {"score": 6, "note": "n"} for d in docs},
+                "model": "claude-sonnet-4-6"}
+    monkeypatch.setattr(cb, "digest_rescore", fake_rescore)
+    r = client.post(f"/api/tabs/{tid}/digest-rescore", json={"all_docs": True}).json()
+    assert r["updated"] == 7 and r["batches"] == 4        # batched, not one giant call
+    assert sorted(seen) == sorted(nums)
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    assert all(d["score"] == 6 for d in docs)
+    assert all("·digest" in (d["score_model"] or "") for d in docs)
+
+
+def test_digest_rescore_all_partial_failure_is_reported(client, monkeypatch):
+    from patentbench import claude_bridge as cb
+    tid, nums = _add_read_tab(client, 6, batch=2, monkeypatch=monkeypatch)
+    calls = {"n": 0}
+    lock = __import__("threading").Lock()
+    def fake_rescore(bm, docs, model=None):
+        with lock:
+            calls["n"] += 1
+            first = calls["n"] == 1
+        if first:
+            return {"error": "session limit"}
+        return {"results": {d["number"]: {"score": 6, "note": "n"} for d in docs},
+                "model": "claude-sonnet-4-6"}
+    monkeypatch.setattr(cb, "digest_rescore", fake_rescore)
+    r = client.post(f"/api/tabs/{tid}/digest-rescore", json={"all_docs": True}).json()
+    assert r["updated"] == 4 and r["requested"] == 6 and r["failed_batches"] == 1
+    msg = client.get(f"/api/tabs/{tid}/state").json()["messages"][-1]["text"]
+    assert "2 candidate(s) not re-checked" in msg
 
 
 def test_additional_read_all_docs_errors_when_every_batch_fails(client, monkeypatch):

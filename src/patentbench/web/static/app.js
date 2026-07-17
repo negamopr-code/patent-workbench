@@ -1004,6 +1004,11 @@ function renderDocs(allDocs) {
   const notInNlm = allDocs.filter(d => d.status === 'fetched' && !d.nlm_source_notebook);
   const inNlm = (counts.fetched || 0) - notInNlm.length;
   if (!notInNlm.length && docsFilter === 'no-nlm') docsFilter = 'all';
+  // DIGEST coverage: every digest-based tool (➕ additional read, ♻️ re-check, 🧩 combi)
+  // silently SKIPS a candidate with no stored digest — so "all documents" quietly means
+  // "all WITH a digest". Surface the gap; it is otherwise invisible.
+  const noDigest = allDocs.filter(d => d.status === 'fetched' && !d.digest_len);
+  if (!noDigest.length && docsFilter === 'no-digest') docsFilter = 'all';
   if (allDocs.length) {
     const bar = document.createElement('div');
     bar.className = 'docs-summary';
@@ -1011,7 +1016,22 @@ function renderDocs(allDocs) {
       `<span class="chip ok" title="fetched & ready">✓ ${counts.fetched || 0}</span>`
       + (counts.pending ? `<span class="chip warn" title="still fetching">⏳ ${counts.pending}</span>` : '')
       + (counts.error ? `<span class="chip err" title="failed to fetch — check the number/kind code">⚠ ${counts.error}</span>` : '')
-      + (counts.fetched ? `<span class="chip" title="fetched candidates that ARE a source in some NotebookLM notebook">📓 ${inNlm} in NLM</span>` : '');
+      + (counts.fetched ? `<span class="chip" title="fetched candidates that ARE a source in some NotebookLM notebook">📓 ${inNlm} in NLM</span>` : '')
+      + (counts.fetched ? `<span class="chip${noDigest.length ? ' warn' : ''}" title="Candidates with a stored DIGEST — the scope of every digest-based tool (➕ additional read, ♻️ re-check, 🧩 combi). Those without one are silently skipped by all of them.">🧾 ${(counts.fetched || 0) - noDigest.length}/${counts.fetched} digested</span>` : '');
+    if (noDigest.length) {
+      const t = document.createElement('button');
+      t.className = 'btn small';
+      t.textContent = docsFilter === 'no-digest' ? '↩ show all' : `🧾 show ${noDigest.length} without a digest`;
+      t.title = 'These fetched candidates have NO stored digest, so ➕ additional read, ♻️ re-check and 🧩 combi all skip them — a run over "all documents" silently excludes them.';
+      t.onclick = () => { docsFilter = docsFilter === 'no-digest' ? 'all' : 'no-digest'; renderDocs(allDocs); };
+      bar.appendChild(t);
+      const bf = document.createElement('button');
+      bf.className = 'btn small';
+      bf.textContent = `🔁 backfill ${noDigest.length} missing digest(s)`;
+      bf.title = 'Generate the missing digests so "all documents" really means all of them. Costs ONE cheap call per missing candidate — that is what a digest is. Never runs on its own.';
+      bf.onclick = () => backfillDigests(noDigest.length);
+      bar.appendChild(bf);
+    }
     if (unfetched) {
       const t = document.createElement('button');
       t.className = 'btn small';
@@ -1105,6 +1125,7 @@ function renderDocs(allDocs) {
   }
   if (docsFilter === 'unfetched') docs = docs.filter(d => d.status !== 'fetched');
   if (docsFilter === 'no-nlm') docs = docs.filter(d => d.status === 'fetched' && !d.nlm_source_notebook);
+  if (docsFilter === 'no-digest') docs = docs.filter(d => d.status === 'fetched' && !d.digest_len);
   // 1-based position among RANKED (scored) docs, so the user sees 1st / 2nd / 3rd explicitly.
   const rankIndex = new Map(); let _rp = 0;
   for (const d of docs) if (d.score != null || d.nlm_score != null) rankIndex.set(d.id, ++_rp);
@@ -2160,6 +2181,46 @@ $('additional-read').onclick = async () => {
   await refreshDocs();   // re-render with the new A-feature chips + bonus
   await reloadChat();
 };
+// 🔁 Generate the MISSING digests. A candidate without one is invisible to every
+// digest-based tool, so this is what makes "all documents" actually mean all of them.
+// One cheap call per missing doc — always user-triggered, never automatic.
+async function backfillDigests(n) {
+  if (!activeTab) return;
+  if (!confirm(`🔁 Backfill ${n} missing digest(s)\n\n`
+      + `These candidates are fetched but have NO digest, so ➕ additional read, ♻️ re-check `
+      + `and 🧩 combi all skip them today.\n\n`
+      + `Costs ~${n} cheap call(s), one per document. Continue?`)) return;
+  setBusy(true, `Backfilling ${n} missing digest(s)`);
+  const res = await api(`/api/tabs/${activeTab}/digest-backfill`, {
+    method: 'POST', body: JSON.stringify({ model: readModelValue() }) });
+  setBusy(false);
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  await refreshDocs();
+  await reloadChat();
+}
+// ♻️ Re-check over EVERY candidate with a digest, not just the top-N: after a benchmark
+// change the WHOLE list is stale, not only the documents that happened to be on top.
+$('digest-rescore-all').onclick = async () => {
+  if (!activeTab) return;
+  const eligible = (lastDocs || []).filter(d => d.status === 'fetched' && d.digest_len);
+  if (!eligible.length) { appendMsg({ role: 's', text: 'No candidates with a stored digest yet — run a 🏆 deep-compare / full read first.' }); return; }
+  const passes = Math.ceil(eligible.length / 25);
+  const gap = (lastDocs || []).filter(d => d.status === 'fetched' && !d.digest_len).length;
+  if (!confirm(`♻️ Re-check ALL ${eligible.length} candidate(s) with a digest`
+             + `\n\n≈ ${passes} bulk pass(es) over stored digests (no full-text re-read).`
+             + `\nScores are tagged ·digest. Each pass is saved as it lands.`
+             + (gap ? `\n\n⚠ ${gap} fetched candidate(s) have NO digest and will be SKIPPED — `
+                    + `use 🔁 backfill first to include them.` : '')
+             + `\n\nContinue?`)) return;
+  const btn = $('digest-rescore-all'); btn.disabled = true;
+  setBusy(true, `Re-checking ALL ${eligible.length} candidates (${passes} bulk pass(es))`);
+  const res = await api(`/api/tabs/${activeTab}/digest-rescore`, {
+    method: 'POST', body: JSON.stringify({ all_docs: true, model: readModelValue() }) });
+  setBusy(false); btn.disabled = false;
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  await refreshDocs();
+  await reloadChat();
+};
 // ➕ Additional read over EVERY candidate with a stored digest, not just the displayed
 // top-N: a low-ranked document can only earn its A-feature bonus (and climb) if it was
 // actually assessed. The server batches (25/pass) and saves each batch as it lands.
@@ -2168,9 +2229,13 @@ $('additional-read-all').onclick = async () => {
   const eligible = (lastDocs || []).filter(d => d.status === 'fetched' && d.digest_len);
   if (!eligible.length) { appendMsg({ role: 's', text: 'No candidates with a stored digest yet — run a 🏆 deep-compare / full read first.' }); return; }
   const passes = Math.ceil(eligible.length / 25);
+  const gap = (lastDocs || []).filter(d => d.status === 'fetched' && !d.digest_len).length;
   if (!confirm(`➕ Additional read over ALL ${eligible.length} candidate(s) with a digest`
              + `\n\n≈ ${passes} bulk sonnet pass(es) over stored digests (no full-text re-read).`
-             + `\nEach pass is saved as it lands. Continue?`)) return;
+             + `\nEach pass is saved as it lands.`
+             + (gap ? `\n\n⚠ ${gap} fetched candidate(s) have NO digest and will be SKIPPED — `
+                    + `use 🔁 backfill first to include them.` : '')
+             + `\n\nContinue?`)) return;
   const btn = $('additional-read-all'); btn.disabled = true;
   setBusy(true, `Additional read over ALL ${eligible.length} candidates (${passes} bulk pass(es) over digests)`);
   const res = await api(`/api/tabs/${activeTab}/additional-read`, {
