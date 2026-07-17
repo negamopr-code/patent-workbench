@@ -1,0 +1,7 @@
+[
+  {
+    "name": "stacked battery energy storage system based on coordinated control of a power converter, characterized  by comprising: a plurality of battery packs, each of the battery packs comprising a plurality of battery cells connected in series and/or parallel, a plurality of power conversion modules, arranged in one-to-one correspondence with the plurality of battery packs, with input ends of the power conversion modules being electrically connected to the battery packs and a battery bus electrically connected to an output end of each of the power conversion modules, wherein the power conversion module comprises a parameter acquisition unit, configured to acquire individual cell voltage and/or temperatures of the battery cells, as well as a bus voltage of the battery bus and/or a conversion current of a bidirectional DC/DC conversion ciruit, and output sampling signals, a control processing unit, configured to determine a charge/discharge control parameter of the corresponding battery pack according to the sampling signals, and generate a switching control instuction, the bidirectional DC/DC conversion circuit, with an input end thereof electrically connected to the corresponding battery pack and an output end thereof electrically connected to the battery bus, and configured to control bidirectional energy conversion between the battery pack and the battery bus according to the switching control instruction, and a communication unit, configured to communicate with other power coversion modules.",
+    "weight": 5,
+    "kind": "M"
+  }
+]
