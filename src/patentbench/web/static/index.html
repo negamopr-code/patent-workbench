@@ -171,7 +171,8 @@
           <label class="model-pick answer-pick" title="Model that ANSWERS your chat questions (and compiles deep-compare rankings). The document-reading / OCR model lives on the 🎯 Benchmark and 📚 Candidates panes.">💬 <select id="model"></select></label>
           <label class="model-pick answer-pick" title="How Claude should shape the answer. Default = concise (or 📝 Full). Other presets impose a structure, e.g. claims grouped by focus → what the reference discloses, with [paragraph]/claim/figure citations.">📐 <select id="answer-format"></select></label>
         </div>
-        <button id="best-match" class="btn small" title="Pre-fill a ranking question">🏆 Best match</button>
+        <button id="best-match" class="btn small" title="🏆 Deep-read THIS tab's candidates in batches of 50 (most-promising first) vs the benchmark — document AND features together — then assess the 2-document combination over everything read so far. Stops after each batch; re-launch for the next 50. Does NOT pull from other tabs.">🏆 Best match</button>
+        <button id="cross-tab" class="btn small" title="🌐 Pull in candidates from OTHER tabs that cover ≥1 of this benchmark's features (digest pre-check), so they join this tab's ranking. Opt-in — Best match no longer does this automatically.">🌐 Cross-tab pull</button>
         <label class="check small" title="BASIS of the ⚖️/🪄 run — what the approach assesses as the CLAIMED INVENTION. 🎯 Benchmark = the benchmark document (the default). 🧩 Benchmark features = its weighted target features. ✍️ Chat box text = whatever you pasted in the chat box below, used VERBATIM as the invention — the benchmark is then not sent at all. The basis is always named on the run, so you can see afterwards what it was based on.">basis:
           <select id="psa-basis" class="small">
             <option value="benchmark" selected>🎯 Benchmark document</option>

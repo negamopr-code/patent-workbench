@@ -1837,15 +1837,39 @@ def test_deep_reduce_uses_long_timeout_and_bounds_prompt(monkeypatch):
     monkeypatch.setattr(claude_bridge, "_run_claude",
                         lambda prompt, model, timeout=None: captured.update(p=prompt, t=timeout)
                         or {"answer": "ranking"})
-    # a large roster: each verdict is long, so the per-verdict slice must shrink
+    # the real "Prompt is too long" case: a BIG roster of long verdicts PLUS skills and full
+    # chat history all stacking on top — this is what overflowed sonnet's context.
     verdicts = [{"number": f"US{i}", "title": "t", "verdict": "X" * 8000}
-                for i in range(200)]
-    claude_bridge.deep_reduce("rank them", {"text": "BENCH"}, verdicts)
-    # the reduce gets the dedicated long timeout, not the 240s chat default
-    assert captured["t"] == claude_bridge.REDUCE_TIMEOUT
-    assert captured["t"] >= 600
-    # the assembled prompt stays bounded despite 200 long verdicts
-    assert len(captured["p"]) < claude_bridge.REDUCE_PROMPT_BUDGET * 1.2
+                for i in range(298)]
+    skills = [{"name": "patent-analyzer", "content": "S" * 20000},
+              {"name": "patent-search-pipeline", "content": "S" * 6000}]
+    history = [{"role": "user", "text": "H" * 4000} for _ in range(24)]
+    claude_bridge.deep_reduce("rank them", {"text": "BENCH"}, verdicts,
+                              skills=skills, history=history)
+    assert captured["t"] == claude_bridge.REDUCE_TIMEOUT and captured["t"] >= 600
+    # EVERY candidate still appears (full card or compact one-liner) — none silently dropped
+    for i in range(298):
+        assert f"US{i}" in captured["p"]
+    # ...yet the WHOLE prompt (cards + skills + history + benchmark + instructions) stays
+    # comfortably inside a 200k-token context (~800k chars); 700k leaves real headroom.
+    assert len(captured["p"]) < 700_000
+
+
+def test_deep_reduce_compact_tail_when_roster_exceeds_budget(monkeypatch):
+    """A roster too big for full cards keeps the top ones full and demotes the rest to
+    compact one-liners — so the prompt is bounded but nothing vanishes from the ranking."""
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, timeout=None: captured.update(p=prompt) or {"answer": "r"})
+    # 400 long verdicts: too many to all be full cards within the budget → a real compact tail
+    verdicts = [{"number": f"US{i}", "title": "t",
+                 "verdict": f"MATCH SCORE: {i % 10}\nlong detail " + "X" * 6000} for i in range(400)]
+    claude_bridge.deep_reduce("rank", {"text": "B"}, verdicts)
+    p = captured["p"]
+    assert "ADDITIONAL CANDIDATES (full verdict omitted" in p    # the compact section exists
+    assert "X" * 1000 in p                                       # early candidates keep a full body
+    assert all(f"US{i}" in p for i in range(400))               # all 400 still ranked
+    assert len(p) < 700_000                                      # ...and the prompt is bounded
 
 
 def test_benchmark_by_weighted_features(client):

@@ -2378,18 +2378,18 @@ let bestMatch = null;   // { remaining } while a best-match batch is in flight; 
 async function runBestMatch() {
   if (!activeTab) return;
   const sel = docSelection.size ? [...docSelection] : null;
-  if (sel) {   // an explicit selection → assess exactly those (no batching), then combine
-    crossTabScanThen(() => runDeepCompare(sel));
+  if (sel) {   // an explicit selection → assess exactly those, then combine (no cross-tab)
+    runDeepCompare(sel);
     return;
   }
   if (!confirm(`🏆 Best match (batched)\n\n`
-      + `Reads the next ${BEST_MATCH_BATCH} candidates in FULL vs the benchmark — most-promising `
-      + `first (by current score) — then assesses the 2-document COMBINATION over everything read `
-      + `so far.\n\n`
+      + `Reads the next ${BEST_MATCH_BATCH} candidates IN THIS TAB in FULL vs the benchmark — `
+      + `most-promising first (by current score) — then assesses the 2-document COMBINATION over `
+      + `everything read so far.\n\n`
       + `Stops after the batch with the intermediate ranking + combinations; re-launch for the `
       + `next ${BEST_MATCH_BATCH}. Both the benchmark document AND its features drive the ranking.\n\n`
-      + `Start?`)) return;
-  crossTabScanThen(async () => {
+      + `(Does NOT pull documents from other tabs — use 🌐 Cross-tab for that.)\n\nStart?`)) return;
+  {
     const res = await api(`/api/tabs/${activeTab}/deep-compare`, {
       method: 'POST',
       body: JSON.stringify({
@@ -2408,7 +2408,7 @@ async function runBestMatch() {
     }
     bestMatch = { remaining: res.remaining_after || 0 };
     pollRead();                          // progress; completion triggers afterBestMatchBatch()
-  });
+  }
 }
 
 // After a best-match deep-read batch finishes: assess the 2-document combination over
@@ -2427,6 +2427,16 @@ async function afterBestMatchBatch() {
   }
 }
 $('best-match').onclick = () => runBestMatch();
+// 🌐 Cross-tab pull is now OPT-IN — it used to fire automatically inside Best match, which
+// surprised the user by importing other tabs' documents mid-investigation.
+$('cross-tab').onclick = () => {
+  if (!activeTab) return;
+  if (!confirm(`🌐 Cross-tab pull\n\n`
+      + `Scans EVERY other tab's fetched documents and pulls in any that cover ≥1 of this `
+      + `benchmark's features (cheap digest pre-check), so they join this tab as candidates.\n\n`
+      + `They then rank alongside your own. Start?`)) return;
+  crossTabScanThen(() => { refreshDocs(); reloadChat(); });
+};
 $('claude-rate-all').onclick = () => runDeepCompare(null);            // re-read EVERY candidate
 $('claude-continue').onclick = () => runDeepCompare(null, true);      // only the not-yet-read ones
 $('deep-selected').onclick = () => {

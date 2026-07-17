@@ -67,7 +67,12 @@ DIGEST_TIMEOUT = float(os.environ.get("PB_DIGEST_TIMEOUT", "300"))
 # than a normal chat turn — so it gets its own, much longer timeout. Its prompt
 # is also kept bounded (per-verdict slice shrinks as the roster grows).
 REDUCE_TIMEOUT = float(os.environ.get("PB_REDUCE_TIMEOUT", "900"))
-REDUCE_PROMPT_BUDGET = int(os.environ.get("PB_REDUCE_PROMPT_BUDGET", "600000"))
+# Char budget for the VERDICT CARDS in the reduce prompt. Kept well under the model context
+# because skills (~40k), benchmark (~15k), 24 turns of history (~96k), the compact tail and
+# the instructions all stack on top — 600k here plus those overflowed sonnet ("Prompt is too
+# long"). ~350k cards + overhead ≈ 150k tokens, comfortably inside a 200k context.
+REDUCE_PROMPT_BUDGET = int(os.environ.get("PB_REDUCE_PROMPT_BUDGET", "350000"))
+REDUCE_COMPACT_MAX = int(os.environ.get("PB_REDUCE_COMPACT_MAX", "400"))  # tail one-liners cap
 
 MAX_HISTORY = 24            # turns kept in the prompt
 MAX_TURN_CHARS = 4000       # each history turn clipped
@@ -1336,15 +1341,31 @@ def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
                 history: list[dict] | None = None) -> dict:
     """Reduce phase: the chat model compiles per-candidate FULL-TEXT verdicts into
     a final ranking/answer. Same return contract as chat()."""
-    # Per-verdict slice: 8000 chars normally, but shrink it for a large roster so
-    # the whole reduce prompt stays under REDUCE_PROMPT_BUDGET (prevents both the
-    # timeout and blowing the model's context). Floor at 1500 so cards stay useful.
+    # Bound the ROSTER, not just each card. The old code shrank the per-verdict slice but
+    # FLOORED it at 1500 — so a large roster (e.g. 298 candidates × 1500 = 447k) plus the
+    # skills, benchmark and chat history blew the model's context: "Prompt is too long".
+    # Now: fill FULL cards, most-promising first, until a budget; every remaining candidate
+    # still appears as a COMPACT one-liner, so all are ranked but the prompt stays bounded.
     per_cap = 8000
     if verdicts:
         per_cap = max(1500, min(8000, REDUCE_PROMPT_BUDGET // len(verdicts)))
-    blocks = "\n\n".join(
-        f"[{v['number']} — {v.get('title') or ''}]\n{v['verdict'][:per_cap]}"
-        for v in verdicts)
+    full, compact, used = [], [], 0
+    for v in verdicts:
+        card = f"[{v['number']} — {v.get('title') or ''}]\n{v['verdict'][:per_cap]}"
+        if used + len(card) <= REDUCE_PROMPT_BUDGET:
+            full.append(card)
+            used += len(card) + 2
+        else:                              # tail: one line so it still ranks, cheaply
+            first = (v["verdict"].split("\n", 1)[0] or "")[:200]
+            compact.append(f"[{v['number']} — {(v.get('title') or '')[:60]}] {first}")
+    blocks = "\n\n".join(full)
+    if compact:
+        shown = compact[:REDUCE_COMPACT_MAX]
+        tail = (f"\n… +{len(compact) - len(shown)} more (ranked by score)"
+                if len(compact) > len(shown) else "")
+        blocks += ("\n\n--- ADDITIONAL CANDIDATES (full verdict omitted to fit the prompt; "
+                   "rank these from the score/summary line, and tell the user to SELECT one "
+                   "for a full read if it needs to move up) ---\n" + "\n".join(shown) + tail)
     parts = [_PREAMBLE, _GROUNDING_INSTRUCTION]
     if skills:
         sk = "\n\n".join(f"[Skill /{s['name']}]\n{s['content']}" for s in skills)
