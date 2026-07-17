@@ -554,7 +554,8 @@ function buildAddFeatureBox() {
 // resumes the scan, so the approval gate costs a click rather than losing the trail.
 let combiScanAfterSave = false;
 
-async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false } = {}) {
+async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false,
+                                        source: forceSource = null } = {}) {
   if (!activeTab) return;
   const feats = bm.features || [];
   const mand = feats.filter(f => (f.kind || 'M') !== 'A');
@@ -563,9 +564,10 @@ async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false } 
   // claim and throw away wording that was reviewed and accepted — so only the additional
   // features are split. Prefer the user's own features as the source (that IS the claim, in
   // their words); fall back to the benchmark document's claims.
-  const split = mand.length > 2 && addF.length;
-  const source = split ? 'additional' : (mand.length ? 'features' : 'benchmark');
-  const what = split ? `${addF.length} additional feature(s) (your ${mand.length} mandatory elements are already split and stay as they are)`
+  const split = forceSource === 'additional' || (mand.length > 2 && addF.length);
+  const source = forceSource || (split ? 'additional' : (mand.length ? 'features' : 'benchmark'));
+  const what = source === 'additional'
+             ? `${addF.length} additional feature(s) (your ${mand.length} mandatory elements are already split and stay as they are)`
              : mand.length ? `${mand.length} mandatory feature(s)` : 'the benchmark\'s claims';
   if (!skipConfirm && !confirm(`🔬 Decompose ${what} into separable elements?\n\n`
       + `One cheap call. The proposed elements open in the editor for you to review, edit `
@@ -975,6 +977,10 @@ function computeCombis() {
 // full text. Its rating is independent of every other score in the app.
 let combiScan = null;
 
+// A feature longer than this is still a BLOCK, not an element: it was pasted whole rather
+// than split, so it can only ever be judged all-or-nothing.
+const CHUNKY_FEATURE_CHARS = 400;
+
 async function runCombiScan() {
   if (!activeTab) return;
   const mand = ((currentBm && currentBm.features) || []).filter(f => (f.kind || 'M') !== 'A');
@@ -990,6 +996,29 @@ async function runCombiScan() {
         + `automatically.`)) return;
     await decomposeBenchmark(currentBm, { skipConfirm: true, thenScan: true });
     return;                       // resumes from the save button once you approve
+  }
+  // SECOND prerequisite. Having ≥2 mandatory elements only means the run CAN happen — an
+  // additional feature still held as one block silently guts the comparison it exists for:
+  // once many documents cover the whole mandatory set, the additional elements are the only
+  // thing left to separate them, and a block is judged all-or-nothing. Offer the split here
+  // rather than leaving the user to know to press 🔬 themselves — but let them decline, since
+  // a long feature is sometimes deliberate.
+  const chunkyA = ((currentBm && currentBm.features) || [])
+    .filter(f => (f.kind || 'M') === 'A' && (f.name || '').length > CHUNKY_FEATURE_CHARS);
+  if (chunkyA.length) {
+    const chars = chunkyA.reduce((s, f) => s + f.name.length, 0);
+    if (confirm(`🔎 Before investigating — ${chunkyA.length} additional feature(s) are still `
+        + `ONE block (${chars} chars).\n\n`
+        + `Additional elements are what separate documents once they all cover the mandatory `
+        + `set. Held as a block it is judged all-or-nothing: a document disclosing most of its `
+        + `sub-features scores exactly the same as one disclosing barely any.\n\n`
+        + `OK  — split it into elements first (one cheap call; you review and save, then the `
+        + `investigation continues automatically)\n`
+        + `Cancel — investigate anyway, judging it as one block`)) {
+      await decomposeBenchmark(currentBm, { skipConfirm: true, thenScan: true,
+                                            source: 'additional' });
+      return;                     // resumes from the save button once you approve
+    }
   }
   const eligible = (lastDocs || []).filter(d => d.status === 'fetched' && d.digest_len);
   const gap = (lastDocs || []).filter(d => d.status === 'fetched' && !d.digest_len).length;
