@@ -3227,18 +3227,35 @@ def _combi_mandatory(bm: dict | None) -> list[dict]:
     return [f for f in ((bm or {}).get("features") or []) if _kind(f) == "M"]
 
 
-def _element_status_map(doc: dict) -> dict:
-    """Merged per-element coverage from BOTH stores a document may already carry, preferring
-    the combi verdict (deeper, depth-tagged) over the best-match deep-read's per-feature
-    check. This is what lets the unified ranking REUSE whatever tokens a document already
-    spent — combi coverage AND/OR feature_scores — and re-rank with no new model call."""
-    m: dict = {}
-    for e in (doc.get("feature_scores") or []):        # deep-read per-feature YES/PARTIAL/NO
+# Fidelity of a per-element verdict — the HIGHER wins when both stores hold it. A full-text
+# reading always beats a digest guess, so the score/matrix reflect the tokens actually spent:
+#   • feature_scores  → the best-match DEEP READ, which reads abstract+claims+description in
+#     full (deep_map), so it is full text (fidelity 'read'). Never written by ♻️ digest-rescore.
+#   • combi_coverage  → the 🔎 combi scan, depth-tagged: full (stage-2) > digest > screen.
+_FID = {"combi_full": 3, "read": 2, "combi_digest": 1, "combi_screen": 0}
+_FID_LABEL = {3: "full", 2: "full", 1: "digest", 0: "screen"}
+
+
+def _effective_coverage(doc: dict) -> dict:
+    """Best available per-element verdict, merging the full-text deep read (feature_scores)
+    with the combi scan (combi_coverage), preferring the higher-fidelity source — so a full
+    read you already paid for is used instead of a digest guess. Reuses stored data only, no
+    model call. {name: {"status", "fid", "depth"}}."""
+    best: dict = {}
+    for e in (doc.get("feature_scores") or []):        # deep_map = full text → fidelity 'read'
         if isinstance(e, dict) and e.get("name"):
-            m[e["name"]] = e.get("status") or "no"
-    for n, r in _cov_records(doc).items():             # combi coverage wins where present
-        m[n] = r.get("status", "no")
-    return m
+            best[e["name"]] = (_FID["read"], e.get("status") or "no")
+    for n, r in _cov_records(doc).items():
+        fid = _FID.get("combi_" + (r.get("depth") or "screen"), _FID["combi_digest"])
+        if n not in best or fid >= best[n][0]:         # higher fidelity wins; combi-full ≥ read
+            best[n] = (fid, r.get("status", "no"))
+    return {n: {"status": s, "fid": f, "depth": _FID_LABEL.get(f, "digest")}
+            for n, (f, s) in best.items()}
+
+
+def _element_status_map(doc: dict) -> dict:
+    """Statuses only, full read preferred over digest (see _effective_coverage)."""
+    return {n: v["status"] for n, v in _effective_coverage(doc).items()}
 
 
 def _bonus_pool(elements: list[dict], cov: dict) -> dict:
@@ -3348,12 +3365,11 @@ def _rigorous(doc: dict, elements: list[dict]) -> bool:
     'covers everything' findings built from a guess, so nothing screen-only ever reaches
     the pairs or the solo list. Additional elements may still be screen-level: they are a
     bonus and never decide a finding."""
-    have = _cov_records(doc)
     mand = [e for e in elements if _kind(e) == "M"]
     if not mand:
         return False
-    return all(_DEPTH_RANK.get((have.get(e["name"]) or {}).get("depth") or "", -1)
-               >= _DEPTH_RANK["digest"] for e in mand)
+    eff = _effective_coverage(doc)                     # combi coverage OR the full deep read
+    return all(eff.get(e["name"], {}).get("fid", 0) >= _FID["combi_digest"] for e in mand)
 
 
 def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list[dict]:
@@ -3491,7 +3507,7 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
     return out[:limit]
 
 
-def _combi_matrix(elements: list[dict], docs: list[dict]) -> dict:
+def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> dict:
     """Element × document coverage GRID over the MANDATORY elements — the raw material the
     user reads to judge combinations by eye (the pair list is no longer shown; this replaces
     it). Columns are the mandatory elements; each row is a document with its per-element
@@ -3510,8 +3526,12 @@ def _combi_matrix(elements: list[dict], docs: list[dict]) -> dict:
     columns = [{"name": e["name"], "weight": int(e.get("weight", 1))} for e in mand]
     rows = []
     for d in docs:
-        cov = _cov_map(d)
-        cells = [cov.get(e["name"], "no") for e in mand]
+        eff = _effective_coverage(d)                  # full read preferred over digest
+        cells = [eff.get(e["name"], {}).get("status", "no") for e in mand]
+        # Row depth = the WEAKEST fidelity among the Must cells (a row is only as read as its
+        # least-read element), so a document full-read against the elements shows 📖 full.
+        m_fids = [eff.get(e["name"], {}).get("fid", 0) for e in mand]
+        row_depth = _FID_LABEL.get(min(m_fids), "screen") if m_fids else "screen"
         u = _unified_score(elements, d)              # the SAME score the list/chat use
         rows.append({
             "id": d["id"], "number": d.get("number"), "cells": cells,
@@ -3523,12 +3543,49 @@ def _combi_matrix(elements: list[dict], docs: list[dict]) -> dict:
             "w_bonus": u["w_bonus"], "w_full": u["w_full"], "w_partial": u["w_partial"],
             "w_total": u["w_total"],
             "score": d.get("score"), "key": u["key"],
-            "depth": d.get("combi_depth") or "screen",
+            "depth": row_depth,
         })
     # Sort by the unified key — full coverers, then weighted Must, then A bonus, then W bonus —
     # so the matrix's top rows are exactly the list's top rows.
     rows.sort(key=lambda r: (-r["key"], r["number"] or ""))
-    return {"columns": columns, "rows": rows}
+    focus = _focus_combination(mand, rows, limit)
+    return {"columns": columns, "rows": focus["rows"], "gap_names": focus["gap_names"],
+            "anchor": focus["anchor"], "covers_all_anchor": focus["covers_all_anchor"],
+            "total_ranked": len(rows)}
+
+
+def _focus_combination(mand: list[dict], rows: list[dict], limit: int = 10) -> dict:
+    """Trim the matrix to the ANCHOR (best document) + up to limit-1 PARTNERS that fill its
+    missing Must elements. A combination is only ever TWO documents, so the useful partners
+    are exactly those bringing a Must element the anchor lacks — not every document, and not
+    every additional feature, just the closest gap-fillers. Each partner is tagged `fills`
+    (which of the anchor's gaps it covers) and `fill_w` (weighted), best filler first. If the
+    anchor already covers every Must element there is nothing to combine — fall back to the
+    next-best documents so the table still shows the leaders."""
+    if not rows:
+        return {"rows": [], "gap_names": [], "anchor": None, "covers_all_anchor": False}
+    names = [e["name"] for e in mand]
+    w_by_i = {i: int(mand[i].get("weight", 1)) for i in range(len(mand))}
+    top = rows[0]
+    gap_idx = [i for i, s in enumerate(top["cells"]) if s == "no"]
+    anchor = {**top, "is_anchor": True, "fills": []}
+    if not gap_idx:                                   # covers all Must alone → nothing to fill
+        rest = [{**r, "is_anchor": False, "fills": []} for r in rows[1:limit]]
+        return {"rows": [anchor] + rest, "gap_names": [], "anchor": anchor["number"],
+                "covers_all_anchor": True}
+    gap_names = [names[i] for i in gap_idx]
+    partners = []
+    for r in rows[1:]:
+        fills = [i for i in gap_idx if r["cells"][i] in ("yes", "partial")]
+        if not fills:
+            continue                                  # brings nothing the anchor lacks
+        fill_w = sum(w_by_i[i] * (1.0 if r["cells"][i] == "yes" else 0.5) for i in fills)
+        partners.append({**r, "is_anchor": False, "fills": [names[i] for i in fills],
+                         "fill_w": round(fill_w, 1)})
+    # Closest filler first: most (weighted) of the anchor's gaps covered, then own rank.
+    partners.sort(key=lambda p: (-p["fill_w"], -p["key"]))
+    return {"rows": [anchor] + partners[:limit - 1], "gap_names": gap_names,
+            "anchor": anchor["number"], "covers_all_anchor": False}
 
 
 @app.get("/api/tabs/{tab_id}/combi-results")

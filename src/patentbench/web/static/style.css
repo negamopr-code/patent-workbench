@@ -251,6 +251,14 @@ textarea, select, input[type="text"] {
 .combi-matrix .cell-no { color: var(--muted); opacity: .45; }
 .combi-matrix .mx-score { font-family: ui-monospace, monospace; }
 .combi-matrix .mx-solo { margin-left: 5px; }
+/* Combination finder: anchor (best doc), its gaps, and each partner's gap-filling cells. */
+.combi-matrix tr.mx-anchor .mx-doc { border-left: 3px solid var(--accent); }
+.combi-matrix tr.mx-anchor td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.combi-matrix th.mx-gapcol { color: var(--warn); border-bottom: 2px solid var(--warn); }
+.combi-matrix .mx-gapcell { background: color-mix(in srgb, var(--err) 22%, transparent); }
+.combi-matrix .mx-fillcell { background: color-mix(in srgb, var(--ok) 30%, transparent); outline: 1px solid var(--ok); }
+.combi-matrix .mx-rank { color: var(--accent); border-color: var(--accent); margin-left: 5px; }
+.combi-matrix .mx-fills { color: var(--ok); border-color: var(--ok); margin-left: 4px; }
 .combi-legend { margin-top: 4px; font-size: 11px; line-height: 1.5; }
 /* 🎯 Must-first list badges: covers-all is the top tier (green), a gap is a combine-candidate (amber). */
 .combined.must-all { color: var(--ok); font-weight: 600; }

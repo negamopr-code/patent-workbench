@@ -1135,16 +1135,20 @@ function renderCombiScanPanel() {
   const r = combiScan;
   const matrix = r.matrix || { columns: [], rows: [] };
   const cols = matrix.columns || [], rows = matrix.rows || [];
-  const soloCount = rows.filter(x => x.covers_all).length;
+  const gapNames = matrix.gap_names || [];
+  const gapSet = new Set(gapNames);
+  const anchor = rows.find(x => x.is_anchor) || rows[0];
   const head = document.createElement('div');
   head.className = 'combi-head';
-  head.innerHTML = `<b>🔎 Coverage matrix — you judge the combinations</b> `
-    + `<span class="muted">(${rows.length} document(s) × ${cols.length} mandatory element(s); `
-    + `${soloCount} cover EVERY mandatory element alone`
-    + (r.screened ? `; 🩺 screened ${r.screened} → ${r.screened - (r.dropped || 0)} shortlisted` : '')
-    + `; verdicts from ${r.depth === 'full' ? 'FULL TEXT' : 'digests — run stage 2 to confirm'}. `
-    + `✓ discloses · ~ partial (still meets the limitation) · ✗ absent. Additional elements are `
-    + `folded into the ➕ bonus, not shown as columns. Independent of every other score.)</span>`;
+  head.innerHTML = matrix.covers_all_anchor
+    ? `<b>🔎 Combination finder</b> <span class="muted">— top document <b>${esc(matrix.anchor || '')}</b> `
+      + `covers EVERY Must element alone, so no second document is needed. Rows below are the `
+      + `next-best documents. (${matrix.total_ranked || rows.length} ranked; showing ${rows.length}.)</span>`
+    : `<b>🔎 Combination finder</b> <span class="muted">— a combination is TWO documents. `
+      + `Row ① is the best document <b>${esc(matrix.anchor || '')}</b>; it is missing `
+      + `<b>${gapNames.length}</b> Must element(s) (highlighted). The rows below are the closest `
+      + `documents that FILL those gaps — pair ① with one of them. `
+      + `✓ discloses · ~ partial · ✗ absent. (${matrix.total_ranked || rows.length} ranked; showing ${rows.length}.)</span>`;
   panel.appendChild(head);
   const actions = document.createElement('div');
   actions.className = 'combi-actions';
@@ -1175,7 +1179,7 @@ function renderCombiScanPanel() {
   const shortEl = (n, i) => `E${i + 1}`;
   const hasW = rows.some(r => r.w_total);
   htr.innerHTML = `<th class="mx-doc">Document</th>`
-    + cols.map((c, i) => `<th class="mx-el" title="${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}">${shortEl(c.name, i)}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
+    + cols.map((c, i) => `<th class="mx-el${gapSet.has(c.name) ? ' mx-gapcol' : ''}" title="${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}${gapSet.has(c.name) ? ' — GAP: the top document is missing this; a partner must fill it' : ''}">${shortEl(c.name, i)}${gapSet.has(c.name) ? ' ⚠' : ''}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
     + `<th class="mx-score" title="MUST coverage — the dominant ranking criterion: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.">Must</th>`
     + `<th class="mx-score" title="Additional (A) bonus (weight/5 · 0.3, capped): each extra feature present adds points, absence never a penalty. Differentiates within a Must tier — never lifts a weaker-on-Must doc above a stronger one.">➕ A</th>`
     + (hasW ? `<th class="mx-score" title="Whole-document (W) bonus: elements of the benchmark document itself. Same bonus-only role as Additional.">📄 W</th>` : '')
@@ -1186,11 +1190,19 @@ function renderCombiScanPanel() {
   const tbody = document.createElement('tbody');
   for (const row of rows) {
     const tr = document.createElement('tr');
-    if (row.covers_all) tr.className = 'mx-all';
-    const doc = `<td class="mx-doc"><b>${esc(row.number)}</b>${row.covers_all ? ' <span class="chip ok mx-solo" title="Discloses every mandatory element on its own — single-reference full coverer.">alone</span>' : ''}</td>`;
+    tr.className = row.is_anchor ? 'mx-anchor' : (row.covers_all ? 'mx-all' : '');
+    const label = row.is_anchor
+      ? ' <span class="chip mx-rank" title="The best document — the anchor of the combination.">① best</span>'
+      : (row.covers_all ? ' <span class="chip ok mx-solo" title="Also covers every Must element on its own.">alone</span>' : '');
+    const fills = (row.fills && row.fills.length)
+      ? ` <span class="chip mx-fills" title="Fills the anchor's gap(s): ${row.fills.map(esc).join('; ')}">↳ fills ${row.fills.length}</span>` : '';
+    const doc = `<td class="mx-doc"><b>${esc(row.number)}</b>${label}${fills}</td>`;
+    const fillSet = new Set(row.fills || []);
     const cells = row.cells.map((s, i) => {
       const meta = CELL[s] || CELL.no;
-      return `<td class="mx-cell ${meta.c}" title="${esc(cols[i].name)}: ${meta.title}">${meta.t}</td>`;
+      const isFill = !row.is_anchor && fillSet.has(cols[i].name) && s !== 'no';
+      const isGap = row.is_anchor && gapSet.has(cols[i].name);
+      return `<td class="mx-cell ${meta.c}${isFill ? ' mx-fillcell' : ''}${isGap ? ' mx-gapcell' : ''}" title="${esc(cols[i].name)}: ${meta.title}${isFill ? ' — FILLS the anchor gap' : ''}">${meta.t}</td>`;
     }).join('');
     const must = `<td class="mx-score" title="${row.mand_full}✓${row.mand_partial ? ` +${row.mand_partial}~` : ''} of ${row.mand_total} mandatory">${row.mand_full}${row.mand_partial ? `+${row.mand_partial}~` : ''}/${row.mand_total} <span class="muted">(${row.mand_rating})</span></td>`;
     const bonus = `<td class="mx-score">${row.add_total ? `${row.add_full}${row.add_partial ? `+${row.add_partial}~` : ''}/${row.add_total}${row.add_bonus ? ` <span class="muted">(+${row.add_bonus})</span>` : ''}` : '—'}</td>`;

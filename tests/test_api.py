@@ -2354,6 +2354,34 @@ def test_combi_scan_returns_the_element_document_matrix(client, monkeypatch):
                     "add_bonus", "score", "depth")) <= set(row)
 
 
+def test_combi_matrix_focuses_on_anchor_plus_gap_fillers(client, monkeypatch):
+    """The matrix is a 2-document combination finder: row ① is the best document (anchor);
+    the rows below are ONLY documents that fill a Must element the anchor lacks — the closest
+    partners for a pair. A document that brings nothing the anchor misses is dropped."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)          # 3 mandatory: packs, bus, comms
+    def fake_cov(elements, docs, model=None):
+        table = {   # A = best (has packs+bus, MISSING comms); B fills comms; C brings nothing new
+            "EP4400001": ["YES", "YES", "NO"],
+            "EP4400002": ["NO", "NO", "YES"],
+            "EP4400003": ["YES", "NO", "NO"],
+        }
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i].lower(), "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    mx = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()["matrix"]
+    assert mx["anchor"] == "EP4400001" and mx["covers_all_anchor"] is False
+    assert mx["gap_names"] == ["comms"]                  # the element the anchor lacks
+    nums_shown = [r["number"] for r in mx["rows"]]
+    assert nums_shown[0] == "EP4400001"                  # row ① = the anchor
+    assert "EP4400002" in nums_shown                     # the gap-filler is shown
+    assert "EP4400003" not in nums_shown                 # brings nothing new → dropped
+    filler = next(r for r in mx["rows"] if r["number"] == "EP4400002")
+    assert filler["fills"] == ["comms"]
+
+
 def test_combi_scan_rejects_one_document_subsuming_another(client, monkeypatch):
     """A pair is only a COMBINATION when each side contributes something the other lacks —
     A ⊇ C is one document doing the work, not a combination."""
