@@ -262,6 +262,11 @@ textarea, select, input[type="text"] {
 /* Group-coded column headers: ME (must) neutral, AE (additional) / WE (whole-doc) tinted. */
 .combi-matrix th.mx-el-A { color: var(--accent2); }
 .combi-matrix th.mx-el-W { color: var(--accent); }
+/* Contested cell: the two full-text reads disagree — mark it, don't hide it. */
+.combi-matrix td.mx-conflict { outline: 2px solid var(--warn); position: relative; }
+.combi-matrix .mx-spark { font-size: 9px; color: var(--warn); margin-left: 2px; vertical-align: super; }
+.combi-conflict { font-size: 12px; color: var(--warn); border: 1px solid var(--warn); border-radius: 8px; padding: 5px 9px; margin: 4px 0 8px; background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.mx-contested { color: var(--warn); font-weight: 600; font-size: 11px; cursor: help; }
 .combi-legend { margin-top: 4px; font-size: 11px; line-height: 1.5; }
 /* 🎯 Must-first list badges: covers-all is the top tier (green), a gap is a combine-candidate (amber). */
 .combined.must-all { color: var(--ok); font-weight: 600; }

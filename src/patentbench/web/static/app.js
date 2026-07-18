@@ -1162,6 +1162,13 @@ function renderCombiScanPanel() {
         + `✓ discloses · ~ partial · ✗ absent. ${nShown}.</span>`;
   }
   panel.appendChild(head);
+  if (matrix.contested) {
+    const cf = document.createElement('div');
+    cf.className = 'combi-conflict';
+    cf.innerHTML = `⚡ <b>${matrix.contested} contested cell(s)</b> — the two full-text reads (🏆 best-match deep-read vs 🔎 combi stage-2 verify) disagree here. `
+      + `The higher-fidelity element verdict is shown; the ⚡ badge names the other reading. These are the elements to decide by hand — hover a ⚡ cell to see both.`;
+    panel.appendChild(cf);
+  }
   const actions = document.createElement('div');
   actions.className = 'combi-actions';
   const v = document.createElement('button');
@@ -1219,7 +1226,13 @@ function renderCombiScanPanel() {
       const meta = CELL[s] || CELL.no;
       const isFill = !row.is_anchor && fillSet.has(cols[i].name) && s !== 'no';
       const isGap = row.is_anchor && gapSet.has(cols[i].name);
-      return `<td class="mx-cell ${meta.c}${isFill ? ' mx-fillcell' : ''}${isGap ? ' mx-gapcell' : ''}" title="${esc(cols[i].name)}: ${meta.title}${isFill ? ' — FILLS the anchor gap' : ''}">${meta.t}</td>`;
+      // CONTESTED: the two full-text reads disagree here. Show the higher-fidelity verdict
+      // marked with ⚡, and name BOTH readings in the tooltip so the user can decide.
+      const alt = (row.cell_alt || [])[i];
+      const altMeta = alt ? (CELL[alt] || CELL.no) : null;
+      const contest = alt
+        ? ` — ⚡ CONTESTED: combi-verify says “${meta.t}”, deep-read says “${altMeta.t}” (higher-fidelity shown)` : '';
+      return `<td class="mx-cell ${meta.c}${isFill ? ' mx-fillcell' : ''}${isGap ? ' mx-gapcell' : ''}${alt ? ' mx-conflict' : ''}" title="${esc(cols[i].name)}: ${meta.title}${isFill ? ' — FILLS the anchor gap' : ''}${contest}">${meta.t}${alt ? `<span class="mx-spark">⚡${altMeta.t}</span>` : ''}</td>`;
     }).join('');
     const must = `<td class="mx-score" title="${row.mand_full}✓${row.mand_partial ? ` +${row.mand_partial}~` : ''} of ${row.mand_total} mandatory">${row.mand_full}${row.mand_partial ? `+${row.mand_partial}~` : ''}/${row.mand_total} <span class="muted">(${row.mand_rating})</span></td>`;
     const bonus = `<td class="mx-score">${row.add_total ? `${row.add_full}${row.add_partial ? `+${row.add_partial}~` : ''}/${row.add_total}${row.add_bonus ? ` <span class="muted">(+${row.add_bonus})</span>` : ''}` : '—'}</td>`;
@@ -1702,9 +1715,10 @@ function renderDocs(allDocs) {
       const r = d.rank;
       if (r) {
         const mtxt = `${r.mand_full}${r.mand_partial ? `+${r.mand_partial}~` : ''}/${r.mand_total}`;
+        const conf = r.mand_conflicts ? ` <span class="mx-contested" title="${r.mand_conflicts} Must element(s) where the two full-text reads disagree — see the ⚡ cells in the matrix.">⚡${r.mand_conflicts}</span>` : '';
         parts.push(r.covers_all
-          ? `<span class="combined must-all" title="Covers EVERY Must element (${mtxt}; weighted ${r.mand_rating}/10). A single-reference full coverer — the top tier.">🎯 covers all Must <span class="muted">(${mtxt})</span></span>`
-          : `<span class="combined must-gap" title="Must coverage ${mtxt}; weighted ${r.mand_rating}/10. A Must element is still uncovered, so it can't cover the invention alone — it may still combine with another document (see the matrix).">🎯 ${mtxt} Must <span class="muted">(${r.mand_rating})</span></span>`);
+          ? `<span class="combined must-all" title="Covers EVERY Must element (${mtxt}; weighted ${r.mand_rating}/10). A single-reference full coverer — the top tier.">🎯 covers all Must <span class="muted">(${mtxt})</span></span>${conf}`
+          : `<span class="combined must-gap" title="Must coverage ${mtxt}; weighted ${r.mand_rating}/10. A Must element is still uncovered, so it can't cover the invention alone — it may still combine with another document (see the matrix).">🎯 ${mtxt} Must <span class="muted">(${r.mand_rating})</span></span>${conf}`);
         if (r.add_total) parts.push(`<span class="addl" title="Additional (bonus) features: ${r.add_full}✓ ${r.add_partial}~ of ${r.add_total}. Raises rank within a Must tier; absence never lowers it.">➕ ${r.add_bonus ? `+${r.add_bonus}` : '0'}/${r.add_total}</span>`);
         if (r.w_total) parts.push(`<span class="addl wbonus" title="Whole-document features (elements of the benchmark document itself): ${r.w_full}✓ ${r.w_partial}~ of ${r.w_total}. Bonus only.">📄 ${r.w_bonus ? `+${r.w_bonus}` : '0'}/${r.w_total}</span>`);
       }

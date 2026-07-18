@@ -2363,6 +2363,28 @@ def test_drop_benchmark_excludes_the_benchmark_document():
     assert [d["number"] for d in kept] == ["EP9999999"]
 
 
+def test_effective_coverage_surfaces_full_text_conflict():
+    """When the two FULL-TEXT passes disagree on an element — the deep-read (feature_scores)
+    vs the combi stage-2 verify (combi_coverage depth=full) — the higher-fidelity verdict is
+    shown, but the conflict is FLAGGED with the losing verdict, not silently hidden. A digest
+    verdict differing from a full read is NOT a conflict (just lower fidelity)."""
+    from patentbench.web import api
+    import json
+    doc = {
+        "feature_scores": [{"name": "M1", "status": "partial"},   # deep-read: partial
+                           {"name": "M2", "status": "yes"}],
+        "combi_coverage": json.dumps([
+            {"name": "M1", "status": "yes", "depth": "full"},      # combi verify: yes → CONFLICT
+            {"name": "M2", "status": "no", "depth": "digest"}]),   # digest < full → NOT a conflict
+    }
+    eff = api._effective_coverage(doc)
+    assert eff["M1"]["status"] == "yes" and eff["M1"]["conflict"] is True and eff["M1"]["alt"] == "partial"
+    assert eff["M2"]["status"] == "yes" and eff["M2"]["conflict"] is False   # deep-read wins, no conflict
+    u = api._unified_score([{"name": "M1", "weight": 5, "kind": "M"},
+                            {"name": "M2", "weight": 5, "kind": "M"}], doc)
+    assert u["mand_conflicts"] == 1
+
+
 def test_combi_matrix_pivots_to_additional_when_must_is_saturated():
     """When the best document already covers every Must element and additional features exist,
     the grid switches its columns to the ADDITIONAL features and the partners become documents

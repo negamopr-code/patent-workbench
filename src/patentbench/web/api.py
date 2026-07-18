@@ -3259,17 +3259,40 @@ def _effective_coverage(doc: dict) -> dict:
     """Best available per-element verdict, merging the full-text deep read (feature_scores)
     with the combi scan (combi_coverage), preferring the higher-fidelity source — so a full
     read you already paid for is used instead of a digest guess. Reuses stored data only, no
-    model call. {name: {"status", "fid", "depth"}}."""
-    best: dict = {}
+    model call.
+
+    CONFLICT is surfaced, not hidden: when the TWO full-text passes disagree on an element —
+    the 🏆 best-match deep-read (holistic per-feature check) vs the 🔎 combi stage-2 verify
+    (element-by-element, anticipation standard) — the winner is the higher-fidelity one, but
+    `conflict=True` and `alt` carries the losing verdict so the matrix/list can mark it and
+    the user can decide. A digest/screen verdict differing from a full read is NOT a conflict
+    (it is simply lower fidelity, expected to be overridden).
+
+    {name: {"status", "fid", "depth", "conflict", "alt"}}."""
+    out: dict = {}
     for e in (doc.get("feature_scores") or []):        # deep_map = full text → fidelity 'read'
         if isinstance(e, dict) and e.get("name"):
-            best[e["name"]] = (_FID["read"], e.get("status") or "no")
+            out[e["name"]] = {"status": e.get("status") or "no", "fid": _FID["read"],
+                              "conflict": False, "alt": None}
     for n, r in _cov_records(doc).items():
-        fid = _FID.get("combi_" + (r.get("depth") or "screen"), _FID["combi_digest"])
-        if n not in best or fid >= best[n][0]:         # higher fidelity wins; combi-full ≥ read
-            best[n] = (fid, r.get("status", "no"))
-    return {n: {"status": s, "fid": f, "depth": _FID_LABEL.get(f, "digest")}
-            for n, (f, s) in best.items()}
+        depth = r.get("depth") or "screen"
+        fid = _FID.get("combi_" + depth, _FID["combi_digest"])
+        cstat = r.get("status", "no")
+        prev = out.get(n)
+        if prev is None:
+            out[n] = {"status": cstat, "fid": fid, "conflict": False, "alt": None}
+            continue
+        # Two FULL-TEXT verdicts (deep-read AND combi stage-2) that differ → a real conflict.
+        conflict = (prev["fid"] >= _FID["read"] and depth == "full" and cstat != prev["status"])
+        if fid >= prev["fid"]:                          # combi wins on fidelity
+            out[n] = {"status": cstat, "fid": fid, "conflict": conflict,
+                      "alt": prev["status"] if conflict else None}
+        elif conflict:                                  # deep-read keeps the cell but flag it
+            prev["conflict"] = True
+            prev["alt"] = cstat
+    for v in out.values():
+        v["depth"] = _FID_LABEL.get(v["fid"], "digest")
+    return out
 
 
 def _element_status_map(doc: dict) -> dict:
@@ -3306,11 +3329,14 @@ def _unified_score(elements: list[dict], doc: dict) -> dict:
     mand = [e for e in elements if _kind(e) == "M"]
     add = [e for e in elements if _kind(e) == "A"]
     whole = [e for e in elements if _kind(e) == "W"]
-    cov = _element_status_map(doc)
+    eff = _effective_coverage(doc)
+    cov = {n: v["status"] for n, v in eff.items()}
     total_w = sum(int(e.get("weight", 1)) for e in mand) or 1
     cells = [cov.get(e["name"], "no") for e in mand]
     mand_full = sum(1 for s in cells if s == "yes")
     mand_part = sum(1 for s in cells if s == "partial")
+    # Must elements where the two FULL-TEXT passes disagree (surfaced, not silently resolved).
+    mand_conflicts = sum(1 for e in mand if eff.get(e["name"], {}).get("conflict"))
     covers_all = bool(mand) and not any(s == "no" for s in cells)
     covered_w = sum(int(e.get("weight", 1)) * (1.0 if s == "yes" else 0.5)
                     for e, s in zip(mand, cells) if s in ("yes", "partial"))
@@ -3324,6 +3350,7 @@ def _unified_score(elements: list[dict], doc: dict) -> dict:
            + a["bonus"] * 1e3 + w["bonus"]) if assessed else -1.0
     return {"covers_all": covers_all, "mand_full": mand_full, "mand_partial": mand_part,
             "mand_total": len(mand), "mand_rating": mand_rating,
+            "mand_conflicts": mand_conflicts,
             "add_bonus": a["bonus"], "add_full": a["full"], "add_partial": a["partial"],
             "add_total": a["total"], "w_bonus": w["bonus"], "w_full": w["full"],
             "w_partial": w["partial"], "w_total": w["total"],
@@ -3564,6 +3591,7 @@ def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> di
             "add_partial": u["add_partial"], "add_total": u["add_total"],
             "w_bonus": u["w_bonus"], "w_full": u["w_full"], "w_partial": u["w_partial"],
             "w_total": u["w_total"], "score": d.get("score"), "key": u["key"],
+            "mand_conflicts": u["mand_conflicts"],
             # Row depth = the weakest fidelity among the MUST cells (the primary read depth),
             # so a document full-read against the elements shows 📖 full regardless of the grid.
             "depth": _FID_LABEL.get(min(m_fids), "screen") if m_fids else "screen",
@@ -3579,10 +3607,15 @@ def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> di
     for r in rows:
         eff = r.pop("_eff")
         r["cells"] = [eff.get(e["name"], {}).get("status", "no") for e in active]
+        # Per-cell CONFLICT: the losing full-text verdict when the two passes disagree, else
+        # null — so the grid MARKS the contested cell instead of silently showing one side.
+        r["cell_alt"] = [(eff.get(e["name"], {}).get("alt")
+                          if eff.get(e["name"], {}).get("conflict") else None) for e in active]
     focus = _focus_combination(active, rows, limit)
+    contested = sum(1 for row in focus["rows"] for a in row.get("cell_alt", []) if a)
     return {"columns": columns, "rows": focus["rows"], "gap_names": focus["gap_names"],
             "anchor": focus["anchor"], "covers_all_anchor": focus["covers_all_anchor"],
-            "mode": mode, "total_ranked": len(rows)}
+            "mode": mode, "total_ranked": len(rows), "contested": contested}
 
 
 def _focus_combination(cols: list[dict], rows: list[dict], limit: int = 10) -> dict:
