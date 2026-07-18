@@ -270,6 +270,9 @@ textarea, select, input[type="text"] {
 /* Column no document covers: genuinely absent from the corpus, distinct from a fillable gap. */
 .combi-matrix th.mx-nocover { color: var(--err); border-bottom: 2px dashed var(--err); }
 .combi-nocover { font-size: 12px; color: var(--err); border: 1px solid var(--err); border-radius: 8px; padding: 5px 9px; margin: 4px 0 8px; background: color-mix(in srgb, var(--err) 8%, transparent); }
+/* Combinability: 🔗 = a valid pair with the anchor (skilled person would combine); ⛔ = not. */
+.combi-matrix .mx-pair { color: var(--ok); border-color: var(--ok); margin-left: 4px; font-weight: 600; }
+.combi-matrix .mx-nopair { color: var(--err); border-color: var(--err); margin-left: 4px; }
 .combi-legend { margin-top: 4px; font-size: 11px; line-height: 1.5; }
 /* 🎯 Must-first list badges: covers-all is the top tier (green), a gap is a combine-candidate (amber). */
 .combined.must-all { color: var(--ok); font-weight: 600; }

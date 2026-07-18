@@ -1177,6 +1177,8 @@ function renderCombiScanPanel() {
       + `<i>${matrix.uncovered_gaps.map(esc).join('; ')}</i>. This is a genuine gap in the corpus (a real prior-art finding), not a display limit — every element ANY document covers is shown below.`;
     panel.appendChild(nb);
   }
+  const anchorRow = rows.find(x => x.is_anchor);
+  const partnerRows = rows.filter(x => !x.is_anchor);
   const actions = document.createElement('div');
   actions.className = 'combi-actions';
   const v = document.createElement('button');
@@ -1185,6 +1187,18 @@ function renderCombiScanPanel() {
   v.title = 'Re-read the top full/near-full coverers against their primary text, replacing each digest cell with a citable one. A cell (and a would-be combination) can legitimately flip here.';
   v.onclick = () => runCombiVerify();
   actions.appendChild(v);
+  // ⚖️ Combinability: filling a gap MATHEMATICALLY does not make a valid pair — a skilled
+  // person must have a reason to combine the two (same field / motivation). This judges the
+  // anchor ↔ each partner pair (LLM, over digests) and numbers the combinable ones.
+  if (anchorRow && partnerRows.length) {
+    const jb = document.createElement('button');
+    jb.className = 'btn small'; jb.id = 'matrix-judge';
+    const judged = partnerRows.filter(p => combiMotivations[combiKey(anchorRow.id, p.id)]).length;
+    jb.textContent = judged ? `⚖️ re-judge combinability (${judged}/${partnerRows.length})` : '⚖️ Judge combinability (LLM)';
+    jb.title = 'For the anchor paired with EACH partner, judge whether a skilled person would actually combine them (same technical field, motivation to combine) — not just whether they fill each other\'s gaps. Combinable pairs get a 🔗 number; incompatible ones (e.g. phone-memory + wind-turbine) are marked ⛔.';
+    jb.onclick = () => judgeMatrixCombinability(anchorRow, partnerRows, cols);
+    actions.appendChild(jb);
+  }
   panel.appendChild(actions);
   if (!cols.length || !rows.length) {
     const m = document.createElement('div');
@@ -1225,6 +1239,21 @@ function renderCombiScanPanel() {
     + `<th class="mx-depth" title="Read depth of this row's cells: 🩺 screen (generous guess) · 🧾 digest (summary) · 📖 full text (citable).">Depth</th>`;
   thead.appendChild(htr);
   table.appendChild(thead);
+  // Pairing numbers: a partner is a VALID pair with the anchor only if a skilled person would
+  // combine them (LLM verdict). Number the combinable partners; the anchor is the hub and
+  // shows every number it participates in. Not judged yet → no number (⚪ prompt).
+  const pairNum = new Map();     // partner.id → sequential pair number (combinable only)
+  const pairInfo = new Map();    // partner.id → {combinable, reason}
+  if (anchorRow) {
+    let n = 0;
+    for (const p of partnerRows) {
+      const v = combiMotivations[combiKey(anchorRow.id, p.id)];
+      if (!v) continue;
+      pairInfo.set(p.id, v);
+      if (v.combinable) pairNum.set(p.id, ++n);
+    }
+  }
+  const anchorPairs = anchorRow ? [...pairNum.values()].sort((a, b) => a - b) : [];
   const tbody = document.createElement('tbody');
   for (const row of rows) {
     const tr = document.createElement('tr');
@@ -1234,7 +1263,18 @@ function renderCombiScanPanel() {
       : (row.covers_all ? ' <span class="chip ok mx-solo" title="Also covers every Must element on its own.">alone</span>' : '');
     const fills = (row.fills && row.fills.length)
       ? ` <span class="chip mx-fills" title="Fills the anchor's gap(s): ${row.fills.map(esc).join('; ')}">↳ fills ${row.fills.length}</span>` : '';
-    const doc = `<td class="mx-doc"><b>${esc(row.number)}</b>${label}${fills}</td>`;
+    // 🔗 combinability badge: on a partner, its pair number (green) if combinable with the
+    // anchor, ⛔ if judged NOT combinable (different field / no motivation), nothing if unjudged.
+    // On the anchor, every pair number it belongs to — it can pair with several.
+    let pairBadge = '';
+    if (row.is_anchor && anchorPairs.length) {
+      pairBadge = ` <span class="chip mx-pair" title="Combinable (a skilled person would combine them) with ${anchorPairs.length} partner(s) below — the numbered 🔗 rows.">🔗 ${anchorPairs.map(k => k).join(' ')}</span>`;
+    } else if (!row.is_anchor) {
+      const info = pairInfo.get(row.id);
+      if (info && info.combinable) pairBadge = ` <span class="chip mx-pair" title="Combinable pair ${pairNum.get(row.id)} with the anchor ${esc(anchorRow.number)} — a skilled person would combine them.${info.reason ? ' ' + esc(info.reason) : ''}">🔗 ${pairNum.get(row.id)}</span>`;
+      else if (info) pairBadge = ` <span class="chip mx-nopair" title="NOT combinable with the anchor: ${esc(info.reason || 'no motivation to combine / different technical field')}.">⛔</span>`;
+    }
+    const doc = `<td class="mx-doc"><b>${esc(row.number)}</b>${label}${fills}${pairBadge}</td>`;
     const fillSet = new Set(row.fills || []);
     const cells = row.cells.map((s, i) => {
       const meta = CELL[s] || CELL.no;
@@ -1388,6 +1428,26 @@ async function judgeCombinability(pairs) {
   if (res.error) { if (btn) { btn.disabled = false; btn.textContent = '⚖️ Check combinability (LLM)'; } alert(res.error); return; }
   Object.assign(combiMotivations, res.results || {});
   renderCombiPanel();
+}
+
+// ⚖️ Matrix combinability: judge the anchor paired with EACH partner — whether a skilled
+// person would actually combine them (same field, motivation), not just whether they fill
+// each other's gaps. Reuses the same LLM judge + persistence; refreshes the matrix badges.
+async function judgeMatrixCombinability(anchor, partners, cols) {
+  const btn = $('matrix-judge');
+  if (btn) { btn.disabled = true; btn.textContent = '⚖️ judging…'; }
+  const covered = cols.filter((c, i) => (anchor.cells[i] === 'yes' || anchor.cells[i] === 'partial')).map(c => c.name);
+  const payload = { pairs: partners.map(p => ({
+    a_id: anchor.id, b_id: p.id,
+    a_features: covered.length ? covered : ['(covers the mandatory elements)'],
+    b_features: p.fills && p.fills.length ? p.fills : ['(brings additional features)'],
+  })) };
+  const res = await api(`/api/tabs/${activeTab}/combi/motivation`,
+    { method: 'POST', body: JSON.stringify(payload) });
+  if (res.error) { if (btn) { btn.disabled = false; btn.textContent = '⚖️ Judge combinability (LLM)'; } alert(res.error); return; }
+  Object.assign(combiMotivations, res.results || {});
+  renderCombiScanPanel();
+  await reloadChat();
 }
 
 // The candidate's DOCUMENT-match, 0–10: Claude's deep-read score of the candidate against
