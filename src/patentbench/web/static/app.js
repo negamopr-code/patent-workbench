@@ -1171,10 +1171,12 @@ function renderCombiScanPanel() {
   const thead = document.createElement('thead');
   const htr = document.createElement('tr');
   const shortEl = (n, i) => `E${i + 1}`;
+  const hasW = rows.some(r => r.w_total);
   htr.innerHTML = `<th class="mx-doc">Document</th>`
     + cols.map((c, i) => `<th class="mx-el" title="${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}">${shortEl(c.name, i)}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
-    + `<th class="mx-score" title="Mandatory coverage: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.">Must</th>`
-    + `<th class="mx-score" title="Additional-feature bonus (weight/5 · 0.3, capped): each extra feature present adds points, absence never a penalty.">➕ Bonus</th>`
+    + `<th class="mx-score" title="MUST coverage — the dominant ranking criterion: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.">Must</th>`
+    + `<th class="mx-score" title="Additional (A) bonus (weight/5 · 0.3, capped): each extra feature present adds points, absence never a penalty. Differentiates within a Must tier — never lifts a weaker-on-Must doc above a stronger one.">➕ A</th>`
+    + (hasW ? `<th class="mx-score" title="Whole-document (W) bonus: elements of the benchmark document itself. Same bonus-only role as Additional.">📄 W</th>` : '')
     + `<th class="mx-score" title="🏆 Whole-benchmark best-match score already stored on the row (only present once ranked).">🏆 Match</th>`
     + `<th class="mx-depth" title="Read depth of this row's cells: 🩺 screen (generous guess) · 🧾 digest (summary) · 📖 full text (citable).">Depth</th>`;
   thead.appendChild(htr);
@@ -1190,9 +1192,10 @@ function renderCombiScanPanel() {
     }).join('');
     const must = `<td class="mx-score" title="${row.mand_full}✓${row.mand_partial ? ` +${row.mand_partial}~` : ''} of ${row.mand_total} mandatory">${row.mand_full}${row.mand_partial ? `+${row.mand_partial}~` : ''}/${row.mand_total} <span class="muted">(${row.mand_rating})</span></td>`;
     const bonus = `<td class="mx-score">${row.add_total ? `${row.add_full}${row.add_partial ? `+${row.add_partial}~` : ''}/${row.add_total}${row.add_bonus ? ` <span class="muted">(+${row.add_bonus})</span>` : ''}` : '—'}</td>`;
+    const wcell = hasW ? `<td class="mx-score">${row.w_total ? `${row.w_full}${row.w_partial ? `+${row.w_partial}~` : ''}/${row.w_total}${row.w_bonus ? ` <span class="muted">(+${row.w_bonus})</span>` : ''}` : '—'}</td>` : '';
     const score = `<td class="mx-score">${row.score != null ? esc(String(row.score)) : '—'}</td>`;
     const depth = `<td class="mx-depth"><span class="chip" style="cursor:${row.depth === 'full' ? 'default' : 'pointer'}" title="${row.depth === 'full' ? 'Confirmed on full primary text.' : 'Click to re-read THIS document on full text and replace its cells with citable verdicts.'}">${DEPTH_CHIP[row.depth] || row.depth}</span></td>`;
-    tr.innerHTML = doc + cells + must + bonus + score + depth;
+    tr.innerHTML = doc + cells + must + bonus + wcell + score + depth;
     if (row.depth !== 'full') {
       const chip = tr.querySelector('.mx-depth .chip');
       if (chip) chip.onclick = () => runCombiVerify({ ids: [row.id] });
@@ -1347,6 +1350,10 @@ function blendedMatch(d) {
   return { value: doc != null ? doc : feat, doc, feat };
 }
 function scoreSortValue(d, key) {
+  // 🎯 Must-first: the unified key (covers-all-Must ≫ weighted-Must ≫ A-bonus ≫ W-bonus),
+  // computed server-side from stored coverage. This is THE ranking — Must dominates, A/W
+  // only differentiate within a tier. Un-assessed docs (no rank) sort last.
+  if (key === 'must') return d.rank ? d.rank.key : -1;
   if (key === 'weighted') {
     const bm = blendedMatch(d);
     if (!bm) return -1;
@@ -1496,13 +1503,15 @@ function renderDocs(allDocs) {
     }
     // sort the palmares — feature mode adds the weighted key (and defaults to it)
     const fmode = featureMode();
-    const effSort = (!docsSortTouched && fmode) ? 'weighted' : docsSort;
+    const hasRank = allDocs.some(d => d.rank);
+    const effSort = (!docsSortTouched && fmode) ? (hasRank ? 'must' : 'weighted') : docsSort;
     if (fmode || allDocs.some(d => d.nlm_score != null)) {
       const sortSel = document.createElement('select');
       sortSel.className = 'sort-sel';
       sortSel.title = 'Rank candidates by';
       const opts = [['combined', '🥇 by combined'], ['claude', '🤖 by Claude'], ['nlm', '📓 by NLM'], ['delta', 'Δ by disagreement']];
       if (fmode) opts.unshift(['weighted', '⚖ by weighted features']);
+      if (hasRank) opts.unshift(['must', '🎯 by Must-coverage']);
       for (const [v, label] of opts) {
         const o = document.createElement('option'); o.value = v; o.textContent = label;
         if (v === effSort) o.selected = true;
@@ -1517,7 +1526,8 @@ function renderDocs(allDocs) {
   // ranking ("palmares"): base score first; among equal base, CONSENSUS docs lead, then by
   // NLM's best-first order (nlm_rank), then id. Base score excludes the consensus taper so
   // there's no circularity (the taper is a display/position effect computed below).
-  const sortKey = (!docsSortTouched && featureMode()) ? 'weighted' : docsSort;
+  const sortKey = (!docsSortTouched && featureMode())
+    ? (allDocs.some(d => d.rank) ? 'must' : 'weighted') : docsSort;
   const nlmRankOf = d => (d.nlm_rank != null ? d.nlm_rank : 1e9);
   let docs = [...allDocs].sort((a, b) =>
     scoreSortValue(b, sortKey) - scoreSortValue(a, sortKey)
@@ -1652,7 +1662,19 @@ function renderDocs(allDocs) {
       // BLENDED match leads when the benchmark has BOTH a document and features: the rank is
       // (document match + feature coverage)/2, so a candidate must do well on both. Shown with
       // its two parts so the number is never opaque.
-      const bmv = featureMode() ? blendedMatch(d) : null;
+      // 🎯 MUST-FIRST badge leads: covers-all-Must decides the tier, A/W are bonus chips.
+      // This is the same key the matrix and chat rank by. When it's present it REPLACES the
+      // old blended 🎯 (which conflated Must with bonus and mis-ranked full coverers).
+      const r = d.rank;
+      if (r) {
+        const mtxt = `${r.mand_full}${r.mand_partial ? `+${r.mand_partial}~` : ''}/${r.mand_total}`;
+        parts.push(r.covers_all
+          ? `<span class="combined must-all" title="Covers EVERY Must element (${mtxt}; weighted ${r.mand_rating}/10). A single-reference full coverer — the top tier.">🎯 covers all Must <span class="muted">(${mtxt})</span></span>`
+          : `<span class="combined must-gap" title="Must coverage ${mtxt}; weighted ${r.mand_rating}/10. A Must element is still uncovered, so it can't cover the invention alone — it may still combine with another document (see the matrix).">🎯 ${mtxt} Must <span class="muted">(${r.mand_rating})</span></span>`);
+        if (r.add_total) parts.push(`<span class="addl" title="Additional (bonus) features: ${r.add_full}✓ ${r.add_partial}~ of ${r.add_total}. Raises rank within a Must tier; absence never lowers it.">➕ ${r.add_bonus ? `+${r.add_bonus}` : '0'}/${r.add_total}</span>`);
+        if (r.w_total) parts.push(`<span class="addl wbonus" title="Whole-document features (elements of the benchmark document itself): ${r.w_full}✓ ${r.w_partial}~ of ${r.w_total}. Bonus only.">📄 ${r.w_bonus ? `+${r.w_bonus}` : '0'}/${r.w_total}</span>`);
+      }
+      const bmv = (featureMode() && !r) ? blendedMatch(d) : null;
       if (bmv && bmv.doc != null && bmv.feat != null) {
         parts.push(`<span class="combined" title="Blended match = (document ${bmv.doc.toFixed(1)} + features ${bmv.feat.toFixed(1)}) / 2. Both the benchmark document and its feature list count — a candidate must match both to rank top.">🎯 ${bmv.value.toFixed(1)} <span class="muted">(📄${bmv.doc.toFixed(1)} 🧩${bmv.feat.toFixed(1)})</span></span>`);
       } else if (d.score != null && d.nlm_score != null) {

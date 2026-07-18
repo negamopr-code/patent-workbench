@@ -2292,6 +2292,35 @@ def test_combi_scan_finds_the_pair_that_covers_everything(client, monkeypatch):
                for q in r["pairs"])
 
 
+def test_unified_score_must_dominates_and_wholedoc_is_bonus():
+    """The single ranking key: Must (M) coverage decides the tier; Additional (A) and
+    Whole-document (W) are separate capped bonus pools that only differentiate WITHIN a
+    Must tier — never lift a weaker-on-Must document above a stronger one."""
+    from patentbench.web import api
+    els = [{"name": "M1", "weight": 5, "kind": "M"}, {"name": "M2", "weight": 5, "kind": "M"},
+           {"name": "A1", "weight": 5, "kind": "A"}, {"name": "W1", "weight": 5, "kind": "W"}]
+
+    def doc(cov):
+        return {"combi_coverage": __import__("json").dumps(
+            [{"name": k, "status": v, "depth": "digest"} for k, v in cov.items()])}
+
+    full = api._unified_score(els, doc({"M1": "yes", "M2": "yes"}))           # all Must, no bonus
+    gap_big_bonus = api._unified_score(els, doc(                              # 1 Must + both bonuses
+        {"M1": "yes", "M2": "no", "A1": "yes", "W1": "yes"}))
+    assert full["covers_all"] and not gap_big_bonus["covers_all"]
+    # Must dominates: the full coverer outranks the gap doc even though the gap doc has more bonus.
+    assert full["key"] > gap_big_bonus["key"]
+    # W is a real, separate bonus pool.
+    assert gap_big_bonus["w_bonus"] > 0 and gap_big_bonus["add_bonus"] > 0
+    # Whole-document elements are NOT counted as mandatory.
+    assert full["mand_total"] == 2
+
+    # Reuses the deep-read's feature_scores when combi_coverage is absent (no new tokens).
+    fs_only = {"feature_scores": [{"name": "M1", "status": "yes"}, {"name": "M2", "status": "partial"}]}
+    u = api._unified_score(els, fs_only)
+    assert u["assessed"] and u["mand_full"] == 1 and u["mand_partial"] == 1
+
+
 def test_combi_scan_returns_the_element_document_matrix(client, monkeypatch):
     """The 🔎 scan (and combi-results) return a MANDATORY element × document grid — the raw
     material the UI renders instead of the pair/solo lists. Columns are the mandatory

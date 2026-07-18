@@ -252,6 +252,10 @@ textarea, select, input[type="text"] {
 .combi-matrix .mx-score { font-family: ui-monospace, monospace; }
 .combi-matrix .mx-solo { margin-left: 5px; }
 .combi-legend { margin-top: 4px; font-size: 11px; line-height: 1.5; }
+/* 🎯 Must-first list badges: covers-all is the top tier (green), a gap is a combine-candidate (amber). */
+.combined.must-all { color: var(--ok); font-weight: 600; }
+.combined.must-gap { color: var(--warn); }
+.addl.wbonus { color: var(--accent2); }
 .combi-pair { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-family: ui-monospace, monospace; }
 .combi-doc { cursor: pointer; color: var(--accent); font-weight: 600; }
 .combi-doc:hover { text-decoration: underline; }

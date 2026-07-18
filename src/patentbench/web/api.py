@@ -162,6 +162,17 @@ def _doc_links(d: dict) -> dict | None:
 def tab_state(tab_id: int):
     _tab_or_404(tab_id)
     docs = db.list_documents(tab_id)
+    # Unified Must-dominant rank, computed from ALREADY-STORED coverage (combi_coverage +
+    # the deep-read's feature_scores) — no model call, so every assessed document re-ranks
+    # for free. Attached as `rank` so the list can sort/badge by the same key as the matrix.
+    bm = db.get_benchmark(tab_id)
+    elements = _combi_elements(bm)
+    if elements:
+        full_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)}
+        for d in docs:
+            src = full_by_id.get(d["id"])
+            u = _unified_score(elements, src) if src else None
+            d["rank"] = u if (u and u["assessed"]) else None
     for d in docs:
         d["links"] = _doc_links(d)
     return {"benchmark": _benchmark_view(tab_id),
@@ -294,7 +305,7 @@ def benchmark_set_features(tab_id: int, body: schemas.BenchmarkFeatures):
     # downstream readers (chat, deep-compare, NLM, mirror) work unchanged, and the
     # weights are stored separately to drive the candidate ranking.
     features = [{"name": f.name.strip(), "weight": f.weight,
-                 "kind": (f.kind if f.kind in ("M", "A") else "M"), "sl": f.sl}
+                 "kind": (f.kind if f.kind in ("M", "A", "W") else "M"), "sl": f.sl}
                 for f in body.features if f.name.strip()]
     # Re-weighting/editing the features of a DOCUMENT benchmark annotates it — it must
     # not silently replace the fetched document with a spec. To swap a document out for
@@ -366,7 +377,7 @@ def benchmark_add_feature(tab_id: int, body: schemas.FeatureItem):
     bm = db.get_benchmark(tab_id)
     features = list((bm.get("features") if bm else None) or [])
     features.append({"name": name, "weight": body.weight,
-                     "kind": (body.kind if body.kind in ("M", "A") else "M"), "sl": body.sl})
+                     "kind": (body.kind if body.kind in ("M", "A", "W") else "M"), "sl": body.sl})
     if bm and bm.get("source") not in (None, "features"):
         db.set_benchmark_feature_list(tab_id, features)   # keep the document itself
         return {"ok": True, "benchmark": _benchmark_view(tab_id)}
@@ -401,6 +412,7 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
     feats = (bm or {}).get("features") or []
     add_feats: list[dict] = []
     keep: list[dict] = []          # features passed through untouched (not re-split)
+    text_kind = "M"                # kind to tag the text-derived elements with
     if body.source == "text":
         text = (body.text or "").strip()
         if len(text) < 20:
@@ -408,22 +420,32 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
     elif body.source == "additional":
         # Split ONLY the additional features; mandatory elements are already granular and
         # re-cutting them would discard wording the user reviewed and accepted.
-        add_feats = [f for f in feats if (f.get("kind") or "M") == "A"]
+        add_feats = [f for f in feats if _kind(f) == "A"]
         if not add_feats:
             raise HTTPException(400, "this benchmark has no additional features to decompose")
         text = ""
-        keep = [f for f in feats if (f.get("kind") or "M") != "A"]
+        keep = [f for f in feats if _kind(f) != "A"]     # keep M and W untouched
     elif body.source == "features":
         if not feats:
             raise HTTPException(400, "this benchmark has no features to decompose")
-        text = "\n\n".join(f["name"] for f in feats if (f.get("kind") or "M") != "A")
+        text = "\n\n".join(f["name"] for f in feats if _kind(f) == "M")
         # ADDITIONAL features are monolithic for the same reason the claim was, and they are
         # what differentiates the documents that all cover the mandatory elements — so split
         # them too. Each is done separately so its own stretch level rides onto its elements.
-        add_feats = [f for f in feats if (f.get("kind") or "M") == "A"]
+        add_feats = [f for f in feats if _kind(f) == "A"]
+        keep = [f for f in feats if _kind(f) == "W"]     # whole-doc bonus stays as-is
         if not text.strip() and not add_feats:
             raise HTTPException(400, "no features to decompose")
-    else:                                     # the benchmark document's own claims
+    elif body.source == "whole":
+        # WHOLE-DOCUMENT features: decompose the BENCHMARK DOCUMENT's own claims into elements
+        # and tag them W — a bonus pool that boosts (never gates) a candidate's ranking.
+        if not bm:
+            raise HTTPException(400, "set a benchmark first")
+        text = (bm.get("claims") or bm.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, "the benchmark document has no claims/text to decompose")
+        text_kind = "W"
+    else:                                     # the benchmark document's own claims → mandatory
         if not bm:
             raise HTTPException(400, "set a benchmark first")
         text = (bm.get("claims") or bm.get("text") or "").strip()
@@ -436,7 +458,11 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
         res = claude_bridge.decompose_claim(text, model=model)
         if "error" in res:
             raise HTTPException(400, f"decomposition failed: {res['error']}")
-        elements += res["elements"]
+        # W elements carry a generous default stretch (bonus reading), like additional ones.
+        new_els = res["elements"]
+        if text_kind == "W":
+            new_els = [{**e, "kind": "W", "sl": int(e.get("sl", 5) or 5)} for e in new_els]
+        elements += new_els
         if res.get("model"):
             models.append(res["model"])
     # one call per A feature, in parallel — each element inherits THAT feature's stretch level
@@ -467,8 +493,9 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
         raise HTTPException(400, "decomposition produced no elements")
     return {"ok": True, "elements": elements, "model": models[0] if models else None,
             "source": body.source, "source_chars": len(text),
-            "mandatory": len([e for e in elements if (e.get("kind") or "M") != "A"]),
-            "additional": len([e for e in elements if (e.get("kind") or "M") == "A"])}
+            "mandatory": len([e for e in elements if _kind(e) == "M"]),
+            "additional": len([e for e in elements if _kind(e) == "A"]),
+            "whole": len([e for e in elements if _kind(e) == "W"])}
 
 
 @app.post("/api/tabs/{tab_id}/benchmark/upload")
@@ -3168,25 +3195,103 @@ COMBI_SCREEN_BATCH = int(os.environ.get("PB_COMBI_SCREEN_BATCH", "40"))
 # times every element, with evidence. At 25 it timed out (300s) and lost the whole batch, so
 # it gets its own smaller size — and a failed batch is split and retried rather than dropped.
 COMBI_SCAN_BATCH = int(os.environ.get("PB_COMBI_SCAN_BATCH", "8"))
-# A-feature bonus, mirroring the ➕ additional read's scale (app.js ADD_UNIT/ADD_CAP): a
-# present additional element RAISES a pair's rating, its absence never lowers it.
+# Bonus scale, mirroring the ➕ additional read (app.js ADD_UNIT/ADD_CAP): a present
+# bonus element RAISES the score, its absence never lowers it. ADDITIONAL (A) and
+# WHOLE-DOCUMENT (W) each get their OWN capped pool, so neither can leap a document over
+# one that covers more MANDATORY elements — Must always dominates.
 ADD_UNIT, ADD_CAP = 0.3, 1.0
 # screen → digest → full. A pair is only as trustworthy as its weaker document.
 _DEPTH_RANK = {"screen": 0, "digest": 1, "full": 2}
 
 
-def _combi_elements(bm: dict | None) -> list[dict]:
-    """Every feature the coverage pass judges — MANDATORY *and* ADDITIONAL.
+# Feature kinds: M = mandatory/core (the ONLY thing that decides coverage and the ranking
+# tier), A = additional (user-curated bonus), W = whole-document (elements of the benchmark
+# document itself — bonus). Everywhere that used to read "not A" as mandatory must read
+# "== M" now, or a W element would silently be treated as mandatory.
+def _kind(f: dict) -> str:
+    k = (f.get("kind") or "M").upper()
+    return k if k in ("M", "A", "W") else "M"
 
-    The additional ones ride along on purpose: a combination that also brings the bonus
-    element is a better combination, and it costs nothing to ask for it in the same pass.
-    They are kept apart when RATING (see _combi_pairs): only mandatory elements decide
-    whether a pair covers the invention."""
+
+def _combi_elements(bm: dict | None) -> list[dict]:
+    """Every feature the coverage pass judges — MANDATORY *and* the bonus kinds (A, W).
+
+    The bonus ones ride along on purpose: a document/pair that also brings a bonus element
+    is better, and it costs nothing to ask for it in the same pass. They are kept apart when
+    RATING (see _combi_pairs / _unified_score): only mandatory (M) elements decide whether a
+    document or pair covers the invention."""
     return list((bm or {}).get("features") or [])
 
 
 def _combi_mandatory(bm: dict | None) -> list[dict]:
-    return [f for f in ((bm or {}).get("features") or []) if (f.get("kind") or "M") != "A"]
+    return [f for f in ((bm or {}).get("features") or []) if _kind(f) == "M"]
+
+
+def _element_status_map(doc: dict) -> dict:
+    """Merged per-element coverage from BOTH stores a document may already carry, preferring
+    the combi verdict (deeper, depth-tagged) over the best-match deep-read's per-feature
+    check. This is what lets the unified ranking REUSE whatever tokens a document already
+    spent — combi coverage AND/OR feature_scores — and re-rank with no new model call."""
+    m: dict = {}
+    for e in (doc.get("feature_scores") or []):        # deep-read per-feature YES/PARTIAL/NO
+        if isinstance(e, dict) and e.get("name"):
+            m[e["name"]] = e.get("status") or "no"
+    for n, r in _cov_records(doc).items():             # combi coverage wins where present
+        m[n] = r.get("status", "no")
+    return m
+
+
+def _bonus_pool(elements: list[dict], cov: dict) -> dict:
+    """Weighted bonus for one kind's elements: present=full unit, partial=half, absent=0,
+    capped. Same scale as the ➕ additional read so the number means the same everywhere."""
+    b, full, part = 0.0, 0, 0
+    for e in elements:
+        s = cov.get(e["name"], "no")
+        unit = (int(e.get("weight", 1)) / 5) * ADD_UNIT
+        if s == "yes":
+            b += unit
+            full += 1
+        elif s == "partial":
+            b += unit * 0.5
+            part += 1
+    return {"bonus": round(min(ADD_CAP, b), 2), "full": full, "partial": part,
+            "total": len(elements)}
+
+
+def _unified_score(elements: list[dict], doc: dict) -> dict:
+    """THE single ranking used by the matrix, the list and the chat. Must (M) coverage is the
+    dominant, tier-deciding term; Additional (A) and Whole-document (W) are separate capped
+    bonus pools that only differentiate WITHIN a Must tier. Computed from stored coverage —
+    no model call, so it re-ranks every already-assessed document for free.
+
+    `key` is a single sortable number encoding the lexicographic order
+    (covers-all-Must, weighted-Must-rating, A-bonus, W-bonus) so callers can sort by it
+    directly; the component fields are returned for display."""
+    mand = [e for e in elements if _kind(e) == "M"]
+    add = [e for e in elements if _kind(e) == "A"]
+    whole = [e for e in elements if _kind(e) == "W"]
+    cov = _element_status_map(doc)
+    total_w = sum(int(e.get("weight", 1)) for e in mand) or 1
+    cells = [cov.get(e["name"], "no") for e in mand]
+    mand_full = sum(1 for s in cells if s == "yes")
+    mand_part = sum(1 for s in cells if s == "partial")
+    covers_all = bool(mand) and not any(s == "no" for s in cells)
+    covered_w = sum(int(e.get("weight", 1)) * (1.0 if s == "yes" else 0.5)
+                    for e, s in zip(mand, cells) if s in ("yes", "partial"))
+    mand_rating = round(10.0 * covered_w / total_w, 2) if mand else 0.0
+    a = _bonus_pool(add, cov)
+    w = _bonus_pool(whole, cov)
+    assessed = any(s != "no" for s in cells) or a["full"] or a["partial"] or w["full"] or w["partial"]
+    # Composite key: covers_all (×1e9) ≫ mand_rating (×1e6, ≤1e7) ≫ A-bonus (×1e3, ≤1e3)
+    # ≫ W-bonus (×1, ≤1). Each tier strictly dominates the next, so Must always wins.
+    key = ((1e9 if covers_all else 0.0) + mand_rating * 1e6
+           + a["bonus"] * 1e3 + w["bonus"]) if assessed else -1.0
+    return {"covers_all": covers_all, "mand_full": mand_full, "mand_partial": mand_part,
+            "mand_total": len(mand), "mand_rating": mand_rating,
+            "add_bonus": a["bonus"], "add_full": a["full"], "add_partial": a["partial"],
+            "add_total": a["total"], "w_bonus": w["bonus"], "w_full": w["full"],
+            "w_partial": w["partial"], "w_total": w["total"],
+            "assessed": bool(assessed), "key": round(key, 3)}
 
 
 def _cov_records(doc: dict) -> dict:
@@ -3244,7 +3349,7 @@ def _rigorous(doc: dict, elements: list[dict]) -> bool:
     the pairs or the solo list. Additional elements may still be screen-level: they are a
     bonus and never decide a finding."""
     have = _cov_records(doc)
-    mand = [e for e in elements if (e.get("kind") or "M") != "A"]
+    mand = [e for e in elements if _kind(e) == "M"]
     if not mand:
         return False
     return all(_DEPTH_RANK.get((have.get(e["name"]) or {}).get("depth") or "", -1)
@@ -3265,8 +3370,9 @@ def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list
     identity — so requiring every element at YES hid genuine single-reference anticipations
     (e.g. one strong on 9 limbs, pack-level on 2). Only a "no" means the document truly lacks
     the element. Literal coverers (more YES) rank first; the ✓/~ split stays visible."""
-    mand = [e for e in elements if (e.get("kind") or "M") != "A"]
-    add = [e for e in elements if (e.get("kind") or "M") == "A"]
+    mand = [e for e in elements if _kind(e) == "M"]
+    add = [e for e in elements if _kind(e) == "A"]
+    whole = [e for e in elements if _kind(e) == "W"]
     if not mand:
         return []
     out = []
@@ -3278,25 +3384,20 @@ def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list
         mand_full = sum(1 for s in statuses if s == "yes")
         mand_part = sum(1 for s in statuses if s == "partial")
         partial_names = [e["name"] for e, s in zip(mand, statuses) if s == "partial"]
-        bonus, add_full, add_part = 0.0, 0, 0
-        for e in add:
-            s = cov.get(e["name"], "no")
-            unit = (int(e.get("weight", 1)) / 5) * ADD_UNIT
-            if s == "yes":
-                bonus += unit
-                add_full += 1
-            elif s == "partial":
-                bonus += unit * 0.5
-                add_part += 1
+        a = _bonus_pool(add, cov)
+        w = _bonus_pool(whole, cov)
         out.append({"id": d["id"], "number": d.get("number"),
                     "mand_total": len(mand), "mand_full": mand_full,
                     "mand_partial": mand_part, "partial_names": partial_names[:12],
-                    "add_cov": add_full + add_part, "add_full": add_full,
-                    "add_partial": add_part, "add_total": len(add),
-                    "add_bonus": round(min(ADD_CAP, bonus), 2),
+                    "add_cov": a["full"] + a["partial"], "add_full": a["full"],
+                    "add_partial": a["partial"], "add_total": a["total"],
+                    "add_bonus": a["bonus"],
+                    "w_bonus": w["bonus"], "w_full": w["full"], "w_partial": w["partial"],
+                    "w_total": w["total"],
                     "depth": d.get("combi_depth") or "screen"})
-    # literal coverers first (most mandatory YES), then additional bonus, then more partial
-    out.sort(key=lambda s: (-s["mand_full"], -s["add_bonus"], -s["add_cov"], s["number"] or ""))
+    # literal coverers first (most mandatory YES), then A bonus, then W bonus, then partials
+    out.sort(key=lambda s: (-s["mand_full"], -s["add_bonus"], -s["w_bonus"],
+                            -s["add_cov"], s["number"] or ""))
     return out[:limit]
 
 
@@ -3312,8 +3413,9 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
     A pair only counts as a combination when BOTH documents uniquely contribute a
     mandatory element the other lacks — otherwise one document simply subsumes the other
     and there is nothing to combine."""
-    mand = [e for e in elements if (e.get("kind") or "M") != "A"]
-    add = [e for e in elements if (e.get("kind") or "M") == "A"]
+    mand = [e for e in elements if _kind(e) == "M"]
+    add = [e for e in elements if _kind(e) == "A"]
+    whole = [e for e in elements if _kind(e) == "W"]
     total_w = sum(int(e.get("weight", 1)) for e in mand) or 1
     cov = {d["id"]: _cov_map(d) for d in docs}
     out = []
@@ -3335,17 +3437,17 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
             def has(s):
                 return s in ("yes", "partial")
 
-            w = 0.0
+            mw = 0.0
             mand_full = mand_part = 0
             complete = True
             only_a, only_b = [], []
             for e in mand:
                 u, sa, sb = best(e["name"])
                 if u == "yes":
-                    w += int(e.get("weight", 1))
+                    mw += int(e.get("weight", 1))
                     mand_full += 1
                 elif u == "partial":
-                    w += int(e.get("weight", 1)) * 0.5
+                    mw += int(e.get("weight", 1)) * 0.5
                     mand_part += 1
                 else:
                     complete = False          # a real gap in BOTH → not covered
@@ -3355,18 +3457,12 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
                     only_b.append(e["name"])
             if not only_a or not only_b:
                 continue                      # not a combination: one subsumes the other
-            # ADDITIONAL: bonus only — never part of `complete`, never a penalty.
-            bonus, add_full, add_part = 0.0, 0, 0
-            for e in add:
-                u, _, _ = best(e["name"])
-                unit = (int(e.get("weight", 1)) / 5) * ADD_UNIT
-                if u == "yes":
-                    bonus += unit
-                    add_full += 1
-                elif u == "partial":
-                    bonus += unit * 0.5
-                    add_part += 1
-            bonus = min(ADD_CAP, bonus)
+            # BONUS kinds (A, W): the UNION's best status per element, bonus only — never part
+            # of `complete`, never a penalty. Each kind is its own capped pool.
+            union_cov = {e["name"]: best(e["name"])[0] for e in (add + whole)}
+            a = _bonus_pool(add, union_cov)
+            w = _bonus_pool(whole, union_cov)
+            bonus, add_full, add_part = a["bonus"], a["full"], a["partial"]
             depth = min((A.get("combi_depth") or "screen", B.get("combi_depth") or "screen"),
                         key=lambda d: _DEPTH_RANK.get(d, 0))
             out.append({
@@ -3378,17 +3474,19 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
                 # adding it there would saturate and hide the very thing it measures. It
                 # ranks instead (below), and is reported separately — an honest metric plus
                 # a visible bonus beats one number that quietly means two things.
-                "rating": round(10.0 * w / total_w, 1),
+                "rating": round(10.0 * mw / total_w, 1),
                 "mand_full": mand_full, "mand_partial": mand_part, "mand_total": len(mand),
                 "add_bonus": round(bonus, 2), "add_cov": add_full + add_part,
                 "add_full": add_full, "add_partial": add_part, "add_total": len(add),
-                "covered_w": round(w, 1), "total_w": total_w,
+                "w_bonus": w["bonus"], "w_full": w["full"], "w_partial": w["partial"],
+                "w_total": w["total"],
+                "covered_w": round(mw, 1), "total_w": total_w,
                 "a_only": only_a[:12], "b_only": only_b[:12],
                 "depth": depth,
             })
-    # Additional coverage breaks ties: between two pairs that cover the invention equally,
-    # the one that ALSO brings the bonus element is the better combination.
-    out.sort(key=lambda p: (-p["complete"], -p["rating"], -p["add_bonus"],
+    # Bonus coverage breaks ties: between two pairs that cover the invention equally, the one
+    # that ALSO brings the A/W bonus elements is the better combination.
+    out.sort(key=lambda p: (-p["complete"], -p["rating"], -p["add_bonus"], -p["w_bonus"],
                             -len(p["a_only"]) - len(p["b_only"])))
     return out[:limit]
 
@@ -3408,44 +3506,28 @@ def _combi_matrix(elements: list[dict], docs: list[dict]) -> dict:
 
     Additional elements are deliberately NOT columns — they fold into the bonus score only
     (the chosen matrix design). Pure derivation from stored coverage; no model call."""
-    mand = [e for e in elements if (e.get("kind") or "M") != "A"]
-    add = [e for e in elements if (e.get("kind") or "M") == "A"]
+    mand = [e for e in elements if _kind(e) == "M"]
     columns = [{"name": e["name"], "weight": int(e.get("weight", 1))} for e in mand]
-    total_w = sum(int(e.get("weight", 1)) for e in mand) or 1
     rows = []
     for d in docs:
         cov = _cov_map(d)
         cells = [cov.get(e["name"], "no") for e in mand]
-        mand_full = sum(1 for s in cells if s == "yes")
-        mand_part = sum(1 for s in cells if s == "partial")
-        covers_all = not any(s == "no" for s in cells)
-        covered_w = sum(int(e.get("weight", 1)) * (1.0 if s == "yes" else 0.5)
-                        for e, s in zip(mand, cells) if s in ("yes", "partial"))
-        bonus, add_full, add_part = 0.0, 0, 0
-        for e in add:
-            s = cov.get(e["name"], "no")
-            unit = (int(e.get("weight", 1)) / 5) * ADD_UNIT
-            if s == "yes":
-                bonus += unit
-                add_full += 1
-            elif s == "partial":
-                bonus += unit * 0.5
-                add_part += 1
+        u = _unified_score(elements, d)              # the SAME score the list/chat use
         rows.append({
-            "id": d["id"], "number": d.get("number"),
-            "cells": cells,
-            "mand_full": mand_full, "mand_partial": mand_part, "mand_total": len(mand),
-            "covers_all": covers_all,
-            "mand_rating": round(10.0 * covered_w / total_w, 1),
-            "add_bonus": round(min(ADD_CAP, bonus), 2),
-            "add_full": add_full, "add_partial": add_part, "add_total": len(add),
-            "score": d.get("score"),
+            "id": d["id"], "number": d.get("number"), "cells": cells,
+            "mand_full": u["mand_full"], "mand_partial": u["mand_partial"],
+            "mand_total": u["mand_total"], "covers_all": u["covers_all"],
+            "mand_rating": u["mand_rating"],
+            "add_bonus": u["add_bonus"], "add_full": u["add_full"],
+            "add_partial": u["add_partial"], "add_total": u["add_total"],
+            "w_bonus": u["w_bonus"], "w_full": u["w_full"], "w_partial": u["w_partial"],
+            "w_total": u["w_total"],
+            "score": d.get("score"), "key": u["key"],
             "depth": d.get("combi_depth") or "screen",
         })
-    # Full coverers first, then by weighted mandatory coverage, then the bonus, then number —
-    # the same priority as _combi_solo so the matrix's top rows match the strongest findings.
-    rows.sort(key=lambda r: (-r["covers_all"], -r["mand_rating"], -r["add_bonus"],
-                             r["number"] or ""))
+    # Sort by the unified key — full coverers, then weighted Must, then A bonus, then W bonus —
+    # so the matrix's top rows are exactly the list's top rows.
+    rows.sort(key=lambda r: (-r["key"], r["number"] or ""))
     return {"columns": columns, "rows": rows}
 
 

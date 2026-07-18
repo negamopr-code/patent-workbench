@@ -234,7 +234,7 @@ class DecomposeRequest(BaseModel):
     # 'additional' splits ONLY the additional features and returns the mandatory ones
     # untouched — re-splitting elements that are already granular would re-cut the claim
     # and throw away wording the user has already reviewed.
-    source: Literal["features", "additional", "benchmark", "text"] = "features"
+    source: Literal["features", "additional", "benchmark", "text", "whole"] = "features"
     text: str | None = Field(default=None, max_length=MAX_QUESTION)
     model: str | None = None
 
