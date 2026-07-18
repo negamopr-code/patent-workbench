@@ -2354,6 +2354,46 @@ def test_combi_scan_returns_the_element_document_matrix(client, monkeypatch):
                     "add_bonus", "score", "depth")) <= set(row)
 
 
+def test_drop_benchmark_excludes_the_benchmark_document():
+    """A candidate that IS the benchmark (any number formatting) is removed — it would match
+    itself 11/11 and always be the top 'coverer', which is meaningless."""
+    from patentbench.web import api
+    docs = [{"number": "US-1234567-B2"}, {"number": "us 1234567 b2"}, {"number": "EP9999999"}]
+    kept = api._drop_benchmark(docs, {"number": "US1234567B2"})
+    assert [d["number"] for d in kept] == ["EP9999999"]
+
+
+def test_combi_matrix_pivots_to_additional_when_must_is_saturated():
+    """When the best document already covers every Must element and additional features exist,
+    the grid switches its columns to the ADDITIONAL features and the partners become documents
+    that bring the additional features the anchor lacks — even ones that don't cover Must (they
+    combine with the anchor, which does)."""
+    from patentbench.web import api
+    import json
+    els = [{"name": "M1", "weight": 5, "kind": "M"}, {"name": "M2", "weight": 5, "kind": "M"},
+           {"name": "A1", "weight": 5, "kind": "A"}, {"name": "A2", "weight": 5, "kind": "A"}]
+
+    def doc(i, num, cov):
+        return {"id": i, "number": num, "status": "fetched",
+                "combi_coverage": json.dumps([{"name": k, "status": v, "depth": "digest"}
+                                              for k, v in cov.items()])}
+    docs = [
+        doc(1, "AAA", {"M1": "yes", "M2": "yes", "A1": "yes", "A2": "no"}),   # all Must, missing A2
+        doc(2, "BBB", {"M1": "yes", "M2": "yes", "A1": "no", "A2": "no"}),    # all Must, no additional
+        doc(3, "CCC", {"M1": "no", "M2": "no", "A1": "no", "A2": "yes"}),     # NO Must, brings A2
+    ]
+    mx = api._combi_matrix(els, docs)
+    assert mx["mode"] == "additional"                       # Must saturated → pivot
+    assert [c["name"] for c in mx["columns"]] == ["A1", "A2"]
+    assert mx["anchor"] == "AAA" and mx["gap_names"] == ["A2"]
+    nums = [r["number"] for r in mx["rows"]]
+    assert nums[0] == "AAA"
+    assert "CCC" in nums                                    # non-Must partner that brings A2
+    assert "BBB" not in nums                                # brings no additional the anchor lacks
+    ccc = next(r for r in mx["rows"] if r["number"] == "CCC")
+    assert ccc["fills"] == ["A2"] and ccc["covers_all"] is False
+
+
 def test_combi_matrix_focuses_on_anchor_plus_gap_fillers(client, monkeypatch):
     """The matrix is a 2-document combination finder: row ① is the best document (anchor);
     the rows below are ONLY documents that fill a Must element the anchor lacks — the closest

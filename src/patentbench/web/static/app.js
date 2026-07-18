@@ -1137,18 +1137,30 @@ function renderCombiScanPanel() {
   const cols = matrix.columns || [], rows = matrix.rows || [];
   const gapNames = matrix.gap_names || [];
   const gapSet = new Set(gapNames);
-  const anchor = rows.find(x => x.is_anchor) || rows[0];
+  const mode = matrix.mode || 'must';               // 'must' = fill Must gaps; 'additional' = many cover Must, differentiate on additional
+  const dim = mode === 'additional' ? 'additional' : 'Must';
   const head = document.createElement('div');
   head.className = 'combi-head';
-  head.innerHTML = matrix.covers_all_anchor
-    ? `<b>🔎 Combination finder</b> <span class="muted">— top document <b>${esc(matrix.anchor || '')}</b> `
-      + `covers EVERY Must element alone, so no second document is needed. Rows below are the `
-      + `next-best documents. (${matrix.total_ranked || rows.length} ranked; showing ${rows.length}.)</span>`
-    : `<b>🔎 Combination finder</b> <span class="muted">— a combination is TWO documents. `
-      + `Row ① is the best document <b>${esc(matrix.anchor || '')}</b>; it is missing `
-      + `<b>${gapNames.length}</b> Must element(s) (highlighted). The rows below are the closest `
-      + `documents that FILL those gaps — pair ① with one of them. `
-      + `✓ discloses · ~ partial · ✗ absent. (${matrix.total_ranked || rows.length} ranked; showing ${rows.length}.)</span>`;
+  const nShown = `(${matrix.total_ranked || rows.length} ranked; showing ${rows.length})`;
+  if (mode === 'additional') {
+    head.innerHTML = matrix.covers_all_anchor
+      ? `<b>🔎 Combination finder — additional features</b> <span class="muted">— <b>${esc(matrix.anchor || '')}</b> `
+        + `covers every Must AND every additional feature. Rows below are the next-best. ${nShown}.</span>`
+      : `<b>🔎 Combination finder — additional features</b> <span class="muted">— many documents cover ALL Must `
+        + `elements, so the columns switch to the <b>additional</b> features. Row ① <b>${esc(matrix.anchor || '')}</b> `
+        + `covers all Must but is missing <b>${gapNames.length}</b> additional feature(s) (highlighted). The rows below `
+        + `bring those — pair ① with one (a partner need NOT cover Must; it combines with ①). `
+        + `✓ discloses · ~ partial · ✗ absent. ${nShown}.</span>`;
+  } else {
+    head.innerHTML = matrix.covers_all_anchor
+      ? `<b>🔎 Combination finder</b> <span class="muted">— top document <b>${esc(matrix.anchor || '')}</b> `
+        + `covers EVERY Must element alone, so no second document is needed. Rows below are the next-best. ${nShown}.</span>`
+      : `<b>🔎 Combination finder</b> <span class="muted">— a combination is TWO documents. `
+        + `Row ① is the best document <b>${esc(matrix.anchor || '')}</b>; it is missing `
+        + `<b>${gapNames.length}</b> Must element(s) (highlighted). The rows below are the closest `
+        + `documents that FILL those gaps — pair ① with one of them. `
+        + `✓ discloses · ~ partial · ✗ absent. ${nShown}.</span>`;
+  }
   panel.appendChild(head);
   const actions = document.createElement('div');
   actions.className = 'combi-actions';
@@ -1176,10 +1188,10 @@ function renderCombiScanPanel() {
   // Header: document | one column per mandatory element (short label, weight, full name on hover) | scores | depth.
   const thead = document.createElement('thead');
   const htr = document.createElement('tr');
-  const shortEl = (n, i) => `E${i + 1}`;
+  const shortEl = (c, i) => (c.kind === 'A' ? 'A' : c.kind === 'W' ? 'W' : 'E') + (i + 1);
   const hasW = rows.some(r => r.w_total);
   htr.innerHTML = `<th class="mx-doc">Document</th>`
-    + cols.map((c, i) => `<th class="mx-el${gapSet.has(c.name) ? ' mx-gapcol' : ''}" title="${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}${gapSet.has(c.name) ? ' — GAP: the top document is missing this; a partner must fill it' : ''}">${shortEl(c.name, i)}${gapSet.has(c.name) ? ' ⚠' : ''}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
+    + cols.map((c, i) => `<th class="mx-el${gapSet.has(c.name) ? ' mx-gapcol' : ''}" title="${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}${gapSet.has(c.name) ? ` — GAP: the anchor is missing this ${dim} element; a partner must fill it` : ''}">${shortEl(c, i)}${gapSet.has(c.name) ? ' ⚠' : ''}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
     + `<th class="mx-score" title="MUST coverage — the dominant ranking criterion: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.">Must</th>`
     + `<th class="mx-score" title="Additional (A) bonus (weight/5 · 0.3, capped): each extra feature present adds points, absence never a penalty. Differentiates within a Must tier — never lifts a weaker-on-Must doc above a stronger one.">➕ A</th>`
     + (hasW ? `<th class="mx-score" title="Whole-document (W) bonus: elements of the benchmark document itself. Same bonus-only role as Additional.">📄 W</th>` : '')
@@ -1219,10 +1231,11 @@ function renderCombiScanPanel() {
   table.appendChild(tbody);
   wrap.appendChild(table);
   panel.appendChild(wrap);
-  // Element legend: the columns are E1…En to stay narrow; spell them out below.
+  // Element legend: the columns are short codes to stay narrow; spell them out below.
   const legend = document.createElement('div');
   legend.className = 'combi-legend muted';
-  legend.innerHTML = '<b>Elements:</b> ' + cols.map((c, i) => `E${i + 1} = ${esc(c.name)}${c.weight > 1 ? ` <span class="mx-w">·${c.weight}</span>` : ''}`).join(' &nbsp;·&nbsp; ');
+  legend.innerHTML = `<b>${mode === 'additional' ? 'Additional features' : 'Must elements'}:</b> `
+    + cols.map((c, i) => `${shortEl(c, i)} = ${esc(c.name)}${c.weight > 1 ? ` <span class="mx-w">·${c.weight}</span>` : ''}`).join(' &nbsp;·&nbsp; ');
   panel.appendChild(legend);
 }
 

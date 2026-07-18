@@ -168,8 +168,12 @@ def tab_state(tab_id: int):
     bm = db.get_benchmark(tab_id)
     elements = _combi_elements(bm)
     if elements:
+        bnorm = _norm_num((bm or {}).get("number"))
         full_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)}
         for d in docs:
+            if bnorm and _norm_num(d.get("number")) == bnorm:
+                d["rank"] = None            # the benchmark itself is not a candidate
+                continue
             src = full_by_id.get(d["id"])
             u = _unified_score(elements, src) if src else None
             d["rank"] = u if (u and u["assessed"]) else None
@@ -3213,6 +3217,21 @@ def _kind(f: dict) -> str:
     return k if k in ("M", "A", "W") else "M"
 
 
+def _norm_num(s: str | None) -> str:
+    """Normalize a publication number for identity comparison (strip spaces/hyphens/kind
+    codes' punctuation, uppercase) so a candidate that IS the benchmark is recognised."""
+    return re.sub(r"[^A-Za-z0-9]", "", s or "").upper()
+
+
+def _drop_benchmark(docs: list[dict], bm: dict | None) -> list[dict]:
+    """Exclude the benchmark document itself from a candidate list — it trivially matches
+    itself 11/11 and would always be the top 'coverer', which is meaningless."""
+    bn = _norm_num((bm or {}).get("number"))
+    if not bn:
+        return docs
+    return [d for d in docs if _norm_num(d.get("number")) != bn]
+
+
 def _combi_elements(bm: dict | None) -> list[dict]:
     """Every feature the coverage pass judges — MANDATORY *and* the bonus kinds (A, W).
 
@@ -3520,56 +3539,67 @@ def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> di
       • whole-benchmark match — the 🏆 best-match score already stored on the row (present
         only when the benchmark has been ranked; null otherwise).
 
-    Additional elements are deliberately NOT columns — they fold into the bonus score only
-    (the chosen matrix design). Pure derivation from stored coverage; no model call."""
+    The grid PIVOTS: while the best document still misses a Must element, columns are the Must
+    elements and partners fill Must gaps. Once the best document covers every Must element (and
+    there are additional/whole-doc elements), the Must dimension is solved — showing ten more
+    all-✓ Must rows is noise — so the columns switch to the ADDITIONAL (+ whole-doc) elements
+    and partners become the documents that bring the additional features the anchor lacks, even
+    if they don't cover Must (they combine with the anchor, which already does). Pure derivation
+    from stored coverage; no model call."""
     mand = [e for e in elements if _kind(e) == "M"]
-    columns = [{"name": e["name"], "weight": int(e.get("weight", 1))} for e in mand]
+    bonus = [e for e in elements if _kind(e) in ("A", "W")]     # additional + whole-doc
     rows = []
     for d in docs:
-        eff = _effective_coverage(d)                  # full read preferred over digest
-        cells = [eff.get(e["name"], {}).get("status", "no") for e in mand]
-        # Row depth = the WEAKEST fidelity among the Must cells (a row is only as read as its
-        # least-read element), so a document full-read against the elements shows 📖 full.
-        m_fids = [eff.get(e["name"], {}).get("fid", 0) for e in mand]
-        row_depth = _FID_LABEL.get(min(m_fids), "screen") if m_fids else "screen"
         u = _unified_score(elements, d)              # the SAME score the list/chat use
+        if not u["assessed"]:
+            continue                                  # never scanned/read → not a matrix row
+        eff = _effective_coverage(d)                  # full read preferred over digest
+        m_fids = [eff.get(e["name"], {}).get("fid", 0) for e in mand]
         rows.append({
-            "id": d["id"], "number": d.get("number"), "cells": cells,
+            "id": d["id"], "number": d.get("number"), "_eff": eff,
             "mand_full": u["mand_full"], "mand_partial": u["mand_partial"],
             "mand_total": u["mand_total"], "covers_all": u["covers_all"],
             "mand_rating": u["mand_rating"],
             "add_bonus": u["add_bonus"], "add_full": u["add_full"],
             "add_partial": u["add_partial"], "add_total": u["add_total"],
             "w_bonus": u["w_bonus"], "w_full": u["w_full"], "w_partial": u["w_partial"],
-            "w_total": u["w_total"],
-            "score": d.get("score"), "key": u["key"],
-            "depth": row_depth,
+            "w_total": u["w_total"], "score": d.get("score"), "key": u["key"],
+            # Row depth = the weakest fidelity among the MUST cells (the primary read depth),
+            # so a document full-read against the elements shows 📖 full regardless of the grid.
+            "depth": _FID_LABEL.get(min(m_fids), "screen") if m_fids else "screen",
         })
-    # Sort by the unified key — full coverers, then weighted Must, then A bonus, then W bonus —
-    # so the matrix's top rows are exactly the list's top rows.
     rows.sort(key=lambda r: (-r["key"], r["number"] or ""))
-    focus = _focus_combination(mand, rows, limit)
+    # PIVOT decision: Must solved by the best doc AND bonus elements exist → differentiate on
+    # the additional dimension instead of repeating all-✓ Must rows.
+    pivot = bool(rows) and rows[0]["covers_all"] and bool(bonus)
+    active = bonus if pivot else mand
+    mode = "additional" if pivot else "must"
+    columns = [{"name": e["name"], "weight": int(e.get("weight", 1)), "kind": _kind(e)}
+               for e in active]
+    for r in rows:
+        eff = r.pop("_eff")
+        r["cells"] = [eff.get(e["name"], {}).get("status", "no") for e in active]
+    focus = _focus_combination(active, rows, limit)
     return {"columns": columns, "rows": focus["rows"], "gap_names": focus["gap_names"],
             "anchor": focus["anchor"], "covers_all_anchor": focus["covers_all_anchor"],
-            "total_ranked": len(rows)}
+            "mode": mode, "total_ranked": len(rows)}
 
 
-def _focus_combination(mand: list[dict], rows: list[dict], limit: int = 10) -> dict:
-    """Trim the matrix to the ANCHOR (best document) + up to limit-1 PARTNERS that fill its
-    missing Must elements. A combination is only ever TWO documents, so the useful partners
-    are exactly those bringing a Must element the anchor lacks — not every document, and not
-    every additional feature, just the closest gap-fillers. Each partner is tagged `fills`
-    (which of the anchor's gaps it covers) and `fill_w` (weighted), best filler first. If the
-    anchor already covers every Must element there is nothing to combine — fall back to the
-    next-best documents so the table still shows the leaders."""
+def _focus_combination(cols: list[dict], rows: list[dict], limit: int = 10) -> dict:
+    """Trim to the ANCHOR (best document) + up to limit-1 PARTNERS that fill a gap the anchor
+    has in the ACTIVE dimension (`cols` = Must elements, or Additional elements once Must is
+    solved). A combination is only ever TWO documents, so the useful partners are exactly those
+    bringing an element the anchor lacks — the closest gap-fillers, best first. `covers_all_anchor`
+    means the anchor covers every ACTIVE element (nothing left to fill); then the next-best rows
+    are shown so the table still lists the leaders."""
     if not rows:
         return {"rows": [], "gap_names": [], "anchor": None, "covers_all_anchor": False}
-    names = [e["name"] for e in mand]
-    w_by_i = {i: int(mand[i].get("weight", 1)) for i in range(len(mand))}
+    names = [e["name"] for e in cols]
+    w_by_i = {i: int(cols[i].get("weight", 1)) for i in range(len(cols))}
     top = rows[0]
     gap_idx = [i for i, s in enumerate(top["cells"]) if s == "no"]
     anchor = {**top, "is_anchor": True, "fills": []}
-    if not gap_idx:                                   # covers all Must alone → nothing to fill
+    if not gap_idx:                                   # anchor covers every active element
         rest = [{**r, "is_anchor": False, "fills": []} for r in rows[1:limit]]
         return {"rows": [anchor] + rest, "gap_names": [], "anchor": anchor["number"],
                 "covers_all_anchor": True}
@@ -3597,7 +3627,7 @@ def combi_results_ep(tab_id: int, top_pairs: int = 20):
     _tab_or_404(tab_id)
     bm = db.get_benchmark(tab_id)
     elements = _combi_elements(bm)
-    fresh = [d for d in db.list_documents(tab_id, full=True) if _rigorous(d, elements)]
+    fresh = _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if _rigorous(d, elements)], bm)
     if not fresh:
         return {"ok": True, "has_results": False, "pairs": [], "solo": [],
                 "matrix": {"columns": [], "rows": []}, "elements": len(elements)}
@@ -3606,7 +3636,7 @@ def combi_results_ep(tab_id: int, top_pairs: int = 20):
     depth = "full" if fresh and all(d.get("combi_depth") == "full" for d in fresh) else "digest"
     return {"ok": True, "has_results": True, "assessed": len(fresh),
             "elements": len(elements), "complete": len([p for p in pairs if p["complete"]]),
-            "pairs": pairs, "solo": solo, "matrix": _combi_matrix(elements, fresh), "depth": depth}
+            "pairs": pairs, "solo": solo, "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": depth}
 
 
 @app.post("/api/tabs/{tab_id}/combi-screen")
@@ -3623,8 +3653,8 @@ def combi_screen_ep(tab_id: int, body: schemas.CombiScreenRequest):
     elements = _combi_elements(bm)
     if not elements:
         raise HTTPException(400, "the benchmark has no features to screen against")
-    docs = [d for d in db.list_documents(tab_id, full=True)
-            if d["status"] == "fetched" and (d.get("digest") or "").strip()]
+    docs = _drop_benchmark([d for d in db.list_documents(tab_id, full=True)
+            if d["status"] == "fetched" and (d.get("digest") or "").strip()], bm)
     if not docs:
         raise HTTPException(400, "no candidates with a stored digest — 🔁 backfill first")
     model = _read_model(body.model) or claude_bridge.SCREEN_MODEL
@@ -3722,8 +3752,8 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
         raise HTTPException(400, "combination analysis needs at least TWO mandatory elements — "
                                  "one monolithic feature cannot be split between two documents. "
                                  "Use 🔬 Decompose to split the claim into its elements first.")
-    docs = [d for d in db.list_documents(tab_id, full=True)
-            if d["status"] == "fetched" and (d.get("digest") or "").strip()]
+    docs = _drop_benchmark([d for d in db.list_documents(tab_id, full=True)
+            if d["status"] == "fetched" and (d.get("digest") or "").strip()], bm)
     if body.doc_ids:                       # the 🩺 screen's shortlist — the usual path
         keep = set(body.doc_ids)
         docs = [d for d in docs if d["id"] in keep]
@@ -3780,7 +3810,7 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
     # Findings come ONLY from rigorously-assessed documents. Counting every row that has any
     # coverage conflated the 🩺 screen's guesses with real verdicts — and made `missed` go
     # negative (50 shortlisted minus 284 "scanned").
-    fresh = [d for d in db.list_documents(tab_id, full=True) if _rigorous(d, elements)]
+    fresh = _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if _rigorous(d, elements)], bm)
     scanned = reused + len(done_ids)
     if not scanned:
         raise HTTPException(400, f"combi scan failed: {errors[0] if errors else 'no verdicts parsed'}")
@@ -3806,7 +3836,7 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
     return {"ok": True, "scanned": scanned, "requested": len(docs), "batches": len(batches),
             "failed_batches": len(errors), "elements": len(elements),
             "complete": len(complete), "pairs": pairs, "solo": solo,
-            "matrix": _combi_matrix(elements, fresh), "depth": "digest"}
+            "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": "digest"}
 
 
 @app.post("/api/tabs/{tab_id}/combi-verify")
@@ -3851,7 +3881,7 @@ def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest):
 
     with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
         list(ex.map(one, chosen))
-    fresh = [d for d in db.list_documents(tab_id, full=True) if d.get("combi_coverage")]
+    fresh = _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d.get("combi_coverage")], bm)
     verified = [d for d in fresh if d.get("combi_depth") == "full"]
     pairs = _combi_pairs(elements, fresh, body.top_pairs)
     solo = _combi_solo(elements, fresh)
@@ -3866,7 +3896,7 @@ def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest):
         + note)
     return {"ok": True, "verified": len(chosen) - len(errors), "failed": len(errors),
             "elements": len(elements), "complete": len(complete), "pairs": pairs,
-            "solo": solo, "matrix": _combi_matrix(elements, fresh), "depth": "full"}
+            "solo": solo, "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": "full"}
 
 
 @app.post("/api/tabs/{tab_id}/combi/motivation")
@@ -4292,12 +4322,42 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
         # was EVER full-read (this run or any earlier one) participates in the ranking,
         # so already-read documents are reused, never re-read. Reading above only
         # filled the gaps; the ranking is always whole-corpus.
-        corpus = [d for d in db.list_documents(tab_id, full=True)
-                  if d["status"] == "fetched" and _has_assessment(d)]
-        corpus.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)
+        corpus = _drop_benchmark([d for d in db.list_documents(tab_id, full=True)
+                  if d["status"] == "fetched" and _has_assessment(d)], bm)
+        # Order + annotate by the SAME unified Must-first key the list/matrix use, so the chat
+        # ranking cannot contradict the coverage grid. Each card carries its Must coverage,
+        # and the reduce is told Must dominates (rank_rule below).
+        els = _combi_elements(bm) if bm_features else []
+
+        def _rank_key(d):
+            return _unified_score(els, d)["key"] if els else _promise(d)
+
+        def _cov_line(d):
+            if not els:
+                return None
+            u = _unified_score(els, d)
+            if not u["assessed"]:
+                return None
+            return (f"MUST {u['mand_full']}✓" + (f"+{u['mand_partial']}~" if u["mand_partial"] else "")
+                    + f"/{u['mand_total']} (weighted {u['mand_rating']}/10, covers-all="
+                    + ("YES" if u["covers_all"] else "no") + ")"
+                    + (f"; +A{u['add_bonus']}" if u["add_total"] else "")
+                    + (f"; +W{u['w_bonus']}" if u["w_total"] else ""))
+
+        corpus.sort(key=lambda d: (_rank_key(d), d["id"]), reverse=True)
         reduce_verdicts = [{"number": d["number"], "title": d.get("title"),
-                            "verdict": _stored_assessment(d)} for d in corpus
-                           if _stored_assessment(d)]
+                            "coverage": _cov_line(d), "verdict": _stored_assessment(d)}
+                           for d in corpus if _stored_assessment(d)]
+        rank_rule = (
+            "RANKING RULE — rank by MUST/CORE coverage FIRST. A document (or two-document "
+            "combination) that discloses EVERY mandatory element outranks one that misses any, "
+            "whatever their additional/whole-document features. Additional (A) and whole-"
+            "document (W) features are BONUS only: they separate documents that are EQUAL on the "
+            "mandatory elements; their absence never lowers a rank. Each card shows its MUST "
+            "coverage — rank consistently with it, and state each finalist's mandatory coverage "
+            "explicitly (e.g. '11 of 11' vs '10 of 11, one partial'). This MUST agree with the "
+            "app's coverage matrix; if your reading of an element differs, say so and cite the "
+            "paragraph that supports it." if els else None)
         reused = max(0, len(corpus) - read)
         if not reduce_verdicts:
             db.append_message(tab_id, "s",
@@ -4324,7 +4384,7 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                 skill_blocks.append({"name": name, "content": content})
                 participants.append({"kind": "skill", "title": name})
         res = claude_bridge.deep_reduce(question, bm, reduce_verdicts, skills=skill_blocks,
-                                        model=model, history=history)
+                                        model=model, history=history, rank_rule=rank_rule)
         if "error" in res:
             db.append_message(tab_id, "s", f"Claude error compiling the ranking: {res['error']}")
         else:

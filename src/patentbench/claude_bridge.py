@@ -1338,9 +1338,13 @@ def parse_verdict(text: str) -> dict:
 
 def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
                 skills: list[dict] | None = None, model: str | None = None,
-                history: list[dict] | None = None) -> dict:
+                history: list[dict] | None = None, rank_rule: str | None = None) -> dict:
     """Reduce phase: the chat model compiles per-candidate FULL-TEXT verdicts into
-    a final ranking/answer. Same return contract as chat()."""
+    a final ranking/answer. Same return contract as chat().
+
+    `rank_rule` (feature-combination benchmarks) states the Must-dominant ordering and each
+    card carries its MUST coverage, so the chat ranking agrees with the app's coverage matrix
+    instead of drifting to its own holistic order."""
     # Bound the ROSTER, not just each card. The old code shrank the per-verdict slice but
     # FLOORED it at 1500 — so a large roster (e.g. 298 candidates × 1500 = 447k) plus the
     # skills, benchmark and chat history blew the model's context: "Prompt is too long".
@@ -1351,13 +1355,14 @@ def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
         per_cap = max(1500, min(8000, REDUCE_PROMPT_BUDGET // len(verdicts)))
     full, compact, used = [], [], 0
     for v in verdicts:
-        card = f"[{v['number']} — {v.get('title') or ''}]\n{v['verdict'][:per_cap]}"
+        cov = f"  ⟨{v['coverage']}⟩" if v.get("coverage") else ""
+        card = f"[{v['number']} — {v.get('title') or ''}]{cov}\n{v['verdict'][:per_cap]}"
         if used + len(card) <= REDUCE_PROMPT_BUDGET:
             full.append(card)
             used += len(card) + 2
         else:                              # tail: one line so it still ranks, cheaply
             first = (v["verdict"].split("\n", 1)[0] or "")[:200]
-            compact.append(f"[{v['number']} — {(v.get('title') or '')[:60]}] {first}")
+            compact.append(f"[{v['number']} — {(v.get('title') or '')[:60]}]{cov} {first}")
     blocks = "\n\n".join(full)
     if compact:
         shown = compact[:REDUCE_COMPACT_MAX]
@@ -1388,6 +1393,8 @@ def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
         lines = [f"{_ROLE.get(h.get('role', ''), 'User')}: "
                  f"{(h.get('text') or '')[:MAX_TURN_CHARS]}" for h in history[-MAX_HISTORY:]]
         parts.append("CONVERSATION HISTORY:\n" + "\n\n".join(lines))
+    if rank_rule:
+        parts.append(rank_rule)
     parts.append(_style_instruction(True))
     parts.append("TASK:\n" + question)
     res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL,
