@@ -1089,16 +1089,18 @@ async function runCombiVerify({ ids: explicitIds = null } = {}) {
     ids = [...new Set(explicitIds)];
     blurb = `the ${ids.length} document(s) of this pair`;
   } else {
-    // Confirm the strongest coverers first: full coverers, then highest weighted mandatory
-    // coverage. These are the rows whose combinations you'd actually build, so they are the
-    // ones worth grounding on full text. Rows already at full depth need no re-read.
-    const rows = ((combiScan.matrix && combiScan.matrix.rows) || [])
-      .filter(x => x.depth !== 'full')
-      .sort((a, b) => (b.covers_all - a.covers_all) || (b.mand_rating - a.mand_rating) || (b.add_bonus - a.add_bonus));
-    const soloIds = rows.filter(x => x.covers_all).length;
-    ids = rows.slice(0, 24).map(x => x.id);
+    // Two kinds of document are worth a full read: the covers-all finalists (to CONFIRM
+    // them citably) AND the high-coverage NEAR-MISSES (a digest 'no' on 1–2 Must elements
+    // that a real read may FLIP to covers-all — exactly the docs the chat calls a best fit
+    // while the digest scan holds them down). Take the top of each so near-misses aren't
+    // starved when there are many full coverers. Rows already at full depth need no re-read.
+    const rows = ((combiScan.matrix && combiScan.matrix.rows) || []).filter(x => x.depth !== 'full');
+    const coverers = rows.filter(x => x.covers_all).sort((a, b) => b.mand_rating - a.mand_rating);
+    const nearMiss = rows.filter(x => !x.covers_all).sort((a, b) => b.mand_rating - a.mand_rating);
+    ids = [...new Set([...coverers.slice(0, 16), ...nearMiss.slice(0, 8)].map(x => x.id))];
     blurb = `${ids.length} finalist document(s)`
-      + (soloIds ? ` (${soloIds} that cover every mandatory element ALONE — the strongest claim, so the most worth confirming)` : '');
+      + (coverers.length ? ` (${Math.min(16, coverers.length)} that cover every Must element` : '')
+      + (nearMiss.length ? `${coverers.length ? ' + ' : ' ('}${Math.min(8, nearMiss.length)} near-misses that a full read may flip)` : (coverers.length ? ')' : ''));
   }
   if (!ids.length) { appendMsg({ role: 's', text: 'No documents to verify.' }); return; }
   if (!confirm(`🔎 STAGE 2 — confirm against FULL text\n\n`
