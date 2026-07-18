@@ -259,6 +259,9 @@ textarea, select, input[type="text"] {
 .combi-matrix .mx-fillcell { background: color-mix(in srgb, var(--ok) 30%, transparent); outline: 1px solid var(--ok); }
 .combi-matrix .mx-rank { color: var(--accent); border-color: var(--accent); margin-left: 5px; }
 .combi-matrix .mx-fills { color: var(--ok); border-color: var(--ok); margin-left: 4px; }
+/* Group-coded column headers: ME (must) neutral, AE (additional) / WE (whole-doc) tinted. */
+.combi-matrix th.mx-el-A { color: var(--accent2); }
+.combi-matrix th.mx-el-W { color: var(--accent); }
 .combi-legend { margin-top: 4px; font-size: 11px; line-height: 1.5; }
 /* 🎯 Must-first list badges: covers-all is the top tier (green), a gap is a combine-candidate (amber). */
 .combined.must-all { color: var(--ok); font-weight: 600; }

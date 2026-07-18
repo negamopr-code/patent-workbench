@@ -1188,10 +1188,15 @@ function renderCombiScanPanel() {
   // Header: document | one column per mandatory element (short label, weight, full name on hover) | scores | depth.
   const thead = document.createElement('thead');
   const htr = document.createElement('tr');
-  const shortEl = (c, i) => (c.kind === 'A' ? 'A' : c.kind === 'W' ? 'W' : 'E') + (i + 1);
+  // Group-explicit column codes: ME# = Must, AE# = Additional, WE# = Whole-document, numbered
+  // within their own group so the group each element belongs to is always unambiguous.
+  const KIND_PREFIX = { M: 'ME', A: 'AE', W: 'WE' };
+  const _ctr = { M: 0, A: 0, W: 0 };
+  const colCodes = cols.map(c => { const k = c.kind || 'M'; return `${KIND_PREFIX[k] || 'ME'}${++_ctr[k]}`; });
+  const shortEl = (c, i) => colCodes[i];
   const hasW = rows.some(r => r.w_total);
   htr.innerHTML = `<th class="mx-doc">Document</th>`
-    + cols.map((c, i) => `<th class="mx-el${gapSet.has(c.name) ? ' mx-gapcol' : ''}" title="${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}${gapSet.has(c.name) ? ` — GAP: the anchor is missing this ${dim} element; a partner must fill it` : ''}">${shortEl(c, i)}${gapSet.has(c.name) ? ' ⚠' : ''}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
+    + cols.map((c, i) => `<th class="mx-el mx-el-${c.kind || 'M'}${gapSet.has(c.name) ? ' mx-gapcol' : ''}" title="${colCodes[i]} — ${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}${gapSet.has(c.name) ? ` — GAP: the anchor is missing this; a partner must fill it` : ''}">${colCodes[i]}${gapSet.has(c.name) ? ' ⚠' : ''}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
     + `<th class="mx-score" title="MUST coverage — the dominant ranking criterion: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.">Must</th>`
     + `<th class="mx-score" title="Additional (A) bonus (weight/5 · 0.3, capped): each extra feature present adds points, absence never a penalty. Differentiates within a Must tier — never lifts a weaker-on-Must doc above a stronger one.">➕ A</th>`
     + (hasW ? `<th class="mx-score" title="Whole-document (W) bonus: elements of the benchmark document itself. Same bonus-only role as Additional.">📄 W</th>` : '')
@@ -1231,11 +1236,13 @@ function renderCombiScanPanel() {
   table.appendChild(tbody);
   wrap.appendChild(table);
   panel.appendChild(wrap);
-  // Element legend: the columns are short codes to stay narrow; spell them out below.
+  // Element legend: columns are group-coded (ME=Must, AE=Additional, WE=Whole-document);
+  // spell them out below so nothing is ambiguous.
   const legend = document.createElement('div');
   legend.className = 'combi-legend muted';
-  legend.innerHTML = `<b>${mode === 'additional' ? 'Additional features' : 'Must elements'}:</b> `
-    + cols.map((c, i) => `${shortEl(c, i)} = ${esc(c.name)}${c.weight > 1 ? ` <span class="mx-w">·${c.weight}</span>` : ''}`).join(' &nbsp;·&nbsp; ');
+  legend.innerHTML = `<b>Columns (${mode === 'additional' ? 'AE = additional features — Must already covered by the top docs' : 'ME = Must elements'}):</b> `
+    + cols.map((c, i) => `<b>${colCodes[i]}</b> = ${esc(c.name)}${c.weight > 1 ? ` <span class="mx-w">·${c.weight}</span>` : ''}`).join(' &nbsp;·&nbsp; ')
+    + ' <br><span class="muted">Codes: <b>ME</b>=Must (core) · <b>AE</b>=Additional (bonus) · <b>WE</b>=Whole-document (bonus). The ➕A / 📄W score columns summarise each row\'s bonus coverage.</span>';
   panel.appendChild(legend);
 }
 
