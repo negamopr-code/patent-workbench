@@ -3614,41 +3614,75 @@ def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> di
     focus = _focus_combination(active, rows, limit)
     contested = sum(1 for row in focus["rows"] for a in row.get("cell_alt", []) if a)
     return {"columns": columns, "rows": focus["rows"], "gap_names": focus["gap_names"],
+            "uncovered_gaps": focus.get("uncovered_gaps", []),
             "anchor": focus["anchor"], "covers_all_anchor": focus["covers_all_anchor"],
             "mode": mode, "total_ranked": len(rows), "contested": contested}
 
 
-def _focus_combination(cols: list[dict], rows: list[dict], limit: int = 10) -> dict:
-    """Trim to the ANCHOR (best document) + up to limit-1 PARTNERS that fill a gap the anchor
-    has in the ACTIVE dimension (`cols` = Must elements, or Additional elements once Must is
-    solved). A combination is only ever TWO documents, so the useful partners are exactly those
-    bringing an element the anchor lacks — the closest gap-fillers, best first. `covers_all_anchor`
-    means the anchor covers every ACTIVE element (nothing left to fill); then the next-best rows
-    are shown so the table still lists the leaders."""
+MATRIX_MIN_ROWS = 10        # always show at least this many (anchor + fillers), for choice
+MATRIX_MAX_ROWS = 50        # never exceed — a runaway backstop
+
+
+def _focus_combination(cols: list[dict], rows: list[dict], limit: int = MATRIX_MIN_ROWS,
+                       hard_cap: int = MATRIX_MAX_ROWS) -> dict:
+    """ANCHOR (best document) + the PARTNERS needed so EVERY coverable gap the anchor has in
+    the ACTIVE dimension (`cols`) is filled by at least one shown row — a greedy SET COVER, not
+    a flat top-N. The row count GROWS as needed (up to hard_cap) so a gap is never silently
+    dropped: if some document discloses it, a row disclosing it IS shown. Columns that NO
+    document in the pool covers are returned in `uncovered_gaps` and marked distinctly, so
+    "genuinely absent from the corpus" is never confused with "hidden below the fold".
+
+    After coverage is guaranteed, the list is topped up to `limit` with the next-best fillers
+    for richness (choice per gap). `covers_all_anchor` means the anchor covers every ACTIVE
+    element — nothing to fill — so the next-best rows are shown as leaders instead."""
     if not rows:
-        return {"rows": [], "gap_names": [], "anchor": None, "covers_all_anchor": False}
+        return {"rows": [], "gap_names": [], "anchor": None, "covers_all_anchor": False,
+                "uncovered_gaps": []}
     names = [e["name"] for e in cols]
     w_by_i = {i: int(cols[i].get("weight", 1)) for i in range(len(cols))}
     top = rows[0]
+    others = rows[1:]
     gap_idx = [i for i, s in enumerate(top["cells"]) if s == "no"]
     anchor = {**top, "is_anchor": True, "fills": []}
     if not gap_idx:                                   # anchor covers every active element
-        rest = [{**r, "is_anchor": False, "fills": []} for r in rows[1:limit]]
+        rest = [{**r, "is_anchor": False, "fills": []} for r in others[:limit]]
         return {"rows": [anchor] + rest, "gap_names": [], "anchor": anchor["number"],
-                "covers_all_anchor": True}
+                "covers_all_anchor": True, "uncovered_gaps": []}
     gap_names = [names[i] for i in gap_idx]
+    # A gap is COVERABLE if any document in the pool discloses it; otherwise it is genuinely
+    # absent from the searched corpus (a real prior-art finding, not a display limit).
+    coverable = {i: any(r["cells"][i] in ("yes", "partial") for r in others) for i in gap_idx}
+    uncovered_gaps = [names[i] for i in gap_idx if not coverable[i]]
+    need = {i for i in gap_idx if coverable[i]}
     partners = []
-    for r in rows[1:]:
-        fills = [i for i in gap_idx if r["cells"][i] in ("yes", "partial")]
-        if not fills:
+    for r in others:
+        fidx = {i for i in gap_idx if r["cells"][i] in ("yes", "partial")}
+        if not fidx:
             continue                                  # brings nothing the anchor lacks
-        fill_w = sum(w_by_i[i] * (1.0 if r["cells"][i] == "yes" else 0.5) for i in fills)
-        partners.append({**r, "is_anchor": False, "fills": [names[i] for i in fills],
-                         "fill_w": round(fill_w, 1)})
-    # Closest filler first: most (weighted) of the anchor's gaps covered, then own rank.
-    partners.sort(key=lambda p: (-p["fill_w"], -p["key"]))
-    return {"rows": [anchor] + partners[:limit - 1], "gap_names": gap_names,
-            "anchor": anchor["number"], "covers_all_anchor": False}
+        fill_w = sum(w_by_i[i] * (1.0 if r["cells"][i] == "yes" else 0.5) for i in fidx)
+        partners.append({**r, "is_anchor": False, "fills": [names[i] for i in sorted(fidx)],
+                         "fill_w": round(fill_w, 1), "_fidx": fidx})
+    # 1) GREEDY SET COVER — pick the partner covering the most still-uncovered weighted gaps
+    #    until every coverable gap is represented (bounded by hard_cap).
+    selected, avail, remaining = [], list(partners), set(need)
+    while remaining and avail and len(selected) < hard_cap:
+        best = max(avail, key=lambda p: (sum(w_by_i[i] for i in p["_fidx"] & remaining), p["key"]))
+        if not (best["_fidx"] & remaining):
+            break                                     # nothing left adds new coverage
+        selected.append(best)
+        avail.remove(best)
+        remaining -= best["_fidx"]
+    # 2) TOP UP to `limit` with the next-best fillers, for choice per gap.
+    for p in sorted(avail, key=lambda p: (-p["fill_w"], -p["key"])):
+        if len(selected) >= limit:
+            break
+        selected.append(p)
+    selected.sort(key=lambda p: (-p["fill_w"], -p["key"]))
+    for p in selected:
+        p.pop("_fidx", None)
+    return {"rows": [anchor] + selected, "gap_names": gap_names,
+            "anchor": anchor["number"], "covers_all_anchor": False,
+            "uncovered_gaps": uncovered_gaps}
 
 
 @app.get("/api/tabs/{tab_id}/combi-results")

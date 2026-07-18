@@ -2416,6 +2416,32 @@ def test_combi_matrix_pivots_to_additional_when_must_is_saturated():
     assert ccc["fills"] == ["A2"] and ccc["covers_all"] is False
 
 
+def test_focus_combination_set_covers_every_coverable_gap_and_flags_absent():
+    """The matrix guarantees COVERAGE, not a flat top-N: every gap the anchor has that SOME
+    document fills is represented by a shown row (even if that needs more than the min rows),
+    and a gap NO document covers is reported in uncovered_gaps — genuinely absent, not hidden."""
+    from patentbench.web import api
+    cols = [{"name": "G1", "weight": 1}, {"name": "G2", "weight": 1},
+            {"name": "G3", "weight": 1}, {"name": "G4", "weight": 1}]
+
+    def row(num, cells, key):
+        return {"id": num, "number": num, "cells": cells, "key": key, "covers_all": False}
+    # Anchor covers nothing; each partner fills a DIFFERENT single gap; G4 filled by nobody.
+    rows = [
+        row("ANCHOR", ["no", "no", "no", "no"], 100),
+        row("P1", ["yes", "no", "no", "no"], 90),
+        row("P2", ["no", "yes", "no", "no"], 80),
+        row("P3", ["no", "no", "yes", "no"], 70),
+    ]
+    out = api._focus_combination(cols, rows, limit=2)     # min rows 2, but coverage needs more
+    shown = [r["number"] for r in out["rows"]]
+    assert shown[0] == "ANCHOR"
+    # All THREE coverable gaps get a representative even though limit=2 — coverage beats the cap.
+    for p in ("P1", "P2", "P3"):
+        assert p in shown
+    assert out["uncovered_gaps"] == ["G4"]                # nobody covers G4 → flagged absent
+
+
 def test_combi_matrix_focuses_on_anchor_plus_gap_fillers(client, monkeypatch):
     """The matrix is a 2-document combination finder: row ① is the best document (anchor);
     the rows below are ONLY documents that fill a Must element the anchor lacks — the closest

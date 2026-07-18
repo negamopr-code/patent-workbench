@@ -1137,11 +1137,12 @@ function renderCombiScanPanel() {
   const cols = matrix.columns || [], rows = matrix.rows || [];
   const gapNames = matrix.gap_names || [];
   const gapSet = new Set(gapNames);
+  const uncoveredSet = new Set(matrix.uncovered_gaps || []);   // gaps NO document covers → genuinely absent
   const mode = matrix.mode || 'must';               // 'must' = fill Must gaps; 'additional' = many cover Must, differentiate on additional
   const dim = mode === 'additional' ? 'additional' : 'Must';
   const head = document.createElement('div');
   head.className = 'combi-head';
-  const nShown = `(${matrix.total_ranked || rows.length} ranked; showing ${rows.length})`;
+  const nShown = `(${matrix.total_ranked || rows.length} ranked; showing ${rows.length} — enough to cover every element some document discloses)`;
   if (mode === 'additional') {
     head.innerHTML = matrix.covers_all_anchor
       ? `<b>🔎 Combination finder — additional features</b> <span class="muted">— <b>${esc(matrix.anchor || '')}</b> `
@@ -1168,6 +1169,13 @@ function renderCombiScanPanel() {
     cf.innerHTML = `⚡ <b>${matrix.contested} contested cell(s)</b> — the two full-text reads (🏆 best-match deep-read vs 🔎 combi stage-2 verify) disagree here. `
       + `The higher-fidelity element verdict is shown; the ⚡ badge names the other reading. These are the elements to decide by hand — hover a ⚡ cell to see both.`;
     panel.appendChild(cf);
+  }
+  if ((matrix.uncovered_gaps || []).length) {
+    const nb = document.createElement('div');
+    nb.className = 'combi-nocover';
+    nb.innerHTML = `∅ <b>${matrix.uncovered_gaps.length} element(s) with NO coverer</b> — no document in the ${matrix.total_ranked || '?'} assessed candidates discloses: `
+      + `<i>${matrix.uncovered_gaps.map(esc).join('; ')}</i>. This is a genuine gap in the corpus (a real prior-art finding), not a display limit — every element ANY document covers is shown below.`;
+    panel.appendChild(nb);
   }
   const actions = document.createElement('div');
   actions.className = 'combi-actions';
@@ -1203,7 +1211,13 @@ function renderCombiScanPanel() {
   const shortEl = (c, i) => colCodes[i];
   const hasW = rows.some(r => r.w_total);
   htr.innerHTML = `<th class="mx-doc">Document</th>`
-    + cols.map((c, i) => `<th class="mx-el mx-el-${c.kind || 'M'}${gapSet.has(c.name) ? ' mx-gapcol' : ''}" title="${colCodes[i]} — ${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}${gapSet.has(c.name) ? ` — GAP: the anchor is missing this; a partner must fill it` : ''}">${colCodes[i]}${gapSet.has(c.name) ? ' ⚠' : ''}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
+    + cols.map((c, i) => {
+        const isNone = uncoveredSet.has(c.name), isGap = gapSet.has(c.name);
+        const mark = isNone ? ' ∅' : isGap ? ' ⚠' : '';
+        const note = isNone ? ' — ∅ NO document in the searched corpus discloses this (genuinely absent, not hidden)'
+          : isGap ? ' — GAP: the anchor is missing this; a partner below fills it' : '';
+        return `<th class="mx-el mx-el-${c.kind || 'M'}${isNone ? ' mx-nocover' : isGap ? ' mx-gapcol' : ''}" title="${colCodes[i]} — ${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}${note}">${colCodes[i]}${mark}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`;
+      }).join('')
     + `<th class="mx-score" title="MUST coverage — the dominant ranking criterion: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.">Must</th>`
     + `<th class="mx-score" title="Additional (A) bonus (weight/5 · 0.3, capped): each extra feature present adds points, absence never a penalty. Differentiates within a Must tier — never lifts a weaker-on-Must doc above a stronger one.">➕ A</th>`
     + (hasW ? `<th class="mx-score" title="Whole-document (W) bonus: elements of the benchmark document itself. Same bonus-only role as Additional.">📄 W</th>` : '')
