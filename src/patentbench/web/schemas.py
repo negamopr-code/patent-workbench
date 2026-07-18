@@ -272,6 +272,9 @@ class CombiMotivationRequest(BaseModel):
     combine) to cover the benchmark. The UI sends its top complete pairs; one bulk LLM pass."""
     pairs: list[CombiPair] = Field(default_factory=list)
     model: str | None = None
+    # 'must' = A+B both needed for the mandatory claim; 'additional' = A (anchor) already covers
+    # the mandatory claim and B adds optional features (the matrix's additional-mode pairs).
+    mode: str = "must"
 
 
 class NotebookConsolidate(BaseModel):

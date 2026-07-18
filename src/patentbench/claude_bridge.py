@@ -1609,13 +1609,29 @@ def parse_digest_rescore(text: str) -> dict:
     return out
 
 
+_COMBI_MOTIV_HEAD = {
+    # Must mode: A and B are BOTH needed to cover the mandatory claim (each supplies the part
+    # the other lacks) — the classic obviousness combination.
+    "must": (
+        "You assess whether PAIRS of patent references are genuinely COMBINABLE (obviousness-style) to "
+        "reach the BENCHMARK invention below. For each pair, reference A and reference B TOGETHER disclose "
+        "the benchmark's mandatory features — each supplies the part the other lacks."),
+    # Additional mode: reference A (the anchor) ALREADY discloses the whole mandatory claim on its
+    # own; reference B additionally teaches the OPTIONAL/additional benchmark features listed. The
+    # question is whether a skilled person would graft B's extra teaching onto A — the phone-memory
+    # vs wind-turbine case must come back NO even though B's feature 'adds' something.
+    "additional": (
+        "You assess whether, for each PAIR, a skilled person would COMBINE reference B's teaching with "
+        "reference A to arrive at the FULL benchmark invention below. Reference A (the anchor) ALREADY "
+        "discloses the benchmark's mandatory features on its own; reference B additionally teaches the "
+        "OPTIONAL/ADDITIONAL benchmark features listed under it. Judge whether grafting B's additional "
+        "teaching onto A is something a skilled person would actually do."),
+}
 COMBI_MOTIVATION_PROMPT = (
-    "You assess whether PAIRS of patent references are genuinely COMBINABLE (obviousness-style) to "
-    "reach the BENCHMARK invention below. For each pair, reference A and reference B TOGETHER disclose "
-    "the benchmark's mandatory features — each supplies the part the other lacks. A pair is only "
-    "useful if a skilled person would have a REAL motivation/reason to combine them: same or adjacent "
-    "technical field, compatible structures, or an explicit teaching/suggestion pointing to the "
-    "combination. Features merely 'adding up' is NOT enough — if combining is far-fetched, say NO.\n\n"
+    "{head} A pair is only combinable if a skilled person would have a REAL motivation/reason: same or "
+    "adjacent technical field, compatible structures, or an explicit teaching/suggestion pointing to the "
+    "combination. Features merely 'adding up' is NOT enough — if the two references are from unrelated "
+    "fields (e.g. phone memory vs a wind turbine) or the combination is far-fetched, say NO.\n\n"
     "{benchmark}\n\n"
     "=== REFERENCE PAIRS (judge from the digests) ===\n{pairs}\n\n"
     "OUTPUT — for EVERY pair, in this EXACT format, nothing else:\n"
@@ -1624,9 +1640,12 @@ COMBI_MOTIVATION_PROMPT = (
     "WHY: <≤25 words: the concrete motivation to combine, or the obstacle if NO>")
 
 
-def combi_motivation(benchmark: dict, pairs: list[dict], model: str | None = None) -> dict:
+def combi_motivation(benchmark: dict, pairs: list[dict], model: str | None = None,
+                     mode: str = "must") -> dict:
     """ONE bulk pass (default sonnet) judging, for each candidate PAIR, whether the two references
-    are genuinely combinable (real motivation to combine) to reach the benchmark. `pairs` =
+    are genuinely combinable (real motivation to combine) to reach the benchmark. `mode` selects the
+    framing: 'must' = A+B both needed for the mandatory claim; 'additional' = A (anchor) already
+    covers the mandatory claim, B adds optional features. `pairs` =
     [{a:{number,digest}, b:{number,digest}, a_features:[names], b_features:[names]}]. Returns
     {results: {pair_index_str: {combinable, reason}}, model} | {error}. Cheap: digests only, one call."""
     if not pairs:
@@ -1641,7 +1660,8 @@ def combi_motivation(benchmark: dict, pairs: list[dict], model: str | None = Non
             f"{(a.get('digest') or '(no digest available)')[:3000]}\n\n"
             f"REFERENCE B = {b['number']} — supplies: {', '.join(p.get('b_features') or []) or '—'}\n"
             f"{(b.get('digest') or '(no digest available)')[:3000]}")
-    prompt = COMBI_MOTIVATION_PROMPT.format(benchmark="BENCHMARK:\n\n" + bm_block,
+    head = _COMBI_MOTIV_HEAD.get(mode, _COMBI_MOTIV_HEAD["must"])
+    prompt = COMBI_MOTIVATION_PROMPT.format(head=head, benchmark="BENCHMARK:\n\n" + bm_block,
                                             pairs="\n\n".join(blocks))
     res = _run_claude(prompt, model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
     if "error" in res:

@@ -273,6 +273,7 @@ textarea, select, input[type="text"] {
 /* Combinability: 🔗 = a valid pair with the anchor (skilled person would combine); ⛔ = not. */
 .combi-matrix .mx-pair { color: var(--ok); border-color: var(--ok); margin-left: 4px; font-weight: 600; }
 .combi-matrix .mx-nopair { color: var(--err); border-color: var(--err); margin-left: 4px; }
+.combi-matrix .mx-unjudged { color: var(--muted); margin-left: 4px; cursor: help; }
 .combi-legend { margin-top: 4px; font-size: 11px; line-height: 1.5; }
 /* 🎯 Must-first list badges: covers-all is the top tier (green), a gap is a combine-candidate (amber). */
 .combined.must-all { color: var(--ok); font-weight: 600; }

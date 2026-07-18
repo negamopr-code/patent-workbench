@@ -3206,6 +3206,10 @@ COMBI_SCAN_BATCH = int(os.environ.get("PB_COMBI_SCAN_BATCH", "8"))
 ADD_UNIT, ADD_CAP = 0.3, 1.0
 # screen → digest → full. A pair is only as trustworthy as its weaker document.
 _DEPTH_RANK = {"screen": 0, "digest": 1, "full": 2}
+# Combinability (motivation-to-combine) judging: bounded total, batched so one click judges
+# EVERY matrix partner (set-cover can surface many) without one call carrying too many digests.
+COMBI_MOTIV_MAX = int(os.environ.get("PB_COMBI_MOTIV_MAX", "60"))
+COMBI_MOTIV_BATCH = int(os.environ.get("PB_COMBI_MOTIV_BATCH", "10"))
 
 
 # Feature kinds: M = mandatory/core (the ONLY thing that decides coverage and the ranking
@@ -3982,7 +3986,7 @@ def combi_motivation_ep(tab_id: int, body: schemas.CombiMotivationRequest):
     by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
              if d["status"] == "fetched"}
     pairs, keys = [], []
-    for p in body.pairs[:12]:                         # cap the bulk call to the top dozen pairs
+    for p in body.pairs[:COMBI_MOTIV_MAX]:            # bounded, but ALL matrix partners fit
         a, b = by_id.get(p.a_id), by_id.get(p.b_id)
         if not a or not b:
             continue
@@ -3990,25 +3994,46 @@ def combi_motivation_ep(tab_id: int, body: schemas.CombiMotivationRequest):
         keys.append((p.a_id, p.b_id))
     if not pairs:
         raise HTTPException(400, "no valid fetched document pairs to judge")
-    res = claude_bridge.combi_motivation(bm, pairs, model=_read_model(body.model))
-    if "error" in res:
-        raise HTTPException(400, f"combi motivation failed: {res['error']}")
-    results = res.get("results") or {}
-    out = {}
-    for i, (a_id, b_id) in enumerate(keys, 1):
-        v = results.get(str(i))
-        if not v:
-            continue
-        db.set_combi_motivation(tab_id, a_id, b_id, v["combinable"], v.get("reason") or "",
-                                res.get("model"))
-        lo, hi = sorted((a_id, b_id))
-        out[f"{lo}-{hi}"] = {"combinable": v["combinable"], "reason": v.get("reason") or "",
-                             "model": res.get("model")}
+    # BATCH the bulk pass so every partner is judged in ONE click even past a single call's
+    # comfortable size (set-cover can surface many partners) — a blank row must never be
+    # mistaken for "not combinable"; it means "not yet judged".
+    model = _read_model(body.model)
+    out, errors = {}, []
+    lock = threading.Lock()
+
+    def one(start: int) -> None:
+        chunk = pairs[start:start + COMBI_MOTIV_BATCH]
+        chunk_keys = keys[start:start + COMBI_MOTIV_BATCH]
+        res = claude_bridge.combi_motivation(bm, chunk, model=model,
+                                             mode=body.mode if body.mode in ("must", "additional") else "must")
+        if "error" in res:
+            with lock:
+                errors.append(res["error"])
+            return
+        results = res.get("results") or {}
+        for i, (a_id, b_id) in enumerate(chunk_keys, 1):
+            v = results.get(str(i))
+            if not v:
+                continue
+            db.set_combi_motivation(tab_id, a_id, b_id, v["combinable"], v.get("reason") or "",
+                                    res.get("model"))
+            lo, hi = sorted((a_id, b_id))
+            with lock:
+                out[f"{lo}-{hi}"] = {"combinable": v["combinable"], "reason": v.get("reason") or "",
+                                     "model": res.get("model")}
+
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(one, range(0, len(pairs), COMBI_MOTIV_BATCH)))
+    if not out and errors:
+        raise HTTPException(400, f"combi motivation failed: {errors[0]}")
+    combinable = sum(1 for v in out.values() if v["combinable"])
+    note = f" ⚠ {len(errors)} batch(es) failed — re-run to judge the rest." if errors else ""
     db.append_message(tab_id, "s",
-        f"🧩 Judged combinability of {len(out)} document pair(s) ({res.get('model') or 'sonnet'}) — "
-        "each pair's two references TOGETHER cover all mandatory benchmark features. Verdicts are a "
-        "hint of what a 2-reference combination achieves; they do NOT change any single document's score.")
-    return {"ok": True, "results": out, "model": res.get("model")}
+        f"🧩 Judged combinability of {len(out)} document pair(s) ({model or 'sonnet'}) — "
+        f"{combinable} genuinely combinable, {len(out) - combinable} not (different field / no "
+        "motivation to combine). Verdicts are a hint of what a 2-reference combination achieves; "
+        f"they do NOT change any single document's score.{note}")
+    return {"ok": True, "results": out, "model": model}
 
 
 @app.post("/api/tabs/{tab_id}/reconcile")

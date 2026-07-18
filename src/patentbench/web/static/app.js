@@ -1196,7 +1196,7 @@ function renderCombiScanPanel() {
     const judged = partnerRows.filter(p => combiMotivations[combiKey(anchorRow.id, p.id)]).length;
     jb.textContent = judged ? `⚖️ re-judge combinability (${judged}/${partnerRows.length})` : '⚖️ Judge combinability (LLM)';
     jb.title = 'For the anchor paired with EACH partner, judge whether a skilled person would actually combine them (same technical field, motivation to combine) — not just whether they fill each other\'s gaps. Combinable pairs get a 🔗 number; incompatible ones (e.g. phone-memory + wind-turbine) are marked ⛔.';
-    jb.onclick = () => judgeMatrixCombinability(anchorRow, partnerRows, cols);
+    jb.onclick = () => judgeMatrixCombinability(anchorRow, partnerRows, cols, mode);
     actions.appendChild(jb);
   }
   panel.appendChild(actions);
@@ -1272,7 +1272,8 @@ function renderCombiScanPanel() {
     } else if (!row.is_anchor) {
       const info = pairInfo.get(row.id);
       if (info && info.combinable) pairBadge = ` <span class="chip mx-pair" title="Combinable pair ${pairNum.get(row.id)} with the anchor ${esc(anchorRow.number)} — a skilled person would combine them.${info.reason ? ' ' + esc(info.reason) : ''}">🔗 ${pairNum.get(row.id)}</span>`;
-      else if (info) pairBadge = ` <span class="chip mx-nopair" title="NOT combinable with the anchor: ${esc(info.reason || 'no motivation to combine / different technical field')}.">⛔</span>`;
+      else if (info) pairBadge = ` <span class="chip mx-nopair" title="NOT combinable with the anchor: ${esc(info.reason || 'no motivation to combine / different technical field')}.">⛔ not combinable</span>`;
+      else if (anchorRow) pairBadge = ` <span class="chip mx-unjudged" title="Combinability with the anchor not judged yet — click ⚖️ Judge combinability. Blank ≠ not combinable.">⚪ ?</span>`;
     }
     const doc = `<td class="mx-doc"><b>${esc(row.number)}</b>${label}${fills}${pairBadge}</td>`;
     const fillSet = new Set(row.fills || []);
@@ -1433,11 +1434,12 @@ async function judgeCombinability(pairs) {
 // ⚖️ Matrix combinability: judge the anchor paired with EACH partner — whether a skilled
 // person would actually combine them (same field, motivation), not just whether they fill
 // each other's gaps. Reuses the same LLM judge + persistence; refreshes the matrix badges.
-async function judgeMatrixCombinability(anchor, partners, cols) {
+async function judgeMatrixCombinability(anchor, partners, cols, mode) {
   const btn = $('matrix-judge');
   if (btn) { btn.disabled = true; btn.textContent = '⚖️ judging…'; }
   const covered = cols.filter((c, i) => (anchor.cells[i] === 'yes' || anchor.cells[i] === 'partial')).map(c => c.name);
-  const payload = { pairs: partners.map(p => ({
+  const payload = { mode: mode === 'additional' ? 'additional' : 'must',
+    pairs: partners.map(p => ({
     a_id: anchor.id, b_id: p.id,
     a_features: covered.length ? covered : ['(covers the mandatory elements)'],
     b_features: p.fills && p.fills.length ? p.fills : ['(brings additional features)'],

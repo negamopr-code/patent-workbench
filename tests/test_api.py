@@ -2053,7 +2053,7 @@ def test_combi_motivation_endpoint_persists_and_returns(client, monkeypatch):
                         [{"name": "a battery", "weight": 3, "status": "no", "note": ""},
                          {"name": "a gauge", "weight": 2, "status": "yes", "note": "fuel gauge"}])
     monkeypatch.setattr(claude_bridge, "combi_motivation",
-                        lambda bm, pairs, model=None: {"results": {"1": {"combinable": True,
+                        lambda bm, pairs, model=None, mode="must": {"results": {"1": {"combinable": True,
                                                        "reason": "same field; complementary"}},
                                                        "model": "claude-sonnet-4-6"})
     r = client.post(f"/api/tabs/{tid}/combi/motivation",
@@ -2064,6 +2064,58 @@ def test_combi_motivation_endpoint_persists_and_returns(client, monkeypatch):
     # persisted → surfaced in state for the next page load
     cm = client.get(f"/api/tabs/{tid}/state").json()["combi_motivations"]
     assert cm[f"{lo}-{hi}"]["combinable"] is True and "complementary" in cm[f"{lo}-{hi}"]["reason"]
+
+
+def test_combi_motivation_batches_all_pairs_past_single_call_cap(client, monkeypatch):
+    """One click judges EVERY partner even past a single call's size (set-cover can surface
+    many) — batched, per-chunk indexed. A blank matrix row must mean 'not yet judged', never
+    'not combinable', so no partner is silently left unjudged."""
+    import patentbench.db as db
+    tab = client.post("/api/tabs", json={"name": "CombiBatch"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "x", "weight": 1}], "title": "x"})
+    anchor = _feature_doc(db, tid, "US9000000A",
+                          [{"name": "x", "weight": 1, "status": "yes", "note": "a"}])
+    n = 25                                        # > the per-call batch (10) → several batches
+    ids = [_feature_doc(db, tid, f"US80000{i:02d}A",
+                        [{"name": "x", "weight": 1, "status": "no", "note": ""}]) for i in range(n)]
+    # Fake judges every pair in whatever chunk it receives, 1-based WITHIN the chunk.
+    monkeypatch.setattr(claude_bridge, "combi_motivation",
+        lambda bm, pairs, model=None, mode="must": {"results": {str(i + 1): {"combinable": True, "reason": "ok"}
+                                                   for i in range(len(pairs))}, "model": "m"})
+    r = client.post(f"/api/tabs/{tid}/combi/motivation",
+                    json={"pairs": [{"a_id": anchor, "b_id": b, "a_features": ["x"],
+                                     "b_features": []} for b in ids]}).json()
+    assert r["ok"] and len(r["results"]) == n     # ALL 25 judged, none dropped by a 12-cap
+
+
+def test_combi_motivation_additional_mode_uses_anchor_framing(client, monkeypatch):
+    """In additional mode the prompt must NOT claim 'A and B together cover the mandatory
+    features' (the anchor covers them alone) — it must frame B as adding OPTIONAL features to
+    the anchor A. Otherwise the judge says NO to everything (its false premise). We assert the
+    mode reaches the bridge and drives the prompt head."""
+    from patentbench import claude_bridge as cb
+    seen = {}
+    orig = cb.COMBI_MOTIVATION_PROMPT
+
+    def fake(bm, pairs, model=None, mode="must"):
+        seen["mode"] = mode
+        return {"results": {"1": {"combinable": False, "reason": "different field"}}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_motivation", fake)
+    import patentbench.db as db
+    tab = client.post("/api/tabs", json={"name": "AddMode"}).json(); tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "x", "weight": 1}], "title": "x"})
+    a = _feature_doc(db, tid, "US7000000A", [{"name": "x", "weight": 1, "status": "yes", "note": "a"}])
+    b = _feature_doc(db, tid, "US7000001A", [{"name": "x", "weight": 1, "status": "no", "note": ""}])
+    client.post(f"/api/tabs/{tid}/combi/motivation",
+                json={"mode": "additional",
+                      "pairs": [{"a_id": a, "b_id": b, "a_features": ["x"], "b_features": ["y"]}]})
+    assert seen["mode"] == "additional"
+    # the two heads are genuinely different framings
+    assert cb._COMBI_MOTIV_HEAD["additional"] != cb._COMBI_MOTIV_HEAD["must"]
+    assert "already" in cb._COMBI_MOTIV_HEAD["additional"].lower()
 
 
 def test_combi_motivation_requires_feature_benchmark(client):
