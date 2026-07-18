@@ -1089,14 +1089,16 @@ async function runCombiVerify({ ids: explicitIds = null } = {}) {
     ids = [...new Set(explicitIds)];
     blurb = `the ${ids.length} document(s) of this pair`;
   } else {
-    // Full-read the SOLO hits first — they are the strongest claim being made, so they are
-    // the ones that most need confirming — then the documents in the shortlisted pairs.
-    const soloIds = (combiScan.solo || []).slice(0, 8).map(s => s.id);
-    const top = (combiScan.pairs || []).filter(p => p.complete).slice(0, 5);
-    const pool = (top.length ? top : (combiScan.pairs || []).slice(0, 5));
-    ids = [...new Set([...soloIds, ...pool.flatMap(p => [p.a_id, p.b_id])])].slice(0, 24);
+    // Confirm the strongest coverers first: full coverers, then highest weighted mandatory
+    // coverage. These are the rows whose combinations you'd actually build, so they are the
+    // ones worth grounding on full text. Rows already at full depth need no re-read.
+    const rows = ((combiScan.matrix && combiScan.matrix.rows) || [])
+      .filter(x => x.depth !== 'full')
+      .sort((a, b) => (b.covers_all - a.covers_all) || (b.mand_rating - a.mand_rating) || (b.add_bonus - a.add_bonus));
+    const soloIds = rows.filter(x => x.covers_all).length;
+    ids = rows.slice(0, 24).map(x => x.id);
     blurb = `${ids.length} finalist document(s)`
-      + (soloIds.length ? ` (${soloIds.length} that cover everything ALONE — the strongest claim, so the most worth confirming)` : '');
+      + (soloIds ? ` (${soloIds} that cover every mandatory element ALONE — the strongest claim, so the most worth confirming)` : '');
   }
   if (!ids.length) { appendMsg({ role: 's', text: 'No documents to verify.' }); return; }
   if (!confirm(`🔎 STAGE 2 — confirm against FULL text\n\n`
@@ -1114,99 +1116,97 @@ async function runCombiVerify({ ids: explicitIds = null } = {}) {
   await reloadChat();
 }
 
+// 🔎 Coverage MATRIX — rows = documents, columns = MANDATORY elements, cells = ✓/~/✗.
+// Replaces the old auto-computed solo+pair lists: the user reads the grid and judges
+// combinations themselves. Three standalone scores ride alongside each row: mandatory
+// coverage, the ➕ additional-feature bonus, and the 🏆 whole-benchmark match. All data is
+// the stored per-element coverage — no model call to render this.
+const CELL = { yes: { t: '✓', c: 'cell-yes', title: 'discloses (literal/full)' },
+               partial: { t: '~', c: 'cell-part', title: 'partial / implicit — still meets the limitation (anticipation standard)' },
+               no: { t: '✗', c: 'cell-no', title: 'not disclosed' } };
+const DEPTH_CHIP = { full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' };
+
 function renderCombiScanPanel() {
   const panel = $('combi-panel');
   panel.classList.remove('hidden');
   panel.innerHTML = '';
   const r = combiScan;
-  const complete = (r.pairs || []).filter(p => p.complete);
+  const matrix = r.matrix || { columns: [], rows: [] };
+  const cols = matrix.columns || [], rows = matrix.rows || [];
+  const soloCount = rows.filter(x => x.covers_all).length;
   const head = document.createElement('div');
   head.className = 'combi-head';
-  head.innerHTML = `<b>🔎 Coverage — found by the tool</b> `
-    + `<span class="muted">(${(r.solo || []).length} document(s) cover everything ALONE; `
-    + `${complete.length} pair(s) cover ALL mandatory element(s)`
+  head.innerHTML = `<b>🔎 Coverage matrix — you judge the combinations</b> `
+    + `<span class="muted">(${rows.length} document(s) × ${cols.length} mandatory element(s); `
+    + `${soloCount} cover EVERY mandatory element alone`
     + (r.screened ? `; 🩺 screened ${r.screened} → ${r.screened - (r.dropped || 0)} shortlisted` : '')
-    + `; verdicts from ${r.depth === 'full' ? 'FULL TEXT' : 'digests — stage 2 not run yet'}. `
-    + `Additional elements add a bonus, never a penalty. This rating is independent of every `
-    + `other score.)</span>`;
+    + `; verdicts from ${r.depth === 'full' ? 'FULL TEXT' : 'digests — run stage 2 to confirm'}. `
+    + `✓ discloses · ~ partial (still meets the limitation) · ✗ absent. Additional elements are `
+    + `folded into the ➕ bonus, not shown as columns. Independent of every other score.)</span>`;
   panel.appendChild(head);
   const actions = document.createElement('div');
   actions.className = 'combi-actions';
   const v = document.createElement('button');
   v.className = 'btn small';
   v.textContent = '🔬 Stage 2: confirm finalists on FULL text';
-  v.title = 'Re-read the shortlisted documents in full and replace their digest-based verdicts with citable ones. A solo hit or a pair can fall away here.';
+  v.title = 'Re-read the top full/near-full coverers against their primary text, replacing each digest cell with a citable one. A cell (and a would-be combination) can legitimately flip here.';
   v.onclick = () => runCombiVerify();
   actions.appendChild(v);
   panel.appendChild(actions);
-  // 🎯 SOLO first: one document disclosing the whole invention is a NOVELTY-grade hit —
-  // strictly stronger than any combination, which is only an obviousness argument and
-  // still needs a motivation to combine. Never rank the two against each other.
-  const solo = r.solo || [];
-  if (solo.length) {
-    const sh = document.createElement('div');
-    sh.className = 'combi-head';
-    sh.innerHTML = `<b>🎯 Covers EVERYTHING alone — ${solo.length} document(s)</b> `
-      + `<span class="muted">strongest: a single document disclosing every mandatory element `
-      + `(novelty-grade), vs a pair below which needs a motivation to combine. A partial (~) `
-      + `limb still counts as disclosed (the anticipation standard) — literal (✓) coverers `
-      + `rank first, and the ~ limbs are named so you see what to argue.</span>`;
-    panel.appendChild(sh);
-    for (const s of solo) {
-      const row = document.createElement('div');
-      row.className = 'combi-row';
-      const mfull = s.mand_full ?? s.mand_total, mpart = s.mand_partial ?? 0;
-      row.innerHTML = `<span class="chip ${mpart ? 'warn' : 'ok'}">${mpart ? '≈ alone' : '✓ alone'}</span><b>${esc(s.number)}</b> `
-        + `<span class="chip" title="Mandatory elements met: ✓ = literal/full disclosure, ~ = partial/implicit (still meets the limitation under the anticipation standard). All ${s.mand_total} are covered — none is a 'no'.">${mpart ? `${mfull}✓ +${mpart}~` : `${mfull}✓`}/${s.mand_total} mandatory</span>`
-        + additionalChip(s)
-        + `<span class="chip">${{ full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' }[s.depth] || s.depth}</span>`
-        + ((s.partial_names || []).length ? `<div class="muted">partial (argue these): ${s.partial_names.map(esc).join('; ')}</div>` : '');
-      // 🔬 verify a solo hit on full text — the strongest single-reference claim, most worth grounding
-      if (s.depth !== 'full') {
-        const vb = document.createElement('button');
-        vb.className = 'btn small';
-        vb.textContent = '🔬 verify on full text';
-        vb.title = 'Deep-read this document\'s full primary text against every element, replacing its digest/screen verdict with a citable one.';
-        vb.onclick = () => runCombiVerify({ ids: [s.id] });
-        row.appendChild(vb);
-      }
-      panel.appendChild(row);
-    }
-    const ph = document.createElement('div');
-    ph.className = 'combi-head';
-    ph.innerHTML = `<b>🧩 Two-document combinations</b> <span class="muted">— each needs a `
-      + `motivation to combine; weaker than a solo hit above.</span>`;
-    panel.appendChild(ph);
-  }
-  if (!(r.pairs || []).length) {
+  if (!cols.length || !rows.length) {
     const m = document.createElement('div');
     m.className = 'muted';
-    m.textContent = 'No genuine 2-document combination found: no pair where EACH document '
-      + 'contributes an element the other lacks (one document subsuming another is not a combination).';
+    m.textContent = cols.length
+      ? 'No candidate has been assessed against the elements yet — run the 🩺 screen and 🔎 scan first.'
+      : 'This benchmark has no mandatory elements to build a matrix from — 🔬 Decompose the claim into elements first.';
     panel.appendChild(m);
     return;
   }
-  for (const p of r.pairs.slice(0, 12)) {
-    const row = document.createElement('div');
-    row.className = 'combi-row';
-    row.innerHTML =
-      `<span class="chip ${p.complete ? (p.mand_partial ? 'warn' : 'ok') : 'warn'}" title="${p.complete ? `Together the two disclose every mandatory element: ${p.mand_full ?? '?'} literal (✓)${p.mand_partial ? ` + ${p.mand_partial} partial (~, still meets the limitation)` : ''}.` : 'The union still leaves a mandatory element uncovered.'}">${p.complete ? (p.mand_partial ? `✓ covers all (${p.mand_full}✓ ${p.mand_partial}~)` : '✓ covers all') : 'incomplete'}</span>`
-      + `<b>${p.a}</b> + <b>${p.b}</b> `
-      + `<span class="chip">rating ${p.rating}/10</span>`
-      + additionalChip(p)
-      + `<span class="chip" title="screen = fast generous cut (stage 0); digest = summary-based (stage 1); full = re-read against primary text (stage 2). A pair is only as trustworthy as its weaker document.">${{ full: '📖 full text', digest: '🧾 digest', screen: '🩺 screen only' }[p.depth] || p.depth}</span>`
-      + `<div class="muted">only in ${p.a}: ${p.a_only.join('; ') || '—'}<br>`
-      + `only in ${p.b}: ${p.b_only.join('; ') || '—'}</div>`;
-    if (p.depth !== 'full') {
-      const vb = document.createElement('button');
-      vb.className = 'btn small';
-      vb.textContent = '🔬 verify this pair on full text';
-      vb.title = 'Deep-read BOTH documents\' full primary text against every element, replacing their digest/screen verdicts with citable ones. Confirms (or drops) this specific pair.';
-      vb.onclick = () => runCombiVerify({ ids: [p.a_id, p.b_id] });
-      row.appendChild(vb);
+  // Horizontal-scroll wrapper: many elements → wide table; the document column is sticky.
+  const wrap = document.createElement('div');
+  wrap.className = 'combi-matrix-wrap';
+  const table = document.createElement('table');
+  table.className = 'combi-matrix';
+  // Header: document | one column per mandatory element (short label, weight, full name on hover) | scores | depth.
+  const thead = document.createElement('thead');
+  const htr = document.createElement('tr');
+  const shortEl = (n, i) => `E${i + 1}`;
+  htr.innerHTML = `<th class="mx-doc">Document</th>`
+    + cols.map((c, i) => `<th class="mx-el" title="${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}">${shortEl(c.name, i)}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`).join('')
+    + `<th class="mx-score" title="Mandatory coverage: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.">Must</th>`
+    + `<th class="mx-score" title="Additional-feature bonus (weight/5 · 0.3, capped): each extra feature present adds points, absence never a penalty.">➕ Bonus</th>`
+    + `<th class="mx-score" title="🏆 Whole-benchmark best-match score already stored on the row (only present once ranked).">🏆 Match</th>`
+    + `<th class="mx-depth" title="Read depth of this row's cells: 🩺 screen (generous guess) · 🧾 digest (summary) · 📖 full text (citable).">Depth</th>`;
+  thead.appendChild(htr);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    if (row.covers_all) tr.className = 'mx-all';
+    const doc = `<td class="mx-doc"><b>${esc(row.number)}</b>${row.covers_all ? ' <span class="chip ok mx-solo" title="Discloses every mandatory element on its own — single-reference full coverer.">alone</span>' : ''}</td>`;
+    const cells = row.cells.map((s, i) => {
+      const meta = CELL[s] || CELL.no;
+      return `<td class="mx-cell ${meta.c}" title="${esc(cols[i].name)}: ${meta.title}">${meta.t}</td>`;
+    }).join('');
+    const must = `<td class="mx-score" title="${row.mand_full}✓${row.mand_partial ? ` +${row.mand_partial}~` : ''} of ${row.mand_total} mandatory">${row.mand_full}${row.mand_partial ? `+${row.mand_partial}~` : ''}/${row.mand_total} <span class="muted">(${row.mand_rating})</span></td>`;
+    const bonus = `<td class="mx-score">${row.add_total ? `${row.add_full}${row.add_partial ? `+${row.add_partial}~` : ''}/${row.add_total}${row.add_bonus ? ` <span class="muted">(+${row.add_bonus})</span>` : ''}` : '—'}</td>`;
+    const score = `<td class="mx-score">${row.score != null ? esc(String(row.score)) : '—'}</td>`;
+    const depth = `<td class="mx-depth"><span class="chip" style="cursor:${row.depth === 'full' ? 'default' : 'pointer'}" title="${row.depth === 'full' ? 'Confirmed on full primary text.' : 'Click to re-read THIS document on full text and replace its cells with citable verdicts.'}">${DEPTH_CHIP[row.depth] || row.depth}</span></td>`;
+    tr.innerHTML = doc + cells + must + bonus + score + depth;
+    if (row.depth !== 'full') {
+      const chip = tr.querySelector('.mx-depth .chip');
+      if (chip) chip.onclick = () => runCombiVerify({ ids: [row.id] });
     }
-    panel.appendChild(row);
+    tbody.appendChild(tr);
   }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  panel.appendChild(wrap);
+  // Element legend: the columns are E1…En to stay narrow; spell them out below.
+  const legend = document.createElement('div');
+  legend.className = 'combi-legend muted';
+  legend.innerHTML = '<b>Elements:</b> ' + cols.map((c, i) => `E${i + 1} = ${esc(c.name)}${c.weight > 1 ? ` <span class="mx-w">·${c.weight}</span>` : ''}`).join(' &nbsp;·&nbsp; ');
+  panel.appendChild(legend);
 }
 
 // Additional-coverage chip that DISTINGUISHES full (YES) from partial: '9/9' counting both

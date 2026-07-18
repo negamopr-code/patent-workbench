@@ -3393,6 +3393,62 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
     return out[:limit]
 
 
+def _combi_matrix(elements: list[dict], docs: list[dict]) -> dict:
+    """Element × document coverage GRID over the MANDATORY elements — the raw material the
+    user reads to judge combinations by eye (the pair list is no longer shown; this replaces
+    it). Columns are the mandatory elements; each row is a document with its per-element
+    verdict (yes / partial / no) plus the three standalone scores this app already computes:
+
+      • mandatory coverage  — how many must-elements the document discloses on its own
+        (covers_all = a single-reference full coverer, the same test as `_combi_solo`);
+      • additional bonus    — the ➕ additional-read scale (weight/5 · ADD_UNIT, capped),
+        each present A-feature adding points, absence never a penalty;
+      • whole-benchmark match — the 🏆 best-match score already stored on the row (present
+        only when the benchmark has been ranked; null otherwise).
+
+    Additional elements are deliberately NOT columns — they fold into the bonus score only
+    (the chosen matrix design). Pure derivation from stored coverage; no model call."""
+    mand = [e for e in elements if (e.get("kind") or "M") != "A"]
+    add = [e for e in elements if (e.get("kind") or "M") == "A"]
+    columns = [{"name": e["name"], "weight": int(e.get("weight", 1))} for e in mand]
+    total_w = sum(int(e.get("weight", 1)) for e in mand) or 1
+    rows = []
+    for d in docs:
+        cov = _cov_map(d)
+        cells = [cov.get(e["name"], "no") for e in mand]
+        mand_full = sum(1 for s in cells if s == "yes")
+        mand_part = sum(1 for s in cells if s == "partial")
+        covers_all = not any(s == "no" for s in cells)
+        covered_w = sum(int(e.get("weight", 1)) * (1.0 if s == "yes" else 0.5)
+                        for e, s in zip(mand, cells) if s in ("yes", "partial"))
+        bonus, add_full, add_part = 0.0, 0, 0
+        for e in add:
+            s = cov.get(e["name"], "no")
+            unit = (int(e.get("weight", 1)) / 5) * ADD_UNIT
+            if s == "yes":
+                bonus += unit
+                add_full += 1
+            elif s == "partial":
+                bonus += unit * 0.5
+                add_part += 1
+        rows.append({
+            "id": d["id"], "number": d.get("number"),
+            "cells": cells,
+            "mand_full": mand_full, "mand_partial": mand_part, "mand_total": len(mand),
+            "covers_all": covers_all,
+            "mand_rating": round(10.0 * covered_w / total_w, 1),
+            "add_bonus": round(min(ADD_CAP, bonus), 2),
+            "add_full": add_full, "add_partial": add_part, "add_total": len(add),
+            "score": d.get("score"),
+            "depth": d.get("combi_depth") or "screen",
+        })
+    # Full coverers first, then by weighted mandatory coverage, then the bonus, then number —
+    # the same priority as _combi_solo so the matrix's top rows match the strongest findings.
+    rows.sort(key=lambda r: (-r["covers_all"], -r["mand_rating"], -r["add_bonus"],
+                             r["number"] or ""))
+    return {"columns": columns, "rows": rows}
+
+
 @app.get("/api/tabs/{tab_id}/combi-results")
 def combi_results_ep(tab_id: int, top_pairs: int = 20):
     """The LAST investigation's findings, re-derived from STORED coverage — so a page reload
@@ -3404,13 +3460,14 @@ def combi_results_ep(tab_id: int, top_pairs: int = 20):
     elements = _combi_elements(bm)
     fresh = [d for d in db.list_documents(tab_id, full=True) if _rigorous(d, elements)]
     if not fresh:
-        return {"ok": True, "has_results": False, "pairs": [], "solo": [], "elements": len(elements)}
+        return {"ok": True, "has_results": False, "pairs": [], "solo": [],
+                "matrix": {"columns": [], "rows": []}, "elements": len(elements)}
     pairs = _combi_pairs(elements, fresh, top_pairs)
     solo = _combi_solo(elements, fresh)
     depth = "full" if fresh and all(d.get("combi_depth") == "full" for d in fresh) else "digest"
     return {"ok": True, "has_results": True, "assessed": len(fresh),
             "elements": len(elements), "complete": len([p for p in pairs if p["complete"]]),
-            "pairs": pairs, "solo": solo, "depth": depth}
+            "pairs": pairs, "solo": solo, "matrix": _combi_matrix(elements, fresh), "depth": depth}
 
 
 @app.post("/api/tabs/{tab_id}/combi-screen")
@@ -3609,7 +3666,8 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
         "full text. Independent of every other score in the app." + note)
     return {"ok": True, "scanned": scanned, "requested": len(docs), "batches": len(batches),
             "failed_batches": len(errors), "elements": len(elements),
-            "complete": len(complete), "pairs": pairs, "solo": solo, "depth": "digest"}
+            "complete": len(complete), "pairs": pairs, "solo": solo,
+            "matrix": _combi_matrix(elements, fresh), "depth": "digest"}
 
 
 @app.post("/api/tabs/{tab_id}/combi-verify")
@@ -3669,7 +3727,7 @@ def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest):
         + note)
     return {"ok": True, "verified": len(chosen) - len(errors), "failed": len(errors),
             "elements": len(elements), "complete": len(complete), "pairs": pairs,
-            "solo": solo, "depth": "full"}
+            "solo": solo, "matrix": _combi_matrix(elements, fresh), "depth": "full"}
 
 
 @app.post("/api/tabs/{tab_id}/combi/motivation")

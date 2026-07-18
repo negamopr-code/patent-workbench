@@ -2292,6 +2292,39 @@ def test_combi_scan_finds_the_pair_that_covers_everything(client, monkeypatch):
                for q in r["pairs"])
 
 
+def test_combi_scan_returns_the_element_document_matrix(client, monkeypatch):
+    """The 🔎 scan (and combi-results) return a MANDATORY element × document grid — the raw
+    material the UI renders instead of the pair/solo lists. Columns are the mandatory
+    elements; rows carry per-element cells plus the three standalone scores, full coverers
+    first."""
+    from patentbench import claude_bridge as cb
+    tid, nums = _combi_tab(client, monkeypatch)
+    def fake_cov(elements, docs, model=None):
+        table = {   # A covers everything alone; B partial on one; C has a real gap
+            "EP4400001": ["YES", "YES", "YES"],
+            "EP4400002": ["YES", "PARTIAL", "YES"],
+            "EP4400003": ["YES", "NO", "YES"],
+        }
+        return {"results": {d["number"]: [
+            {"name": e["name"], "weight": e["weight"],
+             "status": table[d["number"]][i].lower(), "evidence": "e"}
+            for i, e in enumerate(elements)] for d in docs}, "model": "m"}
+    monkeypatch.setattr(cb, "combi_coverage_digests", fake_cov)
+    r = client.post(f"/api/tabs/{tid}/combi-scan", json={}).json()
+    mx = r["matrix"]
+    assert [c["name"] for c in mx["columns"]] == ["packs", "bus", "comms"]   # mandatory → columns
+    rows = mx["rows"]
+    assert len(rows) == 3
+    # Full coverers rank first; only EP4400001/EP4400002 have no 'no', EP4400003 has a gap.
+    assert rows[0]["number"] == "EP4400001" and rows[0]["covers_all"] is True
+    assert rows[0]["cells"] == ["yes", "yes", "yes"]
+    assert rows[-1]["number"] == "EP4400003" and rows[-1]["covers_all"] is False
+    # Each row carries the three standalone scores.
+    for row in rows:
+        assert set(("mand_full", "mand_partial", "mand_total", "mand_rating",
+                    "add_bonus", "score", "depth")) <= set(row)
+
+
 def test_combi_scan_rejects_one_document_subsuming_another(client, monkeypatch):
     """A pair is only a COMBINATION when each side contributes something the other lacks —
     A ⊇ C is one document doing the work, not a combination."""
