@@ -97,6 +97,26 @@ def test_build_prompt_feature_map():
     assert "cite the figure(s)" in p
 
 
+def test_chat_retries_shrunken_prompt_when_too_long(monkeypatch):
+    calls = []
+    def fake_run(prompt, model, extra_args=None, cwd=None, timeout=None):
+        calls.append(len(prompt))
+        if len(calls) == 1:
+            return {"error": "API Error: 400 Prompt is too long"}
+        return {"answer": "ok", "model": model}
+    monkeypatch.setattr(claude_bridge, "_run_claude", fake_run)
+    res = claude_bridge.chat("q", history=[{"role": "user", "text": "x" * 5000}] * 30)
+    assert res["answer"].startswith("ok")
+    assert "auto-trimmed" in res["answer"]           # the trim is disclosed
+    assert len(calls) == 2 and calls[1] < calls[0]   # retried with a smaller prompt
+    # a non-length error is NOT retried
+    calls.clear()
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda *a, **k: calls.append(1) or {"error": "boom"})
+    assert claude_bridge.chat("q")["error"] == "boom"
+    assert len(calls) == 1
+
+
 def test_answer_format_edit_roundtrip(client, tmp_path, monkeypatch):
     monkeypatch.setattr(claude_bridge, "FMT_OVERRIDE_DIR", str(tmp_path / "fmt"))
     r = client.get("/api/answer-format/feature-map").json()

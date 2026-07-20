@@ -607,9 +607,11 @@ def _focus_block(doc: dict) -> str:
     return _document_block(doc, per, clipped=False)
 
 
-def _discussions_body(discussions: list[dict]) -> str:
+def _discussions_body(discussions: list[dict], budget: int | None = None) -> str:
     """Chat exchanges (from db.cross_tab_discussions) rendered as prompt text,
-    budget-capped at MAX_XTALK_CHARS. Shared by the chat block and the ⚖️ run."""
+    budget-capped at MAX_XTALK_CHARS (or the caller's smaller budget). Shared by
+    the chat block and the ⚖️ run."""
+    cap = budget or MAX_XTALK_CHARS
     blocks, used = [], 0
     for d in discussions:
         for ex in d.get("exchanges", []):
@@ -619,14 +621,14 @@ def _discussions_body(discussions: list[dict]) -> str:
                     if ex and ex[0].get("ts") else "?")
             block = (f"[tab «{d.get('tab_name', '?')}» — {d.get('number', '?')} — "
                      f"{when}]\n" + "\n".join(lines))
-            if used + len(block) > MAX_XTALK_CHARS:
+            if used + len(block) > cap:
                 blocks.append(f"(…more discussion of {d.get('number', '?')} in tab "
                               f"«{d.get('tab_name', '?')}» did not fit the budget)")
-                used = MAX_XTALK_CHARS
+                used = cap
                 break
             blocks.append(block)
             used += len(block)
-        if used >= MAX_XTALK_CHARS:
+        if used >= cap:
             break
     return "\n\n".join(blocks)
 
@@ -641,7 +643,15 @@ def build_prompt(question: str, history: list[dict] | None = None,
                  xrefs: list[dict] | None = None,
                  other_docs: list[dict] | None = None,
                  coverage: list[dict] | None = None,
-                 discussions: list[dict] | None = None) -> str:
+                 discussions: list[dict] | None = None,
+                 scale: float = 1.0) -> str:
+    # `scale` < 1 shrinks the big variable budgets (focused full texts, candidate
+    # roster, cross-tab talk, history depth) — chat() retries with it when the
+    # model rejects the assembled prompt as too long. Fixed floors still apply.
+    focus_budget = int(MAX_FOCUS_CHARS * scale)
+    roster_budget = int(MAX_ROSTER_CHARS * scale)
+    docs_budget = int(MAX_DOCS_CHARS * scale)
+    xtalk_budget = int(MAX_XTALK_CHARS * scale)
     parts = [_PREAMBLE]
     if documents or focus or benchmark:
         parts.append(_GROUNDING_INSTRUCTION)
@@ -674,7 +684,7 @@ def build_prompt(question: str, history: list[dict] | None = None,
             "other tabs, reproduce it faithfully from here (say which tab each exchange "
             "comes from) and answer follow-ups against it. These are conversation "
             "records, NOT primary patent text — do not cite [00NN]/claims from them as "
-            "verified:\n\n" + _discussions_body(discussions))
+            "verified:\n\n" + _discussions_body(discussions, budget=xtalk_budget))
     if skills:
         blocks = "\n\n".join(f"[Skill /{s['name']}]\n{s['content']}" for s in skills)
         parts.append(
@@ -689,7 +699,7 @@ def build_prompt(question: str, history: list[dict] | None = None,
     if focus:
         # the FULL primary text of the candidate(s) the user selected — divide the
         # focus budget across them so each is as complete as possible.
-        per = max(MIN_DOC_CHARS, min(MAX_FULLTEXT_CHARS, MAX_FOCUS_CHARS // len(focus)))
+        per = max(MIN_DOC_CHARS, min(MAX_FULLTEXT_CHARS, focus_budget // len(focus)))
         fblocks = "\n\n".join(_document_block(d, per, clipped=False) for d in focus)
         parts.append(
             f"FOCUSED CANDIDATE(S) — the user selected these {len(focus)} document(s); "
@@ -721,7 +731,7 @@ def build_prompt(question: str, history: list[dict] | None = None,
                         "it; SELECT this candidate to load full text for a verbatim quote)", dig)
             return ("", "")
         with_text = [d for d in documents if _summary(d)[1]]
-        per = (min(MAX_DOC_CHARS, max(MIN_DOC_CHARS, MAX_ROSTER_CHARS // len(with_text)))
+        per = (min(MAX_DOC_CHARS, max(MIN_DOC_CHARS, roster_budget // len(with_text)))
                if with_text else 0)
         lines = []
         for d in documents:
@@ -748,8 +758,8 @@ def build_prompt(question: str, history: list[dict] | None = None,
         # the list grows instead of dropping the tail (which is arbitrary —
         # insertion order says nothing about relevance). Only past the hard
         # floor (~330 candidates) does skipping start, loudly.
-        per_doc = min(MAX_DOC_CHARS, max(MIN_DOC_CHARS, MAX_DOCS_CHARS // len(documents)))
-        cap = max(1, MAX_DOCS_CHARS // MIN_DOC_CHARS)
+        per_doc = min(MAX_DOC_CHARS, max(MIN_DOC_CHARS, docs_budget // len(documents)))
+        cap = max(1, docs_budget // MIN_DOC_CHARS)
         included, skipped = documents[:cap], len(documents[cap:])
         blocks = [_document_block(d, per_doc, clipped=True) for d in included]
         note = (f"\n\n(NOTE: {skipped} more document(s) did not fit even at the "
@@ -768,14 +778,14 @@ def build_prompt(question: str, history: list[dict] | None = None,
         # Every OTHER tab's already-fetched documents, as a compact per-tab roster of
         # digests/verdicts — enough to identify (and combine) documents across tabs
         # without reloading. Budget-capped: highest-score first, digests clipped.
-        per = max(400, MAX_ROSTER_CHARS // max(1, len(other_docs)))
+        per = max(400, roster_budget // max(1, len(other_docs)))
         per = min(per, MAX_DOC_CHARS)
         used, included, dropped = 0, [], 0
         for d in other_docs:
             summary = (d.get("verdict") or d.get("digest") or "").strip()
             if not summary:
                 continue
-            if used + min(len(summary), per) > MAX_ROSTER_CHARS:
+            if used + min(len(summary), per) > roster_budget:
                 dropped += 1
                 continue
             tabs = ", ".join(d.get("tabs") or [d.get("tab_name", "?")])
@@ -807,7 +817,8 @@ def build_prompt(question: str, history: list[dict] | None = None,
                 "202 docs, «B» 100 docs, …').")
     if history:
         lines = []
-        for h in history[-MAX_HISTORY:]:
+        keep = max(4, int(MAX_HISTORY * scale))
+        for h in history[-keep:]:
             role = _ROLE.get(h.get("role", ""), "User")
             lines.append(f"{role}: {(h.get('text') or '')[:MAX_TURN_CHARS]}")
         parts.append("CONVERSATION HISTORY of this tab (user questions, NotebookLM "
@@ -867,12 +878,25 @@ def chat(question: str, history: list[dict] | None = None,
     cross-tab documents the text names, pulled in as read-only context; `other_docs`
     = every OTHER tab's fetched docs (cross-tab roster); `coverage` = per-tab counts;
     `discussions` = chat exchanges from OTHER tabs mentioning a named document."""
-    prompt = build_prompt(question, history, documents, sources, skills,
-                          benchmark=benchmark, focus=focus, full=full,
-                          answer_format=answer_format, xrefs=xrefs,
-                          other_docs=other_docs, coverage=coverage,
-                          discussions=discussions)
-    res = _run_claude(prompt, model or CHAT_MODEL)
+    # The variable budgets (focus 600k + roster 240k + …) can together overrun
+    # the model's context window. Rather than pre-guessing tokens, retry the
+    # rejected prompt with progressively shrunken budgets — the floors keep the
+    # focused text and question intact, so the answer degrades gracefully
+    # instead of failing with "Prompt is too long".
+    res: dict = {}
+    for scale in (1.0, 0.5, 0.25):
+        prompt = build_prompt(question, history, documents, sources, skills,
+                              benchmark=benchmark, focus=focus, full=full,
+                              answer_format=answer_format, xrefs=xrefs,
+                              other_docs=other_docs, coverage=coverage,
+                              discussions=discussions, scale=scale)
+        res = _run_claude(prompt, model or CHAT_MODEL)
+        if "prompt is too long" not in (res.get("error") or "").lower():
+            if scale < 1.0 and res.get("answer"):
+                res["answer"] += ("\n\n*(context auto-trimmed to fit the model's "
+                                  "window — supporting candidate/discussion text "
+                                  "was shortened for this answer)*")
+            break
     if "error" in res:
         return res
     res["answer"] = _strip_cjk(res["answer"])
