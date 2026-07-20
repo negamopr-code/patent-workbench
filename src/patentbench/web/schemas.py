@@ -297,6 +297,12 @@ class ReconcileRequest(BaseModel):
     min_delta: float = 2.0             # only candidates whose two scores differ by >= this
 
 
+class AnswerFormatEdit(BaseModel):
+    """✎ Edit a 📐 answer-format preset's instruction text in place (no document
+    upload). Empty/whitespace-only text = reset to the built-in default."""
+    text: str = Field(default="", max_length=40000)
+
+
 class LessonCreate(BaseModel):
     skill: str
     lesson: str = Field(min_length=1, max_length=8000)

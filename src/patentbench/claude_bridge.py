@@ -279,16 +279,25 @@ _FMT_FEATURE_MAP = (
     "TYPOGRAPHY (markdown, REQUIRED): put the CLAIM's own text in **bold** and "
     "every disclosure parenthetical in *italic*, so the reader instantly tells "
     "claim-language from your mapping. Shape:\n"
-    "  **A first branch … electrically connected to a first port** *(storage→"
-    "inverter 84 path via switch 59 — [0021], Fig.1)*\n"
+    "  **A first branch … electrically connected to a first port** *(path from "
+    "the storage to inverter 84 via switch 59 — [0021], Fig.1)*\n"
+    "PLAIN WORDS, NO SYMBOL SHORTHAND: never express a relation with signs like "
+    "'→', '=', '≈', '⇒' — spell it out in words ('and', 'to', 'via', "
+    "'acting as', 'which is', 'connected to'). Write 'processor 702 and "
+    "converter control unit 726', NOT 'processor 702 → converter control unit "
+    "726'; write 'power converter 709, which is a bidirectional DC converter', "
+    "NOT 'power converter 709 = bidirectional DC converter'.\n"
     "BE CONCISE — this is the main thing the user wants: each parenthetical is "
     "ONE short, fact-based clause that conveys the LOGIC of the match — name the "
-    "part, give its reference numeral(s) and locators ([00NN], Fig.N), and a few "
+    "part, give its reference numeral(s) and locators, and a few "
     "words or a brief \"quote\" ONLY if they carry the argument. No "
     "multi-sentence parentheticals, no restating the claim inside them, no "
     "padding. Reference numerals (e.g. '59', 'inverter 84') are REQUIRED and "
     "this format OVERRIDES the GROUNDING ban on them (they tie each element to "
-    "the drawings).\n"
+    "the drawings). Every parenthetical MUST also cite the figure(s) where its "
+    "numerals appear (Fig.N), alongside the paragraph locator [00NN] — e.g. "
+    "*(… — [0034], Fig.7)*; omit Fig.N only when the numeral truly appears in "
+    "no drawing.\n"
     "WHICH DOCUMENT: map against the FOCUSED candidate (the one whose full text "
     "is loaded); if the user names a specific document, use that. Open with one "
     "short line, e.g. 'Mapping against EP3087655:'. State a partial match in a "
@@ -323,6 +332,34 @@ ANSWER_FORMATS = [
      "instruction": _FMT_FEATURE_MAP},
 ]
 _FORMAT_BY_KEY = {f["key"]: f for f in ANSWER_FORMATS}
+
+# User-edited overrides of the instructions above, one {key}.txt per format in
+# the data volume (written by the ✎ editor next to the 📐 picker, PUT
+# /api/answer-format/{key}). An override replaces the built-in text wholesale;
+# deleting the file falls back to the default.
+FMT_OVERRIDE_DIR = os.environ.get("PB_FMT_DIR", "/data/answer_formats")
+
+
+def format_override(key: str) -> str | None:
+    """The user's edited instruction for this format key, or None."""
+    if not key or key not in _FORMAT_BY_KEY:
+        return None
+    try:
+        with open(os.path.join(FMT_OVERRIDE_DIR, f"{key}.txt"),
+                  encoding="utf-8") as fh:
+            text = fh.read().strip()
+        return text or None
+    except OSError:
+        return None
+
+
+def format_instruction(key: str) -> str | None:
+    """The ACTIVE instruction for a format key: the user's override if one is
+    saved, else the built-in default (None for the default answer style)."""
+    f = _FORMAT_BY_KEY.get(key or "")
+    if not f:
+        return None
+    return format_override(key) or f.get("instruction")
 
 
 def _style_instruction(full: bool) -> str:
@@ -785,9 +822,9 @@ def build_prompt(question: str, history: list[dict] | None = None,
             + "\n\nCompile these with the stored documents into one full picture; "
             "merge what agrees, flag contradictions and gaps, attribute key claims "
             "to their notebook. Do not invent anything beyond the provided material.")
-    fmt = _FORMAT_BY_KEY.get(answer_format or "")
-    if fmt and fmt.get("instruction"):
-        parts.append(fmt["instruction"])
+    instr = format_instruction(answer_format)
+    if instr:
+        parts.append(instr)
     else:
         parts.append(_style_instruction(full))
     parts.append("USER QUESTION:\n" + question)

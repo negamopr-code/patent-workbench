@@ -2312,6 +2312,49 @@ for (const kind of Object.keys(PSA_UI)) {
   };
 }
 
+/* ---------- ✎ answer-format instruction editor ----------
+   Edits the selected 📐 preset's guidelines IN PLACE (PUT /api/answer-format/
+   {key}) — stored in the data volume, shared by all tabs; no document upload. */
+let fmtEditing = null;   // {key, default} of the format open in the modal
+
+$('answer-format-edit').onclick = async () => {
+  const key = $('answer-format').value;
+  if (!key) {
+    alert('Pick a format preset other than "Default answer" first — the ✎ editor '
+      + 'edits that preset\'s instruction text.');
+    return;
+  }
+  const r = await api(`/api/answer-format/${key}`);
+  if (r.error) { alert(r.error); return; }
+  fmtEditing = { key, default: r.default };
+  $('fmt-modal-title').textContent = `✎ ${r.label}`;
+  $('fmt-modal-sub').textContent = r.overridden
+    ? 'Edited version (replaces the built-in guidelines; ↺ resets back).'
+    : 'Built-in guidelines — edit and Save to override them for all tabs.';
+  $('fmt-modal-text').value = r.text;
+  $('fmt-modal').classList.remove('hidden');
+};
+
+$('fmt-modal-save').onclick = async () => {
+  if (!fmtEditing) return;
+  const r = await api(`/api/answer-format/${fmtEditing.key}`,
+    { method: 'PUT', body: JSON.stringify({ text: $('fmt-modal-text').value }) });
+  if (r.error) { alert(r.error); return; }
+  fmtEditing = null;
+  $('fmt-modal').classList.add('hidden');
+};
+$('fmt-modal-reset').onclick = () => {
+  // only restores the textarea — nothing is persisted until Save
+  if (fmtEditing) $('fmt-modal-text').value = fmtEditing.default;
+};
+$('fmt-modal-cancel').onclick = () => {
+  fmtEditing = null;
+  $('fmt-modal').classList.add('hidden');
+};
+$('fmt-modal').onclick = e => {
+  if (e.target === $('fmt-modal')) { fmtEditing = null; $('fmt-modal').classList.add('hidden'); }
+};
+
 async function runPsa(stretch) {
   if (!activeTab) return;
   if (!psaDocs.method) {

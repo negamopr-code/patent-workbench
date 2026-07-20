@@ -438,6 +438,11 @@ textarea, select, input[type="text"] {
 .nb-row label { flex: 1; min-width: 0; }
 #nb-create-status, #nb-add-status { margin-top: 4px; }
 #lesson-modal textarea, #lesson-modal select { margin-top: 8px; }
+#fmt-modal textarea {
+  width: 100%; min-height: 46vh; margin-top: 8px; resize: vertical;
+  font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.45;
+}
+#fmt-modal .row.right { margin-top: 10px; }
 
 /* Small screens: the grid squeezed the chat into a short bottom row. Stack
    everything in one scrolling column and give the chat the dominant height so

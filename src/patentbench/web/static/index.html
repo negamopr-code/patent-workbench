@@ -170,6 +170,7 @@
         <div class="ask-pickers">
           <label class="model-pick answer-pick" title="Model that ANSWERS your chat questions (and compiles deep-compare rankings). The document-reading / OCR model lives on the 🎯 Benchmark and 📚 Candidates panes.">💬 <select id="model"></select></label>
           <label class="model-pick answer-pick" title="How Claude should shape the answer. Default = concise (or 📝 Full). Other presets impose a structure, e.g. claims grouped by focus → what the reference discloses, with [paragraph]/claim/figure citations.">📐 <select id="answer-format"></select></label>
+          <button id="answer-format-edit" class="btn small" title="✎ View/edit the selected format's instruction text in place — the edited version is stored permanently, shared by ALL tabs, and replaces the built-in guidelines (no document upload needed). Pick a preset other than Default first.">✎</button>
         </div>
         <button id="best-match" class="btn small" title="🏆 Deep-read THIS tab's candidates in batches of 50 (most-promising first) vs the benchmark — document AND features together — then assess the 2-document combination over everything read so far. Stops after each batch; re-launch for the next 50. Does NOT pull from other tabs.">🏆 Best match</button>
         <button id="cross-tab" class="btn small" title="🌐 Pull in candidates from OTHER tabs that cover ≥1 of this benchmark's features (digest pre-check), so they join this tab's ranking. Opt-in — Best match no longer does this automatically.">🌐 Cross-tab pull</button>
@@ -275,6 +276,20 @@
       <button id="consolidate-only" class="btn" title="Copy the documents into ONE NotebookLM notebook and STOP — no shortlist, no debate, no NLM query. You then click 📓 NLM shortlist / ⚖️ Debate yourself when ready.">📥 Put in NLM only (no query)</button>
       <button id="consolidate-go" class="btn primary">Consolidate &amp; pick best</button>
       <button id="consolidate-cancel" class="btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ✎ Answer-format instruction editor: edit a 📐 preset's guidelines in place -->
+<div id="fmt-modal" class="modal hidden">
+  <div class="modal-box wide">
+    <h3 id="fmt-modal-title">✎ Format instructions</h3>
+    <div id="fmt-modal-sub" class="muted"></div>
+    <textarea id="fmt-modal-text" spellcheck="false"></textarea>
+    <div class="row right">
+      <button id="fmt-modal-reset" class="btn small" title="Discard the edited version and go back to the built-in guidelines">↺ Reset to built-in</button>
+      <button id="fmt-modal-cancel" class="btn">Cancel</button>
+      <button id="fmt-modal-save" class="btn primary">Save</button>
     </div>
   </div>
 </div>

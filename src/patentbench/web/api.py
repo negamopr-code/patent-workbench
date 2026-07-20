@@ -112,6 +112,46 @@ def skills():
                                for f in claude_bridge.ANSWER_FORMATS]}
 
 
+# ---------- ✎ answer-format instructions (editable in place, no upload) ----------
+
+def _answer_format_or_404(key: str) -> dict:
+    f = claude_bridge._FORMAT_BY_KEY.get(key)
+    if not f or not f.get("instruction"):
+        raise HTTPException(404, f"'{key}' is not an editable answer format")
+    return f
+
+
+@app.get("/api/answer-format/{key}")
+def answer_format_get(key: str):
+    """The ACTIVE instruction text of a 📐 preset (user override if saved, else
+    the built-in default) — what the ✎ editor shows."""
+    f = _answer_format_or_404(key)
+    override = claude_bridge.format_override(key)
+    return {"key": key, "label": f["label"],
+            "text": override or f["instruction"],
+            "default": f["instruction"], "overridden": bool(override)}
+
+
+@app.put("/api/answer-format/{key}")
+def answer_format_put(key: str, body: schemas.AnswerFormatEdit):
+    """Save an edited instruction for this preset (kept in the data volume,
+    shared by ALL tabs). Empty text — or text identical to the built-in —
+    resets back to the default."""
+    f = _answer_format_or_404(key)
+    text = body.text.strip()
+    path = os.path.join(claude_bridge.FMT_OVERRIDE_DIR, f"{key}.txt")
+    if not text or text == f["instruction"].strip():
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    else:
+        os.makedirs(claude_bridge.FMT_OVERRIDE_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    return answer_format_get(key)
+
+
 # ---------- tabs ----------
 
 @app.get("/api/tabs")

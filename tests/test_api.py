@@ -91,6 +91,30 @@ def test_build_prompt_feature_map():
     p = claude_bridge.build_prompt("A power supply circuit…", answer_format="feature-map")
     assert "INTERLINEAR FEATURE MAP" in p
     assert "ANSWER STYLE" not in p                      # preset replaces the style line
+    # guideline: relations in words, not signs; figures cited alongside [00NN]
+    assert "PLAIN WORDS, NO SYMBOL SHORTHAND" in p
+    assert "'→'" in p and "'='" in p
+    assert "cite the figure(s)" in p
+
+
+def test_answer_format_edit_roundtrip(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(claude_bridge, "FMT_OVERRIDE_DIR", str(tmp_path / "fmt"))
+    r = client.get("/api/answer-format/feature-map").json()
+    assert r["overridden"] is False
+    assert r["text"] == r["default"] and "INTERLINEAR FEATURE MAP" in r["text"]
+    # save an edited version → it replaces the built-in in the prompt
+    r = client.put("/api/answer-format/feature-map",
+                   json={"text": "MY CUSTOM MAP RULES"}).json()
+    assert r["overridden"] is True and r["text"] == "MY CUSTOM MAP RULES"
+    p = claude_bridge.build_prompt("q", answer_format="feature-map")
+    assert "MY CUSTOM MAP RULES" in p and "INTERLINEAR FEATURE MAP" not in p
+    # empty text resets back to the built-in
+    r = client.put("/api/answer-format/feature-map", json={"text": "  "}).json()
+    assert r["overridden"] is False
+    assert "INTERLINEAR FEATURE MAP" in claude_bridge.build_prompt(
+        "q", answer_format="feature-map")
+    # the default style and unknown keys are not editable
+    assert client.get("/api/answer-format/bogus").status_code == 404
 
 
 def test_tab_documents_flow(client):
