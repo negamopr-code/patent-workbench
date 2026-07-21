@@ -987,7 +987,8 @@ def _mirror_benchmark_if_auto(tab_id: int) -> None:
             _add_benchmark_to_notebook(tab_id)
 
 
-def _process_documents(doc_ids: list[int], model: str | None = None) -> None:
+def _process_documents(doc_ids: list[int], model: str | None = None,
+                       read_figures: bool | None = None) -> None:
     """Background pipeline for a batch: fetch each (throttled by the fetcher's
     own gap), digest all fetched docs concurrently, then mirror them into the
     connected NotebookLM notebook (auto-creating it on first use) — so the notebook
@@ -995,8 +996,10 @@ def _process_documents(doc_ids: list[int], model: str | None = None) -> None:
     for doc_id in doc_ids:
         _fetch_into_db(doc_id)
     # Caption drawings BEFORE the digest so the digest (and every later read) is
-    # figure-aware. Captioning is vision-per-sheet and slow, so it's gated by env.
-    if AUTO_FIGURES:
+    # figure-aware. Captioning is vision-per-sheet — a claude session per sheet, the
+    # single most expensive intake step — so it's opt-in per add (UI checkbox),
+    # falling back to the deploy-level PB_AUTO_FIGURES default.
+    if AUTO_FIGURES if read_figures is None else read_figures:
         with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
             list(ex.map(lambda i: _process_figures(i, model), doc_ids))
     with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
@@ -1032,7 +1035,8 @@ def documents_add(tab_id: int, body: schemas.DocumentsAdd, bg: BackgroundTasks):
         else:
             to_fetch.append(doc_id)
     if to_fetch:
-        bg.add_task(_process_documents, to_fetch, _read_model(body.reading_model))
+        bg.add_task(_process_documents, to_fetch, _read_model(body.reading_model),
+                    body.read_figures)
     res["reusable"] = reusable
     return res
 

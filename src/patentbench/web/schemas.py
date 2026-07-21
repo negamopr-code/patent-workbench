@@ -19,6 +19,7 @@ class DocumentsAdd(BaseModel):
     numbers: list[str] | None = None   # pre-confirmed canonical numbers (upload flow)
     source: str = "manual"
     reading_model: str | None = None   # model for the full-text digest; None = cheapest
+    read_figures: bool | None = None   # caption drawing sheets at intake; None = deploy default
 
 
 class DocumentNumberEdit(BaseModel):

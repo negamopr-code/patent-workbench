@@ -72,6 +72,12 @@ function readModelValue() {
   return s ? s.value : (skillsMeta.default_read_model || 'claude-sonnet-4-6');
 }
 function setReadModel(v) { for (const s of readSelects()) s.value = v; }
+
+/* ---------- 🖼 read-figures-on-intake toggle (sticky across sessions) ---------- */
+function intakeFigs() { return $('in-figs').checked; }
+$('in-figs').checked = localStorage.getItem('pb_intake_figs') === '1';
+$('in-figs').onchange = () =>
+  localStorage.setItem('pb_intake_figs', $('in-figs').checked ? '1' : '0');
 // Reading-model strength: LOWER index in the server's MODELS list = stronger.
 // Unknown / not-yet-read → weakest, so an upgrade re-surfaces it as "still to read".
 function modelRank(m) {
@@ -2041,7 +2047,8 @@ $('in-add').onclick = async () => {
   const text = $('in-text').value.trim();
   if (!text) return;
   const res = await api(`/api/tabs/${activeTab}/documents`, {
-    method: 'POST', body: JSON.stringify({ text, reading_model: readModelValue() }) });
+    method: 'POST', body: JSON.stringify({ text, reading_model: readModelValue(),
+                                           read_figures: intakeFigs() }) });
   if (res.error) { $('upload-status').textContent = res.error; return; }
   $('in-text').value = '';
   $('upload-status').textContent =
@@ -2158,7 +2165,8 @@ $('cand-add').onclick = async () => {
   if (!nums.length) return;
   const res = await api(`/api/tabs/${activeTab}/documents`, {
     method: 'POST', body: JSON.stringify({ numbers: nums, source: 'image',
-                                           reading_model: readModelValue() }) });
+                                           reading_model: readModelValue(),
+                                           read_figures: intakeFigs() }) });
   $('candidates').classList.add('hidden');
   $('upload-status').textContent = res.error || `Added ${res.inserted.length} document(s).`;
   await maybePromptReuse(res);
