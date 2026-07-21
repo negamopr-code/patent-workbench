@@ -2509,6 +2509,7 @@ async function pollRead() {
       : `✓ assessment stopped — see chat (▶️ Continue assesses any left)`;
     refreshDocs();
     reloadChat();
+    rehydrateCombi(tabAt);   // fresh reads re-rank the 🔎 matrix (anchor may change) — redraw it
     if (bestMatch) afterBestMatchBatch();      // 🏆 chain: combination assessment + next-50 offer
   } else {
     if (pauseBtn) pauseBtn.classList.add('hidden');
