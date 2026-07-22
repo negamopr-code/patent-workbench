@@ -27,6 +27,12 @@ UPLOADS = os.environ.get("PB_UPLOADS", "/data/uploads")
 FIGURES = os.environ.get("PB_FIGURES", "/data/figures")
 PSA_DIR = os.environ.get("PB_PSA_DIR", "/data/psa")   # ⚖️ problem-solution methodology
 AUTO_FIGURES = os.environ.get("PB_AUTO_FIGURES", "1") not in ("0", "", "false", "no")
+# After a batch deep read finishes, the 🧩 motivation-to-combine judge runs on the
+# coverage matrix's anchor+partner pairs AUTOMATICALLY (only never-judged pairs —
+# stored verdicts are never re-billed). The read already paid for the per-element
+# coverage the pairs are computed from, so this is the one cheap step that turns it
+# into a finished combination analysis.
+AUTO_COMBI = os.environ.get("PB_AUTO_COMBI", "1") not in ("0", "", "false", "no")
 # Digest-on-intake is OFF by default: adding numbers must cost ZERO model tokens
 # (fetch is a plain scrape; the finalists get a FULL advanced-model read later
 # anyway). Digests for the cheap bulk tools are generated on demand via
@@ -4024,6 +4030,90 @@ def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest):
             "solo": solo, "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": "full"}
 
 
+def _judge_combi_pairs(tab_id: int, bm: dict, pairs: list[dict], keys: list[tuple],
+                       model: str | None = None, mode: str = "must") -> tuple[dict, list]:
+    """Bulk motivation-to-combine judge shared by the ⚖️ button endpoint and the
+    post-deep-read auto run. BATCHED so every pair is judged in one pass even past a
+    single call's comfortable size (set-cover can surface many partners) — a blank
+    row must never be mistaken for "not combinable"; it means "not yet judged".
+    Persists each verdict; returns ({'lo-hi': verdict}, [batch errors])."""
+    out, errors = {}, []
+    lock = threading.Lock()
+
+    def one(start: int) -> None:
+        chunk = pairs[start:start + COMBI_MOTIV_BATCH]
+        chunk_keys = keys[start:start + COMBI_MOTIV_BATCH]
+        res = claude_bridge.combi_motivation(bm, chunk, model=model, mode=mode)
+        if "error" in res:
+            with lock:
+                errors.append(res["error"])
+            return
+        results = res.get("results") or {}
+        for i, (a_id, b_id) in enumerate(chunk_keys, 1):
+            v = results.get(str(i))
+            if not v:
+                continue
+            db.set_combi_motivation(tab_id, a_id, b_id, v["combinable"], v.get("reason") or "",
+                                    res.get("model"))
+            lo, hi = sorted((a_id, b_id))
+            with lock:
+                out[f"{lo}-{hi}"] = {"combinable": v["combinable"], "reason": v.get("reason") or "",
+                                     "model": res.get("model")}
+
+    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+        list(ex.map(one, range(0, len(pairs), COMBI_MOTIV_BATCH)))
+    return out, errors
+
+
+def _auto_judge_combinability(tab_id: int, bm: dict | None) -> dict:
+    """🧩 Run after a batch deep read: the read just paid for fresh per-element
+    coverage, so the matrix's anchor+partner pairs are derivable for free — judge
+    their motivation-to-combine right away instead of waiting for the ⚖️ click.
+    INCREMENTAL like everything else: pairs with a stored verdict are skipped, so a
+    re-read or the next batch only bills the genuinely new pairs."""
+    els = _combi_elements(bm)
+    if not els:
+        return {"judged": 0}
+    docs = _drop_benchmark([d for d in db.list_documents(tab_id, full=True)
+                            if d["status"] == "fetched"], bm)
+    matrix = _combi_matrix(els, docs)
+    rows = matrix.get("rows") or []
+    anchor = rows[0] if rows else None
+    partners = [r for r in rows[1:] if r.get("fills")]
+    if not anchor or not partners:
+        return {"judged": 0}                 # solo coverer / nothing assessed → no pairs
+    covered = [c["name"] for c, s in zip(matrix.get("columns") or [],
+                                         anchor.get("cells") or [])
+               if s in ("yes", "partial")]
+    existing = db.get_combi_motivations(tab_id)
+    by_id = {d["id"]: d for d in docs}
+    pairs, keys = [], []
+    for p in partners:
+        lo, hi = sorted((anchor["id"], p["id"]))
+        if f"{lo}-{hi}" in existing:
+            continue
+        a, b = by_id.get(anchor["id"]), by_id.get(p["id"])
+        if not a or not b:
+            continue
+        pairs.append({"a": a, "b": b,
+                      "a_features": covered or ["(covers the mandatory elements)"],
+                      "b_features": p["fills"]})
+        keys.append((anchor["id"], p["id"]))
+    if not pairs:
+        return {"judged": 0}
+    mode = "additional" if matrix.get("mode") == "additional" else "must"
+    out, errors = _judge_combi_pairs(tab_id, bm, pairs, keys, model=None, mode=mode)
+    combinable = sum(1 for v in out.values() if v["combinable"])
+    if out or errors:
+        db.append_message(tab_id, "s",
+            f"🧩 Combinability auto-judged after the read: {len(out)} new anchor pair(s) — "
+            f"{combinable} genuinely combinable, {len(out) - combinable} not; already-judged "
+            "pairs were skipped, verdicts are in the 🔎 coverage matrix."
+            + (f" ⚠ {len(errors)} batch(es) failed — ⚖️ re-judge in the matrix retries them."
+               if errors else ""))
+    return {"judged": len(out), "combinable": combinable, "errors": len(errors)}
+
+
 @app.post("/api/tabs/{tab_id}/combi/motivation")
 def combi_motivation_ep(tab_id: int, body: schemas.CombiMotivationRequest):
     """🧩 COMBI. For each candidate PAIR the UI found (two docs that TOGETHER cover all the
@@ -4048,36 +4138,9 @@ def combi_motivation_ep(tab_id: int, body: schemas.CombiMotivationRequest):
         keys.append((p.a_id, p.b_id))
     if not pairs:
         raise HTTPException(400, "no valid fetched document pairs to judge")
-    # BATCH the bulk pass so every partner is judged in ONE click even past a single call's
-    # comfortable size (set-cover can surface many partners) — a blank row must never be
-    # mistaken for "not combinable"; it means "not yet judged".
     model = _read_model(body.model)
-    out, errors = {}, []
-    lock = threading.Lock()
-
-    def one(start: int) -> None:
-        chunk = pairs[start:start + COMBI_MOTIV_BATCH]
-        chunk_keys = keys[start:start + COMBI_MOTIV_BATCH]
-        res = claude_bridge.combi_motivation(bm, chunk, model=model,
-                                             mode=body.mode if body.mode in ("must", "additional") else "must")
-        if "error" in res:
-            with lock:
-                errors.append(res["error"])
-            return
-        results = res.get("results") or {}
-        for i, (a_id, b_id) in enumerate(chunk_keys, 1):
-            v = results.get(str(i))
-            if not v:
-                continue
-            db.set_combi_motivation(tab_id, a_id, b_id, v["combinable"], v.get("reason") or "",
-                                    res.get("model"))
-            lo, hi = sorted((a_id, b_id))
-            with lock:
-                out[f"{lo}-{hi}"] = {"combinable": v["combinable"], "reason": v.get("reason") or "",
-                                     "model": res.get("model")}
-
-    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
-        list(ex.map(one, range(0, len(pairs), COMBI_MOTIV_BATCH)))
+    out, errors = _judge_combi_pairs(tab_id, bm, pairs, keys, model=model,
+                                     mode=body.mode if body.mode in ("must", "additional") else "must")
     if not out and errors:
         raise HTTPException(400, f"combi motivation failed: {errors[0]}")
     combinable = sum(1 for v in out.values() if v["combinable"])
@@ -4542,6 +4605,16 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                                   f"Lesson auto-appended to skill /{les['skill']} (references/lessons.md)."
                                   if saved.get("ok") else
                                   f"Lesson for /{les['skill']} NOT saved: {saved.get('error')}\n\n{les['lesson']}")
+            # 🧩 The batch is read and ranked → finish the combination analysis too:
+            # judge the fresh matrix pairs' combinability without waiting for the ⚖️
+            # click. Skipped when the reduce failed (same quota would sink it) and
+            # NEVER allowed to kill the read job it rides on.
+            if AUTO_COMBI and bm_features:
+                try:
+                    _auto_judge_combinability(tab_id, bm)
+                except Exception as e:
+                    db.append_message(tab_id, "s", f"🧩 combinability auto-judge failed: {e} "
+                                                   "— ⚖️ Judge combinability in the matrix runs it manually.")
     finally:
         for p in (lock, _claude_read_pause_path(tab_id)):
             try:

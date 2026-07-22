@@ -2193,6 +2193,43 @@ def test_combi_motivation_additional_mode_uses_anchor_framing(client, monkeypatc
     assert "already" in cb._COMBI_MOTIV_HEAD["additional"].lower()
 
 
+def test_deep_read_auto_judges_combinability(client, monkeypatch):
+    """After a batch deep read the 🧩 motivation judge runs by itself on the matrix's
+    anchor+partner pairs — and a second read never re-bills the stored verdicts."""
+    judged_batches = []
+    monkeypatch.setattr(claude_bridge, "combi_motivation",
+                        lambda bm, pairs, model=None, mode="must":
+                        judged_batches.append(list(pairs)) or
+                        {"results": {str(i): {"combinable": True, "reason": "same field"}
+                                     for i in range(1, len(pairs) + 1)},
+                         "model": "m"})
+    # deep read yields per-element coverage: US1111111 covers f1 only (anchor),
+    # US2222222 covers f2 only (the gap-filling partner)
+    def fake_map(bm_text, d, model=None, features=None):
+        if d["number"] == "US1111111":
+            return {"verdict": "MATCH SCORE: 8\nFEATURE 1: YES — a\nFEATURE 2: NO"}
+        return {"verdict": "MATCH SCORE: 4\nFEATURE 1: NO\nFEATURE 2: YES — b"}
+    monkeypatch.setattr(claude_bridge, "deep_map", fake_map)
+    tab = client.post("/api/tabs", json={"name": "AutoCombi"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "f1", "weight": 3}, {"name": "f2", "weight": 2}],
+                      "title": "f1+f2"})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "US1111111 US2222222"})
+    assert client.post(f"/api/tabs/{tid}/deep-compare", json={}).json()["started"]
+    _wait_read(client, tid)
+    st = client.get(f"/api/tabs/{tid}/state").json()
+    assert len(st["combi_motivations"]) == 1                 # the anchor+partner pair
+    assert next(iter(st["combi_motivations"].values()))["combinable"] is True
+    assert any(m["role"] == "s" and "Combinability auto-judged" in m["text"]
+               for m in st["messages"])
+    # second read: coverage unchanged → the pair is already judged → NO new billing
+    n_before = len(judged_batches)
+    assert client.post(f"/api/tabs/{tid}/deep-compare", json={}).json()["started"]
+    _wait_read(client, tid)
+    assert len(judged_batches) == n_before
+
+
 def test_combi_motivation_requires_feature_benchmark(client):
     tab = client.post("/api/tabs", json={"name": "CombiDoc"}).json()
     tid = tab["id"]

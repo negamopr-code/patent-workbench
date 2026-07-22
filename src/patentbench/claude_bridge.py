@@ -1712,15 +1712,23 @@ def combi_motivation(benchmark: dict, pairs: list[dict], model: str | None = Non
     if not pairs:
         return {"results": {}}
     bm_block = _benchmark_block(benchmark)
+
+    # Digests are opt-in at intake now, so a full-read document may carry none —
+    # its stored deep-read assessment (full-text fidelity) or abstract is the next
+    # best summary; only a document with neither degrades to the empty marker.
+    def _ref_summary(d: dict) -> str:
+        return (d.get("digest") or d.get("verdict") or d.get("abstract")
+                or "(no digest available)")
+
     blocks = []
     for i, p in enumerate(pairs, 1):
         a, b = p["a"], p["b"]
         blocks.append(
             f"=== {i} ===\n"
             f"REFERENCE A = {a['number']} — supplies: {', '.join(p.get('a_features') or []) or '—'}\n"
-            f"{(a.get('digest') or '(no digest available)')[:3000]}\n\n"
+            f"{_ref_summary(a)[:3000]}\n\n"
             f"REFERENCE B = {b['number']} — supplies: {', '.join(p.get('b_features') or []) or '—'}\n"
-            f"{(b.get('digest') or '(no digest available)')[:3000]}")
+            f"{_ref_summary(b)[:3000]}")
     head = _COMBI_MOTIV_HEAD.get(mode, _COMBI_MOTIV_HEAD["must"])
     prompt = COMBI_MOTIVATION_PROMPT.format(head=head, benchmark="BENCHMARK:\n\n" + bm_block,
                                             pairs="\n\n".join(blocks))
