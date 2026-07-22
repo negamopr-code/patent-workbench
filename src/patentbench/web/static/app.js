@@ -2333,6 +2333,19 @@ for (const kind of Object.keys(PSA_UI)) {
    {key}) — stored in the data volume, shared by all tabs; no document upload. */
 let fmtEditing = null;   // {key, default} of the format open in the modal
 
+/* One modal, several persistent text spaces: answer-format presets, the global
+   🖋 house style, and the ⚖️ method/format documents — all GET/PUT the same
+   {text, default, overridden} shape, so the editor only needs a URL. */
+function openTextEditor(url, title, r, after) {
+  fmtEditing = { url, default: r.default || '', after };
+  $('fmt-modal-title').textContent = title;
+  $('fmt-modal-sub').textContent = r.overridden
+    ? 'Edited version (replaces the built-in guidelines; ↺ resets back).'
+    : 'Built-in guidelines — edit and Save to override them for all tabs.';
+  $('fmt-modal-text').value = r.text;
+  $('fmt-modal').classList.remove('hidden');
+}
+
 $('answer-format-edit').onclick = async () => {
   const key = $('answer-format').value;
   if (!key) {
@@ -2342,20 +2355,35 @@ $('answer-format-edit').onclick = async () => {
   }
   const r = await api(`/api/answer-format/${key}`);
   if (r.error) { alert(r.error); return; }
-  fmtEditing = { key, default: r.default };
-  $('fmt-modal-title').textContent = `✎ ${r.label}`;
-  $('fmt-modal-sub').textContent = r.overridden
-    ? 'Edited version (replaces the built-in guidelines; ↺ resets back).'
-    : 'Built-in guidelines — edit and Save to override them for all tabs.';
-  $('fmt-modal-text').value = r.text;
-  $('fmt-modal').classList.remove('hidden');
+  openTextEditor(`/api/answer-format/${key}`, `✎ ${r.label}`, r);
+};
+
+$('house-style-btn').onclick = async () => {
+  const r = await api('/api/house-style');
+  if (r.error) { alert(r.error); return; }
+  openTextEditor('/api/house-style', '🖋 House style — applied to EVERY answer, all tabs', r);
+};
+
+$('psa-method-edit').onclick = async () => {
+  const r = await api('/api/psa/method/text');
+  if (r.error) { alert(r.error); return; }
+  openTextEditor('/api/psa/method/text', '✎ ⚖️ Methodology (the steps, followed verbatim)',
+                 r, () => refreshPsaDoc('method'));
+};
+
+$('psa-format-edit').onclick = async () => {
+  const r = await api('/api/psa/format/text');
+  if (r.error) { alert(r.error); return; }
+  openTextEditor('/api/psa/format/text', '✎ ⚖️ Output format (6-step problem-solution chain)',
+                 r, () => refreshPsaDoc('format'));
 };
 
 $('fmt-modal-save').onclick = async () => {
   if (!fmtEditing) return;
-  const r = await api(`/api/answer-format/${fmtEditing.key}`,
+  const r = await api(fmtEditing.url,
     { method: 'PUT', body: JSON.stringify({ text: $('fmt-modal-text').value }) });
   if (r.error) { alert(r.error); return; }
+  if (fmtEditing.after) fmtEditing.after();
   fmtEditing = null;
   $('fmt-modal').classList.add('hidden');
 };

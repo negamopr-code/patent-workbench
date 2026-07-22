@@ -339,6 +339,88 @@ _FORMAT_BY_KEY = {f["key"]: f for f in ANSWER_FORMATS}
 # deleting the file falls back to the default.
 FMT_OVERRIDE_DIR = os.environ.get("PB_FMT_DIR", "/data/answer_formats")
 
+# 🖋 HOUSE STYLE — the ONE global formatting space, injected into EVERY
+# user-facing answer (chat, deep-compare ranking, ⚖️ problem-solution). Built
+# from the user's repeated chat corrections (2026-07-22: "FIX THIS once for
+# all") so those rules never have to be re-typed per conversation. Editable in
+# the UI (🖋 button); the override file replaces this default wholesale.
+# The text itself must OBEY its own rules: no arrows, no em-dashes.
+HOUSE_STYLE_DEFAULT = """\
+HOUSE STYLE (BINDING for every answer in this workbench):
+
+1. One sentence per line for each argument step. Every sentence that states a \
+disclosure carries the document reference and the exact citation in place: \
+paragraph [00NN] or claim number, plus the figure (Fig. N) whenever one exists.
+2. Plain words only. Never use symbol shorthand in prose: no arrows, no \
+em-dashes, no equals signs. Spell each relation out with words such as "and", \
+"to", "via", "which is", "that is".
+3. No colloquial jargon (for example "taps off"). Use simple technical wording \
+that is easy to understand and to follow.
+4. Argue affirmatively. State what the document DISCLOSES and why that \
+disclosure can be read into the formulated feature. Do not label a reading as \
+a stretch and do not emphasize doubt. Omission is allowed; misstatement is \
+not: every sentence must stay verifiable against the cited text.
+5. ADDITIONAL features are always treated, never dropped. Group related \
+additional features, then assign every group to exactly one bin, with reasons \
+and citations:
+   (a) disclosed by the combination of documents: read the cited disclosure \
+into the feature where reasonably possible;
+   (b) a routine design choice for the person skilled in the art: state why \
+it is routine;
+   (c) not disclosed at all: name the gap in one sentence.
+6. Rankings and coverage statements must agree with the app's coverage matrix \
+numbers; where your reading differs, say so explicitly and cite the paragraph \
+that justifies the difference.
+"""
+
+HOUSE_STYLE_FILE = "house-style.txt"
+
+
+def house_style() -> str:
+    """The ACTIVE global style text: the user's saved edit, else the default."""
+    try:
+        with open(os.path.join(FMT_OVERRIDE_DIR, HOUSE_STYLE_FILE),
+                  encoding="utf-8") as fh:
+            text = fh.read().strip()
+        return text or HOUSE_STYLE_DEFAULT
+    except OSError:
+        return HOUSE_STYLE_DEFAULT
+
+
+# ⚖️ Default OUTPUT FORMAT for problem-solution runs — the user's dictated
+# 6-step chain (2026-07-22). Used when NO format document is uploaded; an
+# uploaded/edited /data/psa/format.txt replaces it wholesale.
+PSA_FORMAT_DEFAULT = """\
+OUTPUT FORMAT: PROBLEM-SOLUTION CHAIN. Each numbered line is ONE sentence at \
+most, with document references and figure/paragraph citations in place.
+
+1. "Although D1 (number) discloses ... (Fig. N; [00NN] or claim N), it omits \
+... ."
+2. "The distinguishing technical feature is ... ."
+3. "The technical effect of this feature is ... ."
+4. "The objective technical problem is therefore ... ."
+5. "A person skilled in the art, starting from D1 and seeking a solution to \
+this problem, would consider the teachings of D2 (number), because ... \
+(Fig. N; [00NN] or claim N)."
+6. "As D2 discloses ... (Fig. N; [00NN] or claim N), D1 and D2 are readily \
+combinable, and the resulting advantage of ... is foreseeable in advance."
+
+Then the ADDITIONAL FEATURES section. Group related additional features and \
+work through EVERY group, assigning each to exactly one bin, with citations:
+- disclosed by the combination of D1 and D2: read the cited disclosure into \
+the feature and say why the wording of the feature covers it;
+- a routine design choice for the person skilled in the art: state the common \
+general knowledge that makes it routine;
+- not disclosed: name the gap in one sentence.
+
+Every sentence follows the house style: one sentence per line, plain words, \
+no symbol shorthand, affirmative reading, references and figures each time.
+"""
+
+
+def _house_style_part() -> str:
+    return "HOUSE STYLE (BINDING):\n\n" + house_style()
+
 
 def format_override(key: str) -> str | None:
     """The user's edited instruction for this format key, or None."""
@@ -833,6 +915,7 @@ def build_prompt(question: str, history: list[dict] | None = None,
             + "\n\nCompile these with the stored documents into one full picture; "
             "merge what agrees, flag contradictions and gaps, attribute key claims "
             "to their notebook. Do not invent anything beyond the provided material.")
+    parts.append(_house_style_part())
     instr = format_instruction(answer_format)
     if instr:
         parts.append(instr)
@@ -1197,12 +1280,15 @@ def psa(method_text: str, benchmark: dict | None, docs: list[dict],
     parts = [_PREAMBLE, _GROUNDING_INSTRUCTION]
     parts.append("USER-SUPPLIED METHODOLOGY (BINDING — the answer must follow it "
                  "verbatim, step by step):\n\n" + (method_text or "")[:MAX_METHOD_CHARS])
-    if format_text:
-        parts.append(
-            "USER-SUPPLIED OUTPUT FORMAT (BINDING — the answer's STRUCTURE must "
-            "follow this document exactly, in combination with the methodology "
-            "steps above; where the two conflict on structure, this format "
-            "document wins):\n\n" + format_text[:MAX_METHOD_CHARS])
+    # The 6-step problem-solution chain applies OUT OF THE BOX: with no
+    # uploaded/edited format document the built-in default (the user's dictated
+    # structure) is sent, so no run ever goes out format-less again.
+    parts.append(
+        "OUTPUT FORMAT (BINDING — the answer's STRUCTURE must follow this "
+        "exactly, in combination with the methodology steps above; where the "
+        "two conflict on structure, this format wins):\n\n"
+        + (format_text or PSA_FORMAT_DEFAULT)[:MAX_METHOD_CHARS])
+    parts.append(_house_style_part())
     if invention:
         parts.append(
             f"CLAIMED INVENTION UNDER ASSESSMENT — {invention['label']}. The user "
@@ -1456,6 +1542,7 @@ def deep_reduce(question: str, benchmark: dict, verdicts: list[dict],
         parts.append("CONVERSATION HISTORY:\n" + "\n\n".join(lines))
     if rank_rule:
         parts.append(rank_rule)
+    parts.append(_house_style_part())
     parts.append(_style_instruction(True))
     parts.append("TASK:\n" + question)
     res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL,

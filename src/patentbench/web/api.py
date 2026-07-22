@@ -163,6 +163,37 @@ def answer_format_put(key: str, body: schemas.AnswerFormatEdit):
     return answer_format_get(key)
 
 
+# ---------- 🖋 house style: the ONE global formatting space ----------
+
+@app.get("/api/house-style")
+def house_style_get():
+    """The ACTIVE global style rules injected into EVERY answer (chat, deep-compare
+    ranking, ⚖️ problem-solution) — what the 🖋 editor shows."""
+    override_path = os.path.join(claude_bridge.FMT_OVERRIDE_DIR,
+                                 claude_bridge.HOUSE_STYLE_FILE)
+    overridden = os.path.exists(override_path)
+    return {"text": claude_bridge.house_style(),
+            "default": claude_bridge.HOUSE_STYLE_DEFAULT, "overridden": overridden}
+
+
+@app.put("/api/house-style")
+def house_style_put(body: schemas.AnswerFormatEdit):
+    """Save the edited global style (data volume, shared by ALL tabs and ALL answer
+    paths). Empty text — or text identical to the built-in — resets to the default."""
+    text = body.text.strip()
+    path = os.path.join(claude_bridge.FMT_OVERRIDE_DIR, claude_bridge.HOUSE_STYLE_FILE)
+    if not text or text == claude_bridge.HOUSE_STYLE_DEFAULT.strip():
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    else:
+        os.makedirs(claude_bridge.FMT_OVERRIDE_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    return house_style_get()
+
+
 # ---------- tabs ----------
 
 @app.get("/api/tabs")
@@ -2243,6 +2274,52 @@ def psa_doc_status(kind: str):
             "uploaded_at": m["uploaded_at"]}
 
 
+@app.get("/api/psa/{kind}/text")
+def psa_doc_text_get(kind: str):
+    """The ACTIVE text of a ⚖️ document, for in-place ✎ editing. `format` has a
+    built-in default (the user's 6-step problem-solution chain) that applies when
+    nothing is uploaded; `method` has none (the methodology must be supplied)."""
+    _kind_or_404(kind)
+    default = claude_bridge.PSA_FORMAT_DEFAULT if kind == "format" else ""
+    m = _psa_doc(kind)
+    text = ""
+    if m:
+        try:
+            with open(os.path.join(PSA_DIR, f"{kind}.txt"), encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            pass
+    return {"kind": kind, "name": (m or {}).get("name"),
+            "text": text or default, "default": default,
+            "overridden": bool(text.strip())}
+
+
+@app.put("/api/psa/{kind}/text")
+def psa_doc_text_put(kind: str, body: schemas.AnswerFormatEdit):
+    """Save an in-place edit of a ⚖️ document — no re-upload needed. Empty text (or,
+    for `format`, text identical to the built-in default) removes the stored doc;
+    `format` then falls back to the built-in chain, `method` becomes unset."""
+    _kind_or_404(kind)
+    text = body.text.strip()
+    default = claude_bridge.PSA_FORMAT_DEFAULT if kind == "format" else ""
+    if not text or (default and text == default.strip()):
+        for stale in (f"{kind}.txt", f"{kind}.json"):
+            try:
+                os.remove(os.path.join(PSA_DIR, stale))
+            except FileNotFoundError:
+                pass
+        return psa_doc_text_get(kind)
+    os.makedirs(PSA_DIR, exist_ok=True)
+    with open(os.path.join(PSA_DIR, f"{kind}.txt"), "w", encoding="utf-8") as fh:
+        fh.write(text)
+    prev = _psa_doc(kind)
+    meta = {"name": (prev or {}).get("name") or f"{kind} (edited in app)",
+            "chars": len(text), "uploaded_at": int(time.time())}
+    with open(os.path.join(PSA_DIR, f"{kind}.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, ensure_ascii=False)
+    return psa_doc_text_get(kind)
+
+
 @app.post("/api/psa/{kind}")
 async def psa_doc_upload(kind: str, bg: BackgroundTasks, file: UploadFile = File(...)):
     """Upload/replace a global ⚖️ document (PDF/TXT/MD): `method` = the steps,
@@ -3071,7 +3148,7 @@ def cross_tab_scan_status(tab_id: int):
 
 
 @app.post("/api/tabs/{tab_id}/digest-rescore")
-def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest):
+def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest, bg: BackgroundTasks):
     """♻️ RE-CHECK. After a benchmark change, re-score candidates against the CURRENT benchmark
     from their STORED DIGESTS — no full-text re-read, no downgrade from a slow full pass. Scope
     is the top-N or EVERY candidate with a digest (all_docs), batched so hundreds of digests
@@ -3137,6 +3214,7 @@ def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest):
         f"({used_model[0] if used_model else model}) in {len(batches)} bulk pass(es) — NO "
         "full-text re-read. Scores are tagged ·digest (cheap re-check); run a 🏆 full "
         f"deep-compare when you want the rigorous opus read back.{note}")
+    bg.add_task(_auto_judge_combi_safe, tab_id)
     return {"ok": True, "updated": updated, "requested": len(chosen), "batches": len(batches),
             "failed_batches": len(errors), "results": results}
 
@@ -3182,7 +3260,7 @@ def digest_backfill_ep(tab_id: int, body: schemas.DigestBackfillRequest):
 
 
 @app.post("/api/tabs/{tab_id}/additional-read")
-def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
+def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest, bg: BackgroundTasks):
     """➕ ADDITIONAL READ. Check the benchmark's ADDITIONAL (A) features against candidates
     in bulk calls over their STORED DIGESTS — no full-text re-read, so it's cheap. Scope is
     the displayed top-N, or EVERY candidate with a digest (all_docs). Stores per-doc
@@ -3244,6 +3322,7 @@ def additional_read_ep(tab_id: int, body: schemas.AdditionalReadRequest):
         f"{len(batches)} bulk pass(es) for {len(a_features)} additional feature(s): {names}. "
         "Present/stretched features now ADD to each doc's score (absence never lowers it) — "
         f"see the 🟢/🟡 chips and the +bonus in the score.{note}")
+    bg.add_task(_auto_judge_combi_safe, tab_id)
     return {"ok": True, "assessed": stored, "requested": len(chosen), "batches": len(batches),
             "failed_batches": len(errors), "a_features": len(a_features), "results": results}
 
@@ -3869,7 +3948,7 @@ def combi_screen_ep(tab_id: int, body: schemas.CombiScreenRequest):
 
 
 @app.post("/api/tabs/{tab_id}/combi-scan")
-def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
+def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest, bg: BackgroundTasks):
     """🔎 STAGE 1. Map which ELEMENTS each candidate discloses, from stored digests, across
     EVERY candidate that has one — then derive, in code, the pairs that TOGETHER cover
     everything. The tool investigates; nothing here depends on the user picking D1/D2.
@@ -3964,6 +4043,7 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
         f"ALONE (stronger than any combination), {len(complete)} pair(s) cover them together. "
         "Verdicts are from DIGESTS (summaries) — run stage 2 to confirm the finalists against "
         "full text. Independent of every other score in the app." + note)
+    bg.add_task(_auto_judge_combi_safe, tab_id)
     return {"ok": True, "scanned": scanned, "requested": len(docs), "batches": len(batches),
             "failed_batches": len(errors), "elements": len(elements),
             "complete": len(complete), "pairs": pairs, "solo": solo,
@@ -3971,7 +4051,7 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest):
 
 
 @app.post("/api/tabs/{tab_id}/combi-verify")
-def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest):
+def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest, bg: BackgroundTasks):
     """🔎 STAGE 2. Re-read the shortlisted finalists' FULL primary text against the elements,
     REPLACING their stage-1 digest verdicts with citable ones, then recompute the pairs.
 
@@ -4025,6 +4105,7 @@ def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest):
         f"citable element map. {len(complete)} pair(s) cover EVERY element. A stage-2 verdict "
         "REPLACES the digest guess, so a shortlisted pair can legitimately fall away here."
         + note)
+    bg.add_task(_auto_judge_combi_safe, tab_id)
     return {"ok": True, "verified": len(chosen) - len(errors), "failed": len(errors),
             "elements": len(elements), "complete": len(complete), "pairs": pairs,
             "solo": solo, "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": "full"}
@@ -4112,6 +4193,32 @@ def _auto_judge_combinability(tab_id: int, bm: dict | None) -> dict:
             + (f" ⚠ {len(errors)} batch(es) failed — ⚖️ re-judge in the matrix retries them."
                if errors else ""))
     return {"judged": len(out), "combinable": combinable, "errors": len(errors)}
+
+
+def _auto_judge_combi_safe(tab_id: int) -> None:
+    """Judge fresh matrix pairs after ANY operation that changed coverage (deep read,
+    ➕ additional read, ♻️ re-check, 🔎 scan/verify) — so the matrix's 🔗/⛔ badges are
+    never stale just because the partner set shifted. Already-judged pairs cost
+    nothing; never raises into the caller."""
+    if not AUTO_COMBI:
+        return
+    try:
+        _auto_judge_combinability(tab_id, db.get_benchmark(tab_id))
+    except Exception as e:
+        db.append_message(tab_id, "s", f"🧩 combinability auto-judge failed: {e} — "
+                          "⚖️ Judge combinability in the matrix runs it manually.")
+
+
+@app.post("/api/tabs/{tab_id}/combi/auto-judge")
+def combi_auto_judge_ep(tab_id: int):
+    """Judge the CURRENT matrix's unjudged anchor+partner pairs now (same incremental
+    judge the automatic triggers use) — for a matrix showing ⚪ after operations that
+    predate the auto-judge."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm or not (bm.get("features") or []):
+        raise HTTPException(400, "combi needs benchmark features — define them first")
+    return {"ok": True, **_auto_judge_combinability(tab_id, bm)}
 
 
 @app.post("/api/tabs/{tab_id}/combi/motivation")
@@ -4554,9 +4661,15 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                     + (f"; +W{u['w_bonus']}" if u["w_total"] else ""))
 
         corpus.sort(key=lambda d: (_rank_key(d), d["id"]), reverse=True)
+        # APP RANK stamped on every card: the reduce model gets the app's OWN order
+        # (the same unified key the list and matrix use), so its output can be
+        # checked against it line by line instead of drifting to a holistic order.
+        n_corpus = len(corpus)
         reduce_verdicts = [{"number": d["number"], "title": d.get("title"),
-                            "coverage": _cov_line(d), "verdict": _stored_assessment(d)}
-                           for d in corpus if _stored_assessment(d)]
+                            "coverage": (f"APP RANK {i}/{n_corpus}"
+                                         + (f"; {_cov_line(d)}" if _cov_line(d) else "")),
+                            "verdict": _stored_assessment(d)}
+                           for i, d in enumerate(corpus, 1) if _stored_assessment(d)]
         rank_rule = (
             "RANKING RULE — rank by MUST/CORE coverage FIRST. A document (or two-document "
             "combination) that discloses EVERY mandatory element outranks one that misses any, "
@@ -4564,9 +4677,16 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
             "document (W) features are BONUS only: they separate documents that are EQUAL on the "
             "mandatory elements; their absence never lowers a rank. Each card shows its MUST "
             "coverage — rank consistently with it, and state each finalist's mandatory coverage "
-            "explicitly (e.g. '11 of 11' vs '10 of 11, one partial'). This MUST agree with the "
-            "app's coverage matrix; if your reading of an element differs, say so and cite the "
-            "paragraph that supports it." if els else None)
+            "explicitly (e.g. '11 of 11' vs '10 of 11, one partial').\n"
+            "ALIGNMENT IS MANDATORY: every card carries 'APP RANK n/total' — the app's own "
+            "coverage-matrix order, computed from the same per-element verdicts you were given. "
+            "Your final ranking must present the candidates in APP RANK order. You may deviate "
+            "for a specific document ONLY by writing a line 'DEVIATION from app rank N: "
+            "<reason>' citing the exact paragraph/claim that justifies it — a ranking that "
+            "silently contradicts the matrix is WRONG. Note that a document's overall match "
+            "score (0-10 vs the benchmark text) measures something DIFFERENT from element "
+            "coverage; when they disagree, say one sentence explaining which one your rank "
+            "follows and why." if els else None)
         reused = max(0, len(corpus) - read)
         if not reduce_verdicts:
             db.append_message(tab_id, "s",
@@ -4609,12 +4729,8 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
             # judge the fresh matrix pairs' combinability without waiting for the ⚖️
             # click. Skipped when the reduce failed (same quota would sink it) and
             # NEVER allowed to kill the read job it rides on.
-            if AUTO_COMBI and bm_features:
-                try:
-                    _auto_judge_combinability(tab_id, bm)
-                except Exception as e:
-                    db.append_message(tab_id, "s", f"🧩 combinability auto-judge failed: {e} "
-                                                   "— ⚖️ Judge combinability in the matrix runs it manually.")
+            if bm_features:
+                _auto_judge_combi_safe(tab_id)
     finally:
         for p in (lock, _claude_read_pause_path(tab_id)):
             try:

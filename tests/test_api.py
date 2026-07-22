@@ -137,6 +137,37 @@ def test_answer_format_edit_roundtrip(client, tmp_path, monkeypatch):
     assert client.get("/api/answer-format/bogus").status_code == 404
 
 
+def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):
+    """🖋 the ONE global formatting space: editable, persisted, and injected into
+    EVERY answer path — chat prompts, the deep-compare reduce, and ⚖️ PSA runs."""
+    monkeypatch.setattr(claude_bridge, "FMT_OVERRIDE_DIR", str(tmp_path / "fmt"))
+    r = client.get("/api/house-style").json()
+    assert r["overridden"] is False
+    assert "HOUSE STYLE" in r["text"]
+    assert "additional features" in r["text"].lower()
+    # default reaches the chat prompt path
+    assert "HOUSE STYLE (BINDING)" in claude_bridge.build_prompt("q")
+    # edited version replaces the default everywhere; empty resets
+    r = client.put("/api/house-style", json={"text": "MY GLOBAL STYLE RULES"}).json()
+    assert r["overridden"] is True
+    assert "MY GLOBAL STYLE RULES" in claude_bridge.build_prompt("q")
+    r = client.put("/api/house-style", json={"text": ""}).json()
+    assert r["overridden"] is False and "HOUSE STYLE" in r["text"]
+
+
+def test_house_style_reaches_deep_reduce(tmp_path, monkeypatch):
+    # deliberately NO `client` fixture: it stubs deep_reduce, which would make this
+    # test assert against the stub instead of the real prompt assembly
+    monkeypatch.setattr(claude_bridge, "FMT_OVERRIDE_DIR", str(tmp_path / "fmt"))
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, extra_args=None, cwd=None, timeout=None:
+                        captured.update(p=prompt) or {"answer": "ok", "model": model})
+    claude_bridge.deep_reduce("q", {"number": "EP1", "claims": "1. x"},
+                              [{"number": "D1", "title": "t", "verdict": "MATCH SCORE: 5"}])
+    assert "HOUSE STYLE (BINDING)" in captured["p"]
+
+
 def test_tab_documents_flow(client):
     tab = client.post("/api/tabs", json={"name": "Test"}).json()
     r = client.post(f"/api/tabs/{tab['id']}/documents",
@@ -2230,6 +2261,69 @@ def test_deep_read_auto_judges_combinability(client, monkeypatch):
     assert len(judged_batches) == n_before
 
 
+def test_deep_read_reduce_carries_app_rank_and_alignment_rule(client, monkeypatch):
+    """The reduce model receives the app's OWN order (APP RANK n/total on every card,
+    same unified key as the matrix) plus the mandatory-alignment rule, so the chat
+    ranking can no longer silently contradict the coverage matrix."""
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "deep_reduce",
+                        lambda q, bm, verdicts, skills=None, model=None, history=None,
+                        rank_rule=None: seen.update(v=verdicts, rule=rank_rule)
+                        or {"answer": "ranked"})
+    def fake_map(bm_text, d, model=None, features=None):
+        if d["number"] == "US1111111":
+            return {"verdict": "MATCH SCORE: 2\nFEATURE 1: YES — a\nFEATURE 2: PARTIAL — b"}
+        return {"verdict": "MATCH SCORE: 9\nFEATURE 1: NO\nFEATURE 2: NO"}
+    monkeypatch.setattr(claude_bridge, "deep_map", fake_map)
+    tab = client.post("/api/tabs", json={"name": "Rank"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "f1", "weight": 3}, {"name": "f2", "weight": 2}],
+                      "title": "f"})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "US1111111 US2222222"})
+    assert client.post(f"/api/tabs/{tid}/deep-compare", json={}).json()["started"]
+    _wait_read(client, tid)
+    # coverage dominates the holistic score: US1111111 (2/10 but covers elements)
+    # must be APP RANK 1, US9-scored-but-zero-coverage US2222222 rank 2
+    cov = {v["number"]: v["coverage"] for v in seen["v"]}
+    assert cov["US1111111"].startswith("APP RANK 1/2")
+    assert cov["US2222222"].startswith("APP RANK 2/2")
+    assert "MUST 1✓+1~/2" in cov["US1111111"]
+    assert "DEVIATION from app rank" in seen["rule"]
+    assert "measures something DIFFERENT" in seen["rule"]
+
+
+def test_combi_auto_judge_endpoint_judges_current_matrix_pairs(client, monkeypatch):
+    """POST /combi/auto-judge fills verdicts for the CURRENT matrix pairs on demand
+    (for matrices whose partner set shifted after the last automatic run)."""
+    monkeypatch.setattr(claude_bridge, "combi_motivation",
+                        lambda bm, pairs, model=None, mode="must":
+                        {"results": {str(i): {"combinable": True, "reason": "fits"}
+                                     for i in range(1, len(pairs) + 1)}, "model": "m"})
+    import json as _j
+    import patentbench.db as db
+    tab = client.post("/api/tabs", json={"name": "AJ"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "f1", "weight": 3}, {"name": "f2", "weight": 2}],
+                      "title": "f"})
+    a = _feature_doc(db, tid, "US1111111",
+                     [{"name": "f1", "weight": 3, "status": "yes", "note": ""},
+                      {"name": "f2", "weight": 2, "status": "no", "note": ""}])
+    b = _feature_doc(db, tid, "US2222222",
+                     [{"name": "f1", "weight": 3, "status": "no", "note": ""},
+                      {"name": "f2", "weight": 2, "status": "yes", "note": ""}])
+    r = client.post(f"/api/tabs/{tid}/combi/auto-judge").json()
+    assert r["ok"] and r["judged"] == 1
+    lo, hi = sorted((a, b))
+    assert client.get(f"/api/tabs/{tid}/state").json()["combi_motivations"][f"{lo}-{hi}"]["combinable"]
+    # idempotent: everything already judged → zero new calls
+    assert client.post(f"/api/tabs/{tid}/combi/auto-judge").json()["judged"] == 0
+    # no features → 400
+    t2 = client.post("/api/tabs", json={"name": "AJ2"}).json()
+    assert client.post(f"/api/tabs/{t2['id']}/combi/auto-judge").status_code == 400
+
+
 def test_combi_motivation_requires_feature_benchmark(client):
     tab = client.post("/api/tabs", json={"name": "CombiDoc"}).json()
     tid = tab["id"]
@@ -3916,6 +4010,29 @@ def test_psa_unknown_kind_404(psa_client):
     assert psa_client.get("/api/psa/bogus").status_code == 404
 
 
+def test_psa_text_edit_in_place(psa_client):
+    """✎ the ⚖️ documents are editable as TEXT in place: `format` shows the built-in
+    6-step chain when nothing is uploaded; saving persists without a re-upload;
+    empty (or the untouched default) removes the stored doc again."""
+    r = psa_client.get("/api/psa/format/text").json()
+    assert r["overridden"] is False
+    assert "objective technical problem is therefore" in r["text"]
+    assert r["text"] == r["default"]
+    r = psa_client.put("/api/psa/format/text", json={"text": "MY CHAIN v2"}).json()
+    assert r["overridden"] is True and r["text"] == "MY CHAIN v2"
+    assert psa_client.get("/api/psa/format").json()["ok"] is True    # doc now exists
+    r = psa_client.put("/api/psa/format/text", json={"text": ""}).json()
+    assert r["overridden"] is False and "readily combinable" in r["text"]
+    assert psa_client.get("/api/psa/format").json()["ok"] is False   # back to built-in
+    # method has NO built-in default — empty text until something is saved
+    r = psa_client.get("/api/psa/method/text").json()
+    assert r["text"] == "" and r["default"] == ""
+    r = psa_client.put("/api/psa/method/text", json={"text": "STEP 1: x."}).json()
+    assert r["overridden"] is True
+    assert psa_client.get("/api/psa/method").json()["ok"] is True
+    assert psa_client.get("/api/psa/bogus/text").status_code == 404
+
+
 def test_psa_prompt_format_block_binding(monkeypatch):
     captured = {}
     monkeypatch.setattr(claude_bridge, "_run_claude",
@@ -3926,14 +4043,20 @@ def test_psa_prompt_format_block_binding(monkeypatch):
                        {"number": "D2DOC", "claims": "1. y"}],
                       format_text="SECTION A: table first.")
     p = captured["p"]
-    assert "USER-SUPPLIED OUTPUT FORMAT (BINDING" in p
+    assert "OUTPUT FORMAT (BINDING" in p
     assert "SECTION A: table first." in p
-    assert "this format document wins" in p
-    # without a format doc the block is absent
+    assert "this format wins" in p
+    # without a format doc the BUILT-IN 6-step problem-solution chain applies
     claude_bridge.psa("STEP 1: x.", {"number": "EP1", "claims": "1. A thing."},
                       [{"number": "D1DOC", "claims": "1. x"},
                        {"number": "D2DOC", "claims": "1. y"}])
-    assert "OUTPUT FORMAT" not in captured["p"]
+    p2 = captured["p"]
+    assert "OUTPUT FORMAT (BINDING" in p2
+    assert "The objective technical problem is therefore" in p2
+    assert "readily combinable" in p2
+    assert "ADDITIONAL FEATURES section" in p2
+    # the global house style rides along on every PSA run
+    assert "HOUSE STYLE (BINDING)" in p2
 
 
 def test_psa_reuses_prior_discussions_from_all_chats(psa_client, monkeypatch):
