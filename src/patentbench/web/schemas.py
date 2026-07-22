@@ -20,6 +20,7 @@ class DocumentsAdd(BaseModel):
     source: str = "manual"
     reading_model: str | None = None   # model for the full-text digest; None = cheapest
     read_figures: bool | None = None   # caption drawing sheets at intake; None = deploy default
+    digest: bool | None = None         # digest at intake (1 call/doc); None = deploy default (off)
 
 
 class DocumentNumberEdit(BaseModel):

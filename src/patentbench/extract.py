@@ -7,10 +7,16 @@ Claude-over-text fallback only when the regex finds nothing.
 """
 from __future__ import annotations
 
+import os
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 from . import claude_bridge, patents
+
+# Page cap for vision-OCR'ing a scanned PDF for candidate NUMBERS. Number-list
+# scans are a few pages; a full scanned patent has its number on page 1 anyway.
+OCR_PDF_MAX_PAGES = int(os.environ.get("PB_PDF_OCR_MAX_PAGES", "30"))
 
 # Proven prompt from patent-wiki-analyzer ocr-patents/route.ts.
 OCR_PROMPT = (
@@ -90,9 +96,55 @@ def numbers_from_image(path: str, model: str | None = None) -> dict:
     return {"numbers": ordered, "uncertain": sorted(first ^ second)}
 
 
-def numbers_from_pdf(path: str) -> dict:
+def _numbers_from_scanned_pdf(path: str, name: str | None = None) -> dict:
+    """Image-only PDF (no text layer) → candidate numbers. Cheapest source first:
+    the FILENAME — Espacenet/Google downloads are named by publication number
+    ("ITMI20090714A1.pdf"), which is deterministic and costs ZERO model tokens.
+    Only when the name yields nothing: render pages (pdftoppm, same move as the
+    ⚖️ PSA scanned fallback) and run the 2-pass photo OCR per page."""
+    from_name = patents.extract_candidates(name or "")
+    if from_name:
+        return {"numbers": from_name, "uncertain": [], "source": "filename"}
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            subprocess.run(["pdftoppm", "-r", "150", "-png", path,
+                            os.path.join(td, "pg")],
+                           check=True, timeout=180, capture_output=True)
+        except (subprocess.SubprocessError, OSError) as e:
+            return {"error": f"scanned PDF, and pdftoppm failed to render it: {e}"}
+        pages = sorted(os.listdir(td))
+        if not pages:
+            return {"error": "scanned PDF rendered to no page images"}
+        skipped = max(0, len(pages) - OCR_PDF_MAX_PAGES)
+        pages = pages[:OCR_PDF_MAX_PAGES]
+        # numbers_from_image already runs 2 concurrent passes per page — keep the
+        # page fan-out at 2 so one scanned PDF holds at most 4 claude sessions.
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            results = list(ex.map(
+                lambda p: numbers_from_image(os.path.join(td, p)), pages))
+    numbers: list[str] = []
+    seen: set[str] = set()
+    uncertain: set[str] = set()
+    errors = [r["error"] for r in results if "error" in r]
+    for r in results:
+        for n in r.get("numbers", []):
+            if n not in seen:
+                seen.add(n)
+                numbers.append(n)
+        uncertain.update(r.get("uncertain", []))
+    if not numbers and errors:
+        return {"error": f"scanned PDF: page OCR failed — {errors[0]}"}
+    out = {"numbers": numbers, "uncertain": sorted(uncertain), "source": "page-ocr"}
+    if skipped:
+        out["note"] = (f"OCR capped at {OCR_PDF_MAX_PAGES} pages — "
+                       f"{skipped} page(s) not read")
+    return out
+
+
+def numbers_from_pdf(path: str, name: str | None = None) -> dict:
     """{numbers: [...]} | {error}. pdftotext + regex; Claude haiku over the text
-    only if the regex comes up empty (scanned PDFs etc. get a second chance)."""
+    only if the regex comes up empty. A PDF with NO text layer (scan) falls back
+    to filename/page-image extraction instead of erroring out."""
     try:
         proc = subprocess.run(["pdftotext", "-layout", path, "-"],
                               capture_output=True, text=True, timeout=120)
@@ -105,8 +157,11 @@ def numbers_from_pdf(path: str) -> dict:
     if nums:
         return {"numbers": nums}
     if not text.strip():
-        return {"error": "no extractable text in the PDF (scanned image-only PDF?) — "
-                         "try uploading page screenshots as images instead"}
+        return _numbers_from_scanned_pdf(path, name=name)
+    # regex-empty TEXT pdf: the filename is still cheaper than a model call
+    from_name = patents.extract_candidates(name or "")
+    if from_name:
+        return {"numbers": from_name, "uncertain": [], "source": "filename"}
     res = claude_bridge.run_extract(
         OCR_PROMPT.replace("the source image", "the text below") + "\n\nTEXT:\n" + text[:60_000])
     if "error" in res:

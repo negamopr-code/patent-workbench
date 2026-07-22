@@ -244,6 +244,24 @@ def test_upload_txt(client, tmp_path):
     assert len(r2["inserted"]) == 2
 
 
+def test_upload_scanned_pdf_named_by_number_costs_no_tokens(client, monkeypatch):
+    """The Espacenet 'ITMI20090714A1.pdf' case (2026-07-22): image-only PDF used to
+    error out — now the filename resolves the number with ZERO model calls."""
+    from types import SimpleNamespace
+    from patentbench import extract
+    monkeypatch.setattr(extract.subprocess, "run",
+                        lambda cmd, **kw: SimpleNamespace(returncode=0, stdout=""))
+    monkeypatch.setattr(extract, "numbers_from_image",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("no OCR for a number-named scan")))
+    tab = client.post("/api/tabs", json={"name": "Scan"}).json()
+    r = client.post(f"/api/tabs/{tab['id']}/upload",
+                    files=[("files", ("ITMI20090714A1.pdf", b"%PDF-1.4 image only",
+                                      "application/pdf"))]).json()
+    assert r["numbers"] == ["ITMI20090714A1"]
+    assert not r.get("error")
+
+
 def test_upload_many_files_aggregates_and_dedupes(client):
     tab = client.post("/api/tabs", json={"name": "Bulk"}).json()
     r = client.post(f"/api/tabs/{tab['id']}/upload", files=[
@@ -1379,13 +1397,25 @@ def test_benchmark_upload_natural_page_order(client, monkeypatch):
         ["page (1).png", "page (2).png", "page (10).png"]
 
 
-def test_digest_stored_at_fetch_time(client):
+def test_digest_at_intake_is_opt_in(client, monkeypatch):
+    """Adding numbers costs ZERO tokens by default: fetch is a plain scrape and the
+    digest only runs when the 🧠 checkbox (digest: true) asked for it."""
+    calls = []
+    monkeypatch.setattr(claude_bridge, "digest_document",
+                        lambda n, t, x, model=None: calls.append(n)
+                        or {"digest": f"digest of {n}"})
     tab = client.post("/api/tabs", json={"name": "Dg"}).json()
     client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
     docs = client.get(f"/api/tabs/{tab['id']}/documents").json()["documents"]
-    assert docs[0]["digest_len"] and docs[0]["status"] == "fetched"
-    full = client.get(f"/api/tabs/{tab['id']}/documents/{docs[0]['id']}").json()
-    assert full["digest"] == "digest of US10395648B1"
+    assert docs[0]["status"] == "fetched" and not docs[0]["digest_len"]
+    assert calls == []                                   # ← no model call happened
+    tab2 = client.post("/api/tabs", json={"name": "Dg2"}).json()
+    client.post(f"/api/tabs/{tab2['id']}/documents",
+                json={"text": "EP3667902A1", "digest": True})
+    docs2 = client.get(f"/api/tabs/{tab2['id']}/documents").json()["documents"]
+    assert docs2[0]["digest_len"] and calls == ["EP3667902A1"]
+    full = client.get(f"/api/tabs/{tab2['id']}/documents/{docs2[0]['id']}").json()
+    assert full["digest"] == "digest of EP3667902A1"
 
 
 def test_deep_compare(client):
@@ -1436,7 +1466,8 @@ def test_reading_model_plumbed(client, monkeypatch):
                         or {"verdict": "MATCH SCORE: 5"})
     tab = client.post("/api/tabs", json={"name": "RM"}).json()
     client.post(f"/api/tabs/{tab['id']}/documents",
-                json={"text": "US10395648B1", "reading_model": "claude-sonnet-4-6"})
+                json={"text": "US10395648B1", "reading_model": "claude-sonnet-4-6",
+                      "digest": True})
     assert seen["digest"] == "claude-sonnet-4-6"
     client.put(f"/api/tabs/{tab['id']}/benchmark", json={"text": "EP3667902A1"})
     client.post(f"/api/tabs/{tab['id']}/deep-compare",
@@ -1446,7 +1477,7 @@ def test_reading_model_plumbed(client, monkeypatch):
     # invalid model name falls back to the cheap default (None -> DIGEST_MODEL)
     seen.clear()
     client.post(f"/api/tabs/{tab['id']}/documents",
-                json={"text": "CN114547092", "reading_model": "gpt-9"})
+                json={"text": "CN114547092", "reading_model": "gpt-9", "digest": True})
     assert seen["digest"] is None  # noqa: E501 — invalid name rejected, default used
 
 
@@ -3324,7 +3355,8 @@ def test_cross_tab_document_reuse_flow(client):
     a = client.post("/api/tabs", json={"name": "A"}).json()
     b = client.post("/api/tabs", json={"name": "B"}).json()
     # add by number in A → bg fetch+digest run synchronously under TestClient
-    client.post(f"/api/tabs/{a['id']}/documents", json={"numbers": ["US9999999B1"]})
+    client.post(f"/api/tabs/{a['id']}/documents",
+                json={"numbers": ["US9999999B1"], "digest": True})
     docs = client.get(f"/api/tabs/{a['id']}/documents").json()["documents"]
     assert docs[0]["status"] == "fetched"
     # same number in B is held back as reusable, NOT auto-fetched
@@ -3399,7 +3431,8 @@ def test_import_document_copy_copies_content_not_scores(client):
     # against the OTHER tab's benchmark and would poison this tab's ranking.
     a = client.post("/api/tabs", json={"name": "A"}).json()["id"]
     b = client.post("/api/tabs", json={"name": "B"}).json()["id"]
-    client.post(f"/api/tabs/{a}/documents", json={"numbers": ["US7777777"], "source": "manual"})
+    client.post(f"/api/tabs/{a}/documents",
+                json={"numbers": ["US7777777"], "source": "manual", "digest": True})
     import patentbench.db as _db
     src = client.get(f"/api/tabs/{a}/documents").json()["documents"][0]
     _db.update_document(src["id"], verdict="MATCH SCORE: 9 vs A's benchmark", score=9,
@@ -3421,7 +3454,8 @@ def test_cross_tab_scan_endpoint_imports_and_caches(client, monkeypatch):
     a = client.post("/api/tabs", json={"name": "Origin"}).json()["id"]
     b = client.post("/api/tabs", json={"name": "Target"}).json()["id"]
     client.post(f"/api/tabs/{a}/documents",
-                json={"numbers": ["US5555555", "US6666666"], "source": "manual"})
+                json={"numbers": ["US5555555", "US6666666"], "source": "manual",
+                      "digest": True})
     client.post(f"/api/tabs/{b}/benchmark/features", json={"title": "t", "features": [
         {"name": "thermistor divider", "weight": 5, "kind": "M", "sl": 5}]})
 

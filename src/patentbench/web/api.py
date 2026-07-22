@@ -27,6 +27,11 @@ UPLOADS = os.environ.get("PB_UPLOADS", "/data/uploads")
 FIGURES = os.environ.get("PB_FIGURES", "/data/figures")
 PSA_DIR = os.environ.get("PB_PSA_DIR", "/data/psa")   # ⚖️ problem-solution methodology
 AUTO_FIGURES = os.environ.get("PB_AUTO_FIGURES", "1") not in ("0", "", "false", "no")
+# Digest-on-intake is OFF by default: adding numbers must cost ZERO model tokens
+# (fetch is a plain scrape; the finalists get a FULL advanced-model read later
+# anyway). Digests for the cheap bulk tools are generated on demand via
+# 🔁 digest-backfill, or per add with the 🧠 checkbox.
+AUTO_DIGEST = os.environ.get("PB_AUTO_DIGEST", "0") not in ("0", "", "false", "no")
 MAX_UPLOAD = 25 * 1024 * 1024
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
@@ -988,11 +993,12 @@ def _mirror_benchmark_if_auto(tab_id: int) -> None:
 
 
 def _process_documents(doc_ids: list[int], model: str | None = None,
-                       read_figures: bool | None = None) -> None:
+                       read_figures: bool | None = None,
+                       digest: bool | None = None) -> None:
     """Background pipeline for a batch: fetch each (throttled by the fetcher's
-    own gap), digest all fetched docs concurrently, then mirror them into the
-    connected NotebookLM notebook (auto-creating it on first use) — so the notebook
-    stays a Claude-quota-independent fallback brain for the tab."""
+    own gap — a token-free scrape), optionally caption figures / digest, then
+    mirror them into the connected NotebookLM notebook (auto-creating it on first
+    use) — so the notebook stays a Claude-quota-independent fallback brain."""
     for doc_id in doc_ids:
         _fetch_into_db(doc_id)
     # Caption drawings BEFORE the digest so the digest (and every later read) is
@@ -1002,8 +1008,12 @@ def _process_documents(doc_ids: list[int], model: str | None = None,
     if AUTO_FIGURES if read_figures is None else read_figures:
         with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
             list(ex.map(lambda i: _process_figures(i, model), doc_ids))
-    with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
-        list(ex.map(lambda i: _digest_doc(i, model), doc_ids))
+    # Digest is one model call per document — opt-in exactly like figures, so a
+    # plain "add these numbers" costs zero tokens; 🔁 digest-backfill recovers
+    # the digests later when a digest-based tool actually needs them.
+    if AUTO_DIGEST if digest is None else digest:
+        with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
+            list(ex.map(lambda i: _digest_doc(i, model), doc_ids))
     first = db.get_document(doc_ids[0]) if doc_ids else None
     if first:
         _auto_export_docs(first["tab_id"], doc_ids)
@@ -1036,7 +1046,7 @@ def documents_add(tab_id: int, body: schemas.DocumentsAdd, bg: BackgroundTasks):
             to_fetch.append(doc_id)
     if to_fetch:
         bg.add_task(_process_documents, to_fetch, _read_model(body.reading_model),
-                    body.read_figures)
+                    body.read_figures, body.digest)
     res["reusable"] = reusable
     return res
 
@@ -1306,7 +1316,7 @@ def _extract_one(f: dict, ocr_model: str) -> tuple[str, dict]:
     if ext in IMAGE_EXT:
         return "image", extract.numbers_from_image(f["path"], ocr_model)
     if ext == ".pdf":
-        return "pdf", extract.numbers_from_pdf(f["path"])
+        return "pdf", extract.numbers_from_pdf(f["path"], name=f["name"])
     try:
         with open(f["path"], "rb") as fh:
             return "text", extract.numbers_from_text(fh.read().decode("utf-8", errors="replace"))

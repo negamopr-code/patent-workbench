@@ -81,6 +81,7 @@
     <p class="muted">The pool to search for the best fit to the benchmark.</p>
     <label class="model-pick read-pick" title="Model that READS / OCRs candidate documents: photo OCR, page transcription and full-text digests. Cheapest by default — raise it only when reading quality disappoints.">📖 Reading / OCR model <select id="cand-read-model"></select></label>
     <label class="model-pick" title="Caption every drawing sheet with the vision model at intake (~6 sheets per document, one model session each — the single most expensive intake step). Leave OFF for bulk triage; caption the finalists later with each document's 🖼 Read figures button."><input type="checkbox" id="in-figs"> 🖼 Read figures on intake</label>
+    <label class="model-pick" title="Write a model digest of every document right at intake (one call per document). OFF = adding numbers costs ZERO tokens — fetch is a plain scrape; run 🔁 digest-backfill later if a digest-based tool (➕ ♻️ 🧩) needs them."><input type="checkbox" id="in-dig"> 🧠 Digest on intake</label>
 
     <div id="deep-bar" class="deep-bar hidden">
       <button id="deep-selected" class="btn primary small" title="Run the full-text deep analysis on ONLY the checked candidates">🏆 Deep-analyse selected</button>

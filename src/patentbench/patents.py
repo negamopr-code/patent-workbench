@@ -14,7 +14,11 @@ from urllib.parse import unquote
 # AU20201926863, one digit too long → 404 on Google Patents). Seen live 2026-06-12.
 # Case-insensitive so a hand-typed lowercase "cn120200454" is accepted just like
 # "CN120200454" — canonicalize() uppercases the match anyway.
-NUMBER_RE = re.compile(r"\b([A-Za-z]{2}[ ]?\d[\d /.-]*[A-Za-z]?\d*)\b")
+# Pre-2016 Italian filings are published under a 4-letter IT+province office code
+# (ITMI=Milan, ITTO=Turin, ITRM=Rome…) and Google Patents/Espacenet keep that
+# prefix in the publication id ("ITMI20090714A1") — allow exactly the IT?? form,
+# NOT arbitrary 4-letter prefixes (which would match prose like "ISBN 9781…").
+NUMBER_RE = re.compile(r"\b((?:[Ii][Tt][A-Za-z]{2}|[A-Za-z]{2})[ ]?\d[\d /.-]*[A-Za-z]?\d*)\b")
 
 # Patent numbers embedded in URLs (Google Patents path, Espacenet publication path
 # or pn= query) — matched case-insensitively because query strings are often
@@ -33,7 +37,7 @@ def normalize(raw: str) -> str:
 def is_plausible(n: str) -> bool:
     if len(n) < 6 or len(n) > 20:
         return False
-    if not re.match(r"^[A-Z]{2}\d", n):
+    if not re.match(r"^(?:IT[A-Z]{2}|[A-Z]{2})\d", n):
         return False
     return bool(re.search(r"\d{4,}", n))
 
@@ -54,7 +58,7 @@ def canonicalize_us_app_number(raw: str) -> str:
 # "JP4034816B2" gets read as "JP4034816B"; the partial `...B` form 404s on
 # Google Patents. Strip a trailing single letter NOT followed by a digit.
 def strip_partial_kind_code(raw: str) -> str:
-    m = re.match(r"^([A-Z]{2,3}\d+)([A-Z])$", raw)
+    m = re.match(r"^([A-Z]{2,4}\d+)([A-Z])$", raw)
     return m.group(1) if m else raw
 
 

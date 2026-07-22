@@ -181,3 +181,17 @@ def test_parse_verdict():
     assert cb.parse_verdict("MATCH SCORE: 7.5\nKEY FEATURES: none")["features"] is None
     assert cb.parse_verdict("no structure at all") == {"score": None, "features": None}
     assert cb.parse_verdict("MATCH SCORE: 55")["score"] == 10.0  # clamped
+
+
+def test_italian_office_code_numbers_extracted():
+    # Pre-2016 Italian filings are published under a 4-letter IT+province office
+    # code (ITMI=Milan, ITTO=Turin…) which Google Patents keeps in the id.
+    assert patents.extract_candidates("prior art ITMI20090714A1 (scan)") == ["ITMI20090714A1"]
+    assert patents.extract_candidates("ITMI20090714A1.pdf") == ["ITMI20090714A1"]  # filename
+    assert patents.extract_candidates("itmi20090714a1") == ["ITMI20090714A1"]      # lowercase
+    assert patents.is_plausible("ITMI20090714A1")
+    # arbitrary 4-letter prefixes stay rejected — an ISBN is not a patent number
+    assert patents.extract_candidates("see ISBN 9781484200761 for details") == []
+    # partial kind code recovery now covers the 4-letter prefix too
+    assert patents.strip_partial_kind_code("ITMI20090714A") == "ITMI20090714"
+    assert patents.strip_partial_kind_code("JP4034816B") == "JP4034816"  # unchanged
