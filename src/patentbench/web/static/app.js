@@ -2251,6 +2251,7 @@ async function sendChat(notebookOnly) {
   if (!q || !activeTab) return;
   appendMsg({ role: 'q', text: q });
   $('q').value = '';
+  qGrow();
   const tabAtSend = activeTab;
   setBusy(true, notebookOnly ? 'Asking NotebookLM' : 'Asking Claude');
   let res;
@@ -2497,6 +2498,7 @@ async function runDeepCompare(idsArg, skipScored, readModelOverride) {
   if (!confirm(ask)) return;
   const q = $('q').value.trim();          // optional custom task; default ranking otherwise
   $('q').value = '';
+  qGrow();
   const tabAtSend = activeTab;
   const res = await api(`/api/tabs/${tabAtSend}/deep-compare`, {
     method: 'POST', body: JSON.stringify({
@@ -3033,6 +3035,15 @@ async function pollRate() {
 $('q').onkeydown = e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendChat(false);
 };
+// The question box grows with its content while you type (up to ~half the screen),
+// so a long question is composed in a full pane instead of a 3-line slit. Sending
+// clears the value programmatically (no input event) — qGrow() is called there too.
+function qGrow() {
+  const q = $('q');
+  q.style.height = 'auto';
+  q.style.height = Math.min(q.scrollHeight + 2, window.innerHeight * 0.5) + 'px';
+}
+$('q').oninput = qGrow;
 
 /* ---------- content viewer ---------- */
 // Figures row on a fetched candidate card: shows the captioned-figure count (so you

@@ -406,6 +406,10 @@ textarea, select, input[type="text"] {
 .thinking::after { content: "…"; animation: pulse 1s infinite; }
 
 .chat-input { border-top: 1px solid var(--border); padding-top: 8px; }
+/* the question box auto-grows with its content (app.js qGrow) up to half the
+   viewport; beyond that it scrolls internally. Manual resize would fight the
+   auto-grow (every keystroke re-sets the height), so it is off here. */
+#q { min-height: 66px; max-height: 50vh; overflow-y: auto; resize: none; }
 .focus-hint { font-size: 12px; color: var(--accent); margin-bottom: 6px; }
 .chat-buttons { display: flex; gap: 8px; align-items: center; margin-top: 6px;
   justify-content: flex-end; flex-wrap: wrap; }
