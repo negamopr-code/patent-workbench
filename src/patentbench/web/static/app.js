@@ -1192,6 +1192,8 @@ function renderCombiScanPanel() {
         + `elements, so the columns switch to the <b>additional</b> features. Row ① <b>${esc(matrix.anchor || '')}</b> `
         + `covers all Must but is missing <b>${gapNames.length}</b> additional feature(s) (highlighted). The rows below `
         + `bring those — pair ① with one (a partner need NOT cover Must; it combines with ①). `
+        + `⚠ Rows are ordered by the ADDITIONAL weight they add to ① — NOT by their own Must rank, so an `
+        + `<b>alone</b> full coverer can sit low here; the candidates list's 🎯 sort is the Must ranking. `
         + `✓ discloses · ~ partial · ✗ absent. ${nShown}.</span>`;
   } else {
     head.innerHTML = matrix.covers_all_anchor
@@ -1311,7 +1313,9 @@ function renderCombiScanPanel() {
           : isGap ? ' — GAP: the anchor is missing this; a partner below fills it' : '';
         return `<th class="mx-el mx-el-${c.kind || 'M'}${isNone ? ' mx-nocover' : isGap ? ' mx-gapcol' : ''}" title="${colCodes[i]} — ${esc(c.name)}${c.weight > 1 ? ` — weight ${c.weight}` : ''}${note}">${colCodes[i]}${mark}${c.weight > 1 ? `<span class="mx-w">·${c.weight}</span>` : ''}</th>`;
       }).join('')
-    + `<th class="mx-score" title="MUST coverage — the dominant ranking criterion: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.">Must</th>`
+    + `<th class="mx-score" title="${mode === 'additional'
+        ? 'MUST coverage of this document, shown for REFERENCE — in this additional-features view the rows are ORDERED by how much additional weight they add to ①, not by Must. A row marked alone covers every Must element itself; the candidates list 🎯 sort is the Must ranking.'
+        : 'MUST coverage — the dominant ranking criterion: how many must-elements this document discloses on its own (weighted rating out of 10). All covered = a single-reference full coverer.'}">Must</th>`
     + `<th class="mx-score" title="Additional (A) bonus (weight/5 · 0.3, capped): each extra feature present adds points, absence never a penalty. Differentiates within a Must tier — never lifts a weaker-on-Must doc above a stronger one.">➕ A</th>`
     + (hasW ? `<th class="mx-score" title="Whole-document (W) bonus: elements of the benchmark document itself. Same bonus-only role as Additional.">📄 W</th>` : '')
     + `<th class="mx-score" title="🏆 Whole-benchmark best-match score already stored on the row (only present once ranked).">🏆 Match</th>`
