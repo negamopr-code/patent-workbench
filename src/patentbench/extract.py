@@ -80,22 +80,30 @@ def text_from_scanned_pdf(path: str, model: str | None = None, workers: int = 4,
         if not pages:
             return {"error": "scanned PDF rendered to no page images"}
         texts: list[str] = [""] * len(pages)
+        page_errors: list[str] = []
         done = 0
 
         def one(ip):
             i, p = ip
             r = text_from_image(os.path.join(td, p), model=model)
-            return i, (r.get("text") or "")
+            return i, (r.get("text") or ""), r.get("error")
 
         with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-            for i, t in ex.map(one, enumerate(pages)):
+            for i, t, err in ex.map(one, enumerate(pages)):
                 texts[i] = t
+                if err:
+                    page_errors.append(err)
                 done += 1
                 if progress:
                     progress(done, len(pages))
         text = "\n\n".join(f"— page {i + 1} —\n{t.strip()}"
                            for i, t in enumerate(texts) if t.strip()).strip()
     if len(text) < 50:
+        # Surface the REAL failure — swallowing per-page errors once masked a revoked
+        # OAuth token (401) as "yielded almost no text" (2026-07-27, amended_478.pdf).
+        if page_errors:
+            return {"error": f"scanned PDF: {len(page_errors)}/{len(pages)} page "
+                             f"transcription(s) failed — {page_errors[0][:200]}"}
         return {"error": "scanned PDF: vision transcription yielded almost no text"}
     return {"text": text}
 
