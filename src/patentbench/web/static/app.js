@@ -1184,21 +1184,34 @@ function renderCombiScanPanel() {
   const head = document.createElement('div');
   head.className = 'combi-head';
   const nShown = `(${matrix.total_ranked || rows.length} ranked; showing ${rows.length} — enough to cover every element some document discloses)`;
+  // STRICT wording (user rule): "covers all / alone" is said ONLY of an all-✓ anchor.
+  // An anchor with ~ cells "has no absent (✗) Must element" — nothing to fill, but not alone.
+  const aRow = rows.find(x => x.is_anchor) || rows[0] || null;
+  const mustPhrase = !aRow ? ''
+    : aRow.covers_all ? 'covers all Must (all ✓)'
+    : aRow.no_absent ? `has no absent (✗) Must element, though ${aRow.mand_partial} are only partial (~)`
+    : 'is the best on Must';
   if (mode === 'additional') {
     head.innerHTML = matrix.covers_all_anchor
       ? `<b>🔎 Combination finder — additional features</b> <span class="muted">— <b>${esc(matrix.anchor || '')}</b> `
-        + `covers every Must AND every additional feature. Rows below are the next-best. ${nShown}.</span>`
-      : `<b>🔎 Combination finder — additional features</b> <span class="muted">— many documents cover ALL Must `
-        + `elements, so the columns switch to the <b>additional</b> features. Row ① <b>${esc(matrix.anchor || '')}</b> `
-        + `covers all Must but is missing <b>${gapNames.length}</b> additional feature(s) (highlighted). The rows below `
-        + `bring those — pair ① with one (a partner need NOT cover Must; it combines with ①). `
+        + `${mustPhrase} AND covers every additional feature. Rows below are the next-best. ${nShown}.</span>`
+      : `<b>🔎 Combination finder — additional features</b> <span class="muted">— the top document(s) have no `
+        + `absent (✗) Must element left to fill, so the columns switch to the <b>additional</b> features. `
+        + `Row ① <b>${esc(matrix.anchor || '')}</b> ${mustPhrase} and is missing <b>${gapNames.length}</b> `
+        + `additional feature(s) (highlighted). The rows below bring those — pair ① with one (a partner need `
+        + `NOT cover Must; it combines with ①). `
         + `⚠ Rows are ordered by the ADDITIONAL weight they add to ① — NOT by their own Must rank, so an `
         + `<b>alone</b> full coverer can sit low here; the candidates list's 🎯 sort is the Must ranking. `
         + `✓ discloses · ~ partial · ✗ absent. ${nShown}.</span>`;
   } else {
     head.innerHTML = matrix.covers_all_anchor
-      ? `<b>🔎 Combination finder</b> <span class="muted">— top document <b>${esc(matrix.anchor || '')}</b> `
-        + `covers EVERY Must element alone, so no second document is needed. Rows below are the next-best. ${nShown}.</span>`
+      ? (aRow && aRow.covers_all
+        ? `<b>🔎 Combination finder</b> <span class="muted">— top document <b>${esc(matrix.anchor || '')}</b> `
+          + `covers EVERY Must element with ✓ ALONE — single-reference grade; no second document is needed. `
+          + `Rows below are the next-best. ${nShown}.</span>`
+        : `<b>🔎 Combination finder</b> <span class="muted">— top document <b>${esc(matrix.anchor || '')}</b> `
+          + `${mustPhrase}. Nothing is absent for a partner to FILL (a ~ can only be corroborated, not filled), `
+          + `but it is NOT a clean single reference — 'alone' requires all ✓. Rows below are the next-best. ${nShown}.</span>`)
       : `<b>🔎 Combination finder</b> <span class="muted">— a combination is TWO documents. `
         + `Row ① is the best document <b>${esc(matrix.anchor || '')}</b>; it is missing `
         + `<b>${gapNames.length}</b> Must element(s) (highlighted). The rows below are the closest `
@@ -1343,7 +1356,9 @@ function renderCombiScanPanel() {
     tr.className = row.is_anchor ? 'mx-anchor' : (row.covers_all ? 'mx-all' : '');
     const label = row.is_anchor
       ? ' <span class="chip mx-rank" title="The best document — the anchor of the combination.">① best</span>'
-      : (row.covers_all ? ' <span class="chip ok mx-solo" title="Also covers every Must element on its own.">alone</span>' : '');
+      : (row.covers_all
+        ? ' <span class="chip ok mx-solo" title="Covers EVERY Must element with a hard ✓ on its own — single-reference grade. (Strict: a ~ does not qualify.)">alone</span>'
+        : (row.no_absent ? ' <span class="chip mx-noabsent" title="No Must element is absent (✗), but some are only partial (~) stretch readings — NOT a clean single reference; alone requires all ✓.">no ✗</span>' : ''));
     const fills = (row.fills && row.fills.length)
       ? ` <span class="chip mx-fills" title="Fills the anchor's gap(s): ${row.fills.map(esc).join('; ')}">↳ fills ${row.fills.length}</span>` : '';
     // 🔗 combinability badge: on a partner, its pair number (green) if combinable with the
@@ -1897,8 +1912,10 @@ function renderDocs(allDocs) {
         const mtxt = `${r.mand_full}${r.mand_partial ? `+${r.mand_partial}~` : ''}/${r.mand_total}`;
         const conf = r.mand_conflicts ? ` <span class="mx-contested" title="${r.mand_conflicts} Must element(s) where the two full-text reads disagree — see the ⚡ cells in the matrix.">⚡${r.mand_conflicts}</span>` : '';
         parts.push(r.covers_all
-          ? `<span class="combined must-all" title="Covers EVERY Must element (${mtxt}; weighted ${r.mand_rating}/10). A single-reference full coverer — the top tier.">🎯 covers all Must <span class="muted">(${mtxt})</span></span>${conf}`
-          : `<span class="combined must-gap" title="Must coverage ${mtxt}; weighted ${r.mand_rating}/10. A Must element is still uncovered, so it can't cover the invention alone — it may still combine with another document (see the matrix).">🎯 ${mtxt} Must <span class="muted">(${r.mand_rating})</span></span>${conf}`);
+          ? `<span class="combined must-all" title="Covers EVERY Must element with a hard ✓ (${mtxt}; weighted ${r.mand_rating}/10). A single-reference full coverer — the top tier. (Strict: partial ~ does not qualify.)">🎯 covers all Must <span class="muted">(${mtxt})</span></span>${conf}`
+          : r.no_absent
+            ? `<span class="combined must-gap" title="No Must element is absent (✗), but ${r.mand_partial} only partial (~) — stretch readings, so NOT a clean single reference ('alone' = all ✓). Ranked by its weighted rating ${r.mand_rating}/10.">🎯 ${mtxt} Must, no ✗ <span class="muted">(${r.mand_rating})</span></span>${conf}`
+            : `<span class="combined must-gap" title="Must coverage ${mtxt}; weighted ${r.mand_rating}/10. A Must element is still uncovered, so it can't cover the invention alone — it may still combine with another document (see the matrix).">🎯 ${mtxt} Must <span class="muted">(${r.mand_rating})</span></span>${conf}`);
         if (r.add_total) parts.push(`<span class="addl" title="Additional (bonus) features: ${r.add_full}✓ ${r.add_partial}~ of ${r.add_total}. Raises rank within a Must tier; absence never lowers it.">➕ ${r.add_bonus ? `+${r.add_bonus}` : '0'}/${r.add_total}</span>`);
         if (r.w_total) parts.push(`<span class="addl wbonus" title="Whole-document features (elements of the benchmark document itself): ${r.w_full}✓ ${r.w_partial}~ of ${r.w_total}. Bonus only.">📄 ${r.w_bonus ? `+${r.w_bonus}` : '0'}/${r.w_total}</span>`);
       }

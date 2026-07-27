@@ -3488,18 +3488,26 @@ def _unified_score(elements: list[dict], doc: dict) -> dict:
     mand_part = sum(1 for s in cells if s == "partial")
     # Must elements where the two FULL-TEXT passes disagree (surfaced, not silently resolved).
     mand_conflicts = sum(1 for e in mand if eff.get(e["name"], {}).get("conflict"))
-    covers_all = bool(mand) and not any(s == "no" for s in cells)
+    # STRICT by user rule (2026-07-27): "alone"/covers-all = EVERY Must element a hard ✓.
+    # A ~ is a stretch reading — a document needing one is not a clean single reference and
+    # must not wear the badge or the top rank tier. `no_absent` keeps the looser fact
+    # separately: nothing is MISSING (a ~ can't be filled by a partner, only strengthened),
+    # which is what the matrix pivot and gap-filling care about.
+    covers_all = bool(mand) and all(s == "yes" for s in cells)
+    no_absent = bool(mand) and not any(s == "no" for s in cells)
     covered_w = sum(int(e.get("weight", 1)) * (1.0 if s == "yes" else 0.5)
                     for e, s in zip(mand, cells) if s in ("yes", "partial"))
     mand_rating = round(10.0 * covered_w / total_w, 2) if mand else 0.0
     a = _bonus_pool(add, cov)
     w = _bonus_pool(whole, cov)
     assessed = any(s != "no" for s in cells) or a["full"] or a["partial"] or w["full"] or w["partial"]
-    # Composite key: covers_all (×1e9) ≫ mand_rating (×1e6, ≤1e7) ≫ A-bonus (×1e3, ≤1e3)
-    # ≫ W-bonus (×1, ≤1). Each tier strictly dominates the next, so Must always wins.
+    # Composite key: covers_all (×1e9, STRICT all-✓) ≫ mand_rating (×1e6, ≤1e7) ≫ A-bonus
+    # (×1e3, ≤1e3) ≫ W-bonus (×1, ≤1). No tier for no_absent: a 3✓+3~ doc ranks by its
+    # rating (7.5) and sits BELOW a clean 5✓+1✗ doc (8.33) — per the same user rule.
     key = ((1e9 if covers_all else 0.0) + mand_rating * 1e6
            + a["bonus"] * 1e3 + w["bonus"]) if assessed else -1.0
-    return {"covers_all": covers_all, "mand_full": mand_full, "mand_partial": mand_part,
+    return {"covers_all": covers_all, "no_absent": no_absent,
+            "mand_full": mand_full, "mand_partial": mand_part,
             "mand_total": len(mand), "mand_rating": mand_rating,
             "mand_conflicts": mand_conflicts,
             "add_bonus": a["bonus"], "add_full": a["full"], "add_partial": a["partial"],
@@ -3582,7 +3590,12 @@ def _combi_solo(elements: list[dict], docs: list[dict], limit: int = 20) -> list
     disclosure can still MEET a limitation — that is the anticipation standard, not literal
     identity — so requiring every element at YES hid genuine single-reference anticipations
     (e.g. one strong on 9 limbs, pack-level on 2). Only a "no" means the document truly lacks
-    the element. Literal coverers (more YES) rank first; the ✓/~ split stays visible."""
+    the element. Literal coverers (more YES) rank first; the ✓/~ split stays visible.
+
+    NOTE the split from `_unified_score.covers_all` (2026-07-27 user rule): the "alone"
+    badge and the top rank tier are STRICT (all ✓). Membership in THIS list stays loose —
+    it transparently reports the ✓/~ split and names the partial elements, so a ~-leaning
+    near-anticipation is surfaced without being labeled a clean single reference."""
     mand = [e for e in elements if _kind(e) == "M"]
     add = [e for e in elements if _kind(e) == "A"]
     whole = [e for e in elements if _kind(e) == "W"]
@@ -3737,6 +3750,7 @@ def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> di
             "id": d["id"], "number": d.get("number"), "_eff": eff,
             "mand_full": u["mand_full"], "mand_partial": u["mand_partial"],
             "mand_total": u["mand_total"], "covers_all": u["covers_all"],
+            "no_absent": u["no_absent"],
             "mand_rating": u["mand_rating"],
             "add_bonus": u["add_bonus"], "add_full": u["add_full"],
             "add_partial": u["add_partial"], "add_total": u["add_total"],
@@ -3750,7 +3764,10 @@ def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> di
     rows.sort(key=lambda r: (-r["key"], r["number"] or ""))
     # PIVOT decision: Must solved by the best doc AND bonus elements exist → differentiate on
     # the additional dimension instead of repeating all-✓ Must rows.
-    pivot = bool(rows) and rows[0]["covers_all"] and bool(bonus)
+    # Pivot on no_absent, not the strict covers_all: once the best doc has nothing ABSENT
+    # (a ~ can't be filled by a partner), Must gap-filling is exhausted and the additional
+    # dimension differentiates. The strict all-✓ test only gates the "alone" badge/tier.
+    pivot = bool(rows) and rows[0]["no_absent"] and bool(bonus)
     active = bonus if pivot else mand
     mode = "additional" if pivot else "must"
     columns = [{"name": e["name"], "weight": int(e.get("weight", 1)), "kind": _kind(e)}
@@ -4049,8 +4066,10 @@ def combi_scan_ep(tab_id: int, body: schemas.CombiScanRequest, bg: BackgroundTas
         f"🔎 Combi scan (stage 1, {model}) in {len(batches)} bulk pass(es) against "
         f"{len(elements)} element(s) of the claimed invention"
         + (f" — {reused} candidate(s) already assessed at this depth were REUSED, not re-read"
-           if reused else "") + f". {len(solo)} document(s) cover EVERY mandatory element "
-        f"ALONE (stronger than any combination), {len(complete)} pair(s) cover them together. "
+           if reused else "") + f". {sum(1 for s in solo if not s['mand_partial'])} document(s) "
+        f"cover EVERY mandatory element ALONE with a hard ✓ (single-reference grade), "
+        f"{sum(1 for s in solo if s['mand_partial'])} more have no absent element but lean on "
+        f"partial (~) readings, {len(complete)} pair(s) cover them together. "
         "Verdicts are from DIGESTS (summaries) — run stage 2 to confirm the finalists against "
         "full text. Independent of every other score in the app." + note)
     bg.add_task(_auto_judge_combi_safe, tab_id)

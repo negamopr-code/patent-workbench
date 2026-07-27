@@ -251,6 +251,8 @@ textarea, select, input[type="text"] {
 .combi-matrix .cell-no { color: var(--muted); opacity: .45; }
 .combi-matrix .mx-score { font-family: ui-monospace, monospace; }
 .combi-matrix .mx-solo { margin-left: 5px; }
+/* 'no ✗': nothing absent on Must but partial (~) cells remain — NOT 'alone' (strict all-✓). */
+.combi-matrix .mx-noabsent { margin-left: 5px; color: var(--warn); border-color: var(--warn); cursor: help; }
 /* Combination finder: anchor (best doc), its gaps, and each partner's gap-filling cells. */
 .combi-matrix tr.mx-anchor .mx-doc { border-left: 3px solid var(--accent); }
 .combi-matrix tr.mx-anchor td { background: color-mix(in srgb, var(--accent) 10%, transparent); }

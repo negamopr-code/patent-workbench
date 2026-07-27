@@ -4284,3 +4284,25 @@ def test_documents_endpoint_attaches_must_rank_like_state(client):
     assert st[did]["rank"] and dl[did]["rank"], "both payloads must carry the rank"
     assert dl[did]["rank"]["key"] == st[did]["rank"]["key"]
     assert dl[did]["rank"]["mand_full"] == 1 and dl[did]["rank"]["mand_partial"] == 1
+
+
+def test_covers_all_is_strict_all_yes(client):
+    """User rule 2026-07-27: 'alone' / covers-all = EVERY Must element a hard ✓.
+    A doc with a ~ gets no_absent (nothing to fill) but NOT covers_all, no 1e9 tier —
+    so a 3✓+3~ doc ranks below a clean 5✓/6 doc by plain rating."""
+    import patentbench.db as db
+    tid = client.post("/api/tabs", json={"name": "Strict"}).json()["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "a battery", "weight": 5},
+                                   {"name": "a gauge", "weight": 5}], "title": "b+g"})
+    all_yes = _feature_doc(db, tid, "US4444444A",
+                           [{"name": "a battery", "weight": 5, "status": "yes", "note": ""},
+                            {"name": "a gauge", "weight": 5, "status": "yes", "note": ""}])
+    with_part = _feature_doc(db, tid, "US5555555A",
+                             [{"name": "a battery", "weight": 5, "status": "yes", "note": ""},
+                              {"name": "a gauge", "weight": 5, "status": "partial", "note": ""}])
+    docs = {d["id"]: d for d in client.get(f"/api/tabs/{tid}/state").json()["documents"]}
+    strict, loose = docs[all_yes]["rank"], docs[with_part]["rank"]
+    assert strict["covers_all"] is True and strict["no_absent"] is True
+    assert loose["covers_all"] is False and loose["no_absent"] is True
+    assert strict["key"] >= 1e9 > loose["key"]
