@@ -4306,3 +4306,25 @@ def test_covers_all_is_strict_all_yes(client):
     assert strict["covers_all"] is True and strict["no_absent"] is True
     assert loose["covers_all"] is False and loose["no_absent"] is True
     assert strict["key"] >= 1e9 > loose["key"]
+
+
+def test_benchmark_scanned_pdf_falls_back_to_vision_ocr(client, monkeypatch):
+    """A scanned (image-only) benchmark PDF must be vision-transcribed page by page —
+    it used to hard-fail with 'no extractable text … upload the pages as pictures
+    instead' (bit 2026-07-27: amended_478.pdf). Same fallback the ⚖️ PSA upload has."""
+    from patentbench import extract
+    monkeypatch.setattr(extract, "text_from_pdf",
+                        lambda p: {"error": "no extractable text in the PDF (scanned "
+                                            "image-only PDF?) — upload the pages as "
+                                            "pictures instead"})
+    monkeypatch.setattr(extract, "text_from_scanned_pdf",
+                        lambda p, model=None, workers=4, progress=None:
+                        {"text": "— page 1 —\namended claim 1 wording from the scan"})
+    tab = client.post("/api/tabs", json={"name": "Scan"}).json()
+    client.post(f"/api/tabs/{tab['id']}/benchmark/upload",
+                files=[("files", ("amended_478.pdf", b"%PDF-1.4 fake", "application/pdf"))])
+    st = client.get(f"/api/tabs/{tab['id']}/state").json()["benchmark"]
+    assert st["status"] == "ready" and not st.get("error")
+    full = client.get(f"/api/tabs/{tab['id']}/benchmark/full").json()
+    assert "amended claim 1 wording" in full["text"]
+    assert st.get("text_model")        # vision was involved → the model is recorded

@@ -336,12 +336,27 @@ def _extract_benchmark_files(tab_id: int, model: str | None = None) -> None:
     total = len(files)
     done = 0
     lock = threading.Lock()
+    vision_used = False                        # any page photo OR scanned-PDF fallback
     db.update_benchmark(tab_id, progress=f"0/{total}")
 
     def one(f: dict) -> tuple[dict, dict]:
-        nonlocal done
-        res = (extract.text_from_pdf(f["path"]) if f["kind"] == "pdf"
-               else extract.text_from_image(f["path"], model=model))
+        nonlocal done, vision_used
+        if f["kind"] == "pdf":
+            res = extract.text_from_pdf(f["path"])
+            if "error" in res and "no extractable text" in res["error"]:
+                # SCANNED (image-only) PDF — same vision fallback the ⚖️ PSA upload
+                # got on 07-22; the benchmark path used to hard-fail here with
+                # "upload the pages as pictures instead" (bit: amended_478.pdf).
+                with lock:
+                    vision_used = True
+                res = extract.text_from_scanned_pdf(
+                    f["path"], model=model, workers=TRANSCRIBE_WORKERS,
+                    progress=lambda p, n: db.update_benchmark(
+                        tab_id, progress=f"{f['name']}: page {p}/{n} (vision OCR)"))
+        else:
+            with lock:
+                vision_used = True
+            res = extract.text_from_image(f["path"], model=model)
         with lock:
             done += 1
             db.update_benchmark(tab_id, progress=f"{done}/{total}")
@@ -359,8 +374,8 @@ def _extract_benchmark_files(tab_id: int, model: str | None = None) -> None:
         db.update_benchmark(tab_id, status="error", progress=None,
                             error="; ".join(errors) or "no text extracted")
         return
-    # only page photos go through a model; a pure-PDF benchmark records no text_model
-    had_image = any(f["kind"] != "pdf" for f in files)
+    # a model was involved only for page photos / scanned-PDF vision fallback
+    had_image = vision_used
     db.update_benchmark(tab_id, status="ready", text=text, progress=None,
                         text_model=(model or claude_bridge.TRANSCRIBE_MODEL) if had_image else None,
                         error="; ".join(errors) or None)

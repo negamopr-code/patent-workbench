@@ -63,6 +63,43 @@ def text_from_pdf(path: str) -> dict:
     return {"text": text}
 
 
+def text_from_scanned_pdf(path: str, model: str | None = None, workers: int = 4,
+                          progress=None) -> dict:
+    """Vision fallback for an image-only PDF: render the pages (pdftoppm) and
+    transcribe each with the vision model — the same engine as photo pages and
+    the ⚖️ PSA scanned fallback. `progress(done, total)` is called per page.
+    {text} | {error}."""
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            subprocess.run(["pdftoppm", "-r", "150", "-png", path,
+                            os.path.join(td, "pg")],
+                           check=True, timeout=300, capture_output=True)
+        except (subprocess.SubprocessError, OSError) as e:
+            return {"error": f"scanned PDF, and pdftoppm failed to render it: {e}"}
+        pages = sorted(os.listdir(td))
+        if not pages:
+            return {"error": "scanned PDF rendered to no page images"}
+        texts: list[str] = [""] * len(pages)
+        done = 0
+
+        def one(ip):
+            i, p = ip
+            r = text_from_image(os.path.join(td, p), model=model)
+            return i, (r.get("text") or "")
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            for i, t in ex.map(one, enumerate(pages)):
+                texts[i] = t
+                done += 1
+                if progress:
+                    progress(done, len(pages))
+        text = "\n\n".join(f"— page {i + 1} —\n{t.strip()}"
+                           for i, t in enumerate(texts) if t.strip()).strip()
+    if len(text) < 50:
+        return {"error": "scanned PDF: vision transcription yielded almost no text"}
+    return {"text": text}
+
+
 def numbers_from_text(text: str) -> dict:
     return {"numbers": patents.extract_candidates(text)}
 
