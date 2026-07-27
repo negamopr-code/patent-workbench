@@ -1563,11 +1563,15 @@ function scoreSortValue(d, key) {
   // only differentiate within a tier. Un-assessed docs (no rank) sort last.
   if (key === 'must') return d.rank ? d.rank.key : -1;
   if (key === 'weighted') {
-    const bm = blendedMatch(d);
-    if (!bm) return -1;
-    // primary = blended (doc+feature) match; tiebreak = #features literally matched
+    // The label promises "by weighted features", so the PRIMARY key is the ⚖ Σ-weighted
+    // points shown on the card (YES = full weight, PARTIAL = half); tiebreaks: #features
+    // fully matched, then the blended match. The blended value had silently become the
+    // primary here, so the doc with the TOP ⚖ number could sit below a lower one — the
+    // sort contradicted the very number printed next to it (bit 2026-07-27).
     const fst = featureStats(d);
-    return bm.value * 1e6 + (fst ? fst.matched : 0) * 1e3 + (documentScore(d) ?? 0) * 10;
+    if (!fst || !fst.total) return -1;
+    const bm = blendedMatch(d);
+    return fst.weighted * 1e6 + fst.matched * 1e3 + (bm ? bm.value : 0) * 10;
   }
   if (key === 'nlm') return d.nlm_score ?? -1;
   if (key === 'delta') return (d.score != null && d.nlm_score != null) ? Math.abs(d.score - d.nlm_score) : -1;
@@ -1757,6 +1761,15 @@ function renderDocs(allDocs) {
   // 1-based position among RANKED (scored) docs, so the user sees 1st / 2nd / 3rd explicitly.
   const rankIndex = new Map(); let _rp = 0;
   for (const d of docs) if (d.score != null || d.nlm_score != null) rankIndex.set(d.id, ++_rp);
+  // 🎯 cross-reference: each ranked doc's position under the Must-coverage key — the SAME
+  // key the matrix's '① best' uses. Shown as a chip whenever the active sort is a different
+  // one, so an alternative ordering can never silently show a different #1 than the matrix.
+  const mustPos = new Map();
+  if (sortKey !== 'must') {
+    [...allDocs].filter(d => d.rank)
+      .sort((a, b) => scoreSortValue(b, 'must') - scoreSortValue(a, 'must') || a.id - b.id)
+      .forEach((d, i) => mustPos.set(d.id, i + 1));
+  }
   lastRankedDocIds = docs.map(d => d.id);   // ranked order, for ➕ additional read's top-N
   for (const d of docs) {
     const el = document.createElement('div');
@@ -1867,6 +1880,8 @@ function renderDocs(allDocs) {
       const consensus = isConsensus(d);
       const pos = rankIndex.get(d.id);            // ordinal position in the ranking
       if (pos) parts.push(`<span class="rankpos">#${pos}</span>`);
+      const mp = mustPos.get(d.id);
+      if (mp && mp !== pos) parts.push(`<span class="rankpos mustpos" title="Position under the 🎯 Must-coverage rank — the SAME key the combination matrix ('① best') uses. The current sort orders differently; this chip keeps the matrix rank visible so the two views never silently disagree.">🎯#${mp}</span>`);
       // BLENDED match leads when the benchmark has BOTH a document and features: the rank is
       // (document match + feature coverage)/2, so a candidate must do well on both. Shown with
       // its two parts so the number is never opaque.

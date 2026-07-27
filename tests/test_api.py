@@ -4257,3 +4257,23 @@ def test_combi_ideal_pair_outside_tab_updates_nothing(client, monkeypatch):
     assert db.get_document(a_id)["combi_depth"] is None      # nothing written
     msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
     assert any("not among this tab's fetched candidates" in m for m in msgs)
+
+
+def test_documents_endpoint_attaches_must_rank_like_state(client):
+    """The /documents refresh path must carry the SAME unified Must rank as /state —
+    when it didn't, the list silently lost its 🎯 sort after a deep read and showed a
+    different #1 than the matrix (2026-07-27)."""
+    import patentbench.db as db
+    tab = client.post("/api/tabs", json={"name": "RankParity"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "a battery", "weight": 5},
+                                   {"name": "a gauge", "weight": 3}], "title": "b+g"})
+    did = _feature_doc(db, tid, "US3333333A",
+                       [{"name": "a battery", "weight": 5, "status": "yes", "note": "cell"},
+                        {"name": "a gauge", "weight": 3, "status": "partial", "note": "meter"}])
+    st = {d["id"]: d for d in client.get(f"/api/tabs/{tid}/state").json()["documents"]}
+    dl = {d["id"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert st[did]["rank"] and dl[did]["rank"], "both payloads must carry the rank"
+    assert dl[did]["rank"]["key"] == st[did]["rank"]["key"]
+    assert dl[did]["rank"]["mand_full"] == 1 and dl[did]["rank"]["mand_partial"] == 1

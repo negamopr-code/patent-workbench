@@ -240,25 +240,32 @@ def _doc_links(d: dict) -> dict | None:
     return None if d.get("source") == "notebook-text" else patents.links(d["number"])
 
 
+def _attach_ranks(tab_id: int, docs: list[dict]) -> None:
+    """Attach the unified Must-dominant `rank` — THE key the matrix's '① best' uses —
+    to a documents payload. EVERY endpoint that returns the documents list must go
+    through here: on 2026-07-27 the /documents refresh path (used after deep reads)
+    returned docs WITHOUT `rank`, so the palmares silently lost its 🎯 sort, fell back
+    to the ⚖ blended sort, and showed a different #1 than the matrix."""
+    bm = db.get_benchmark(tab_id)
+    elements = _combi_elements(bm)
+    if not elements:
+        return
+    bnorm = _norm_num((bm or {}).get("number"))
+    full_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)}
+    for d in docs:
+        if bnorm and _norm_num(d.get("number")) == bnorm:
+            d["rank"] = None            # the benchmark itself is not a candidate
+            continue
+        src = full_by_id.get(d["id"])
+        u = _unified_score(elements, src) if src else None
+        d["rank"] = u if (u and u["assessed"]) else None
+
+
 @app.get("/api/tabs/{tab_id}/state")
 def tab_state(tab_id: int):
     _tab_or_404(tab_id)
     docs = db.list_documents(tab_id)
-    # Unified Must-dominant rank, computed from ALREADY-STORED coverage (combi_coverage +
-    # the deep-read's feature_scores) — no model call, so every assessed document re-ranks
-    # for free. Attached as `rank` so the list can sort/badge by the same key as the matrix.
-    bm = db.get_benchmark(tab_id)
-    elements = _combi_elements(bm)
-    if elements:
-        bnorm = _norm_num((bm or {}).get("number"))
-        full_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)}
-        for d in docs:
-            if bnorm and _norm_num(d.get("number")) == bnorm:
-                d["rank"] = None            # the benchmark itself is not a candidate
-                continue
-            src = full_by_id.get(d["id"])
-            u = _unified_score(elements, src) if src else None
-            d["rank"] = u if (u and u["assessed"]) else None
+    _attach_ranks(tab_id, docs)
     for d in docs:
         d["links"] = _doc_links(d)
     return {"benchmark": _benchmark_view(tab_id),
@@ -1108,6 +1115,7 @@ def document_reuse(tab_id: int, doc_id: int, bg: BackgroundTasks):
 def documents_list(tab_id: int):
     _tab_or_404(tab_id)
     docs = db.list_documents(tab_id)
+    _attach_ranks(tab_id, docs)     # same rank as /state — see _attach_ranks docstring
     for d in docs:
         d["links"] = _doc_links(d)
     return {"documents": docs}
