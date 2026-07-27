@@ -275,6 +275,14 @@ textarea, select, input[type="text"] {
 .combi-matrix .mx-nopair { color: var(--err); border-color: var(--err); margin-left: 4px; }
 .combi-matrix .mx-unjudged { color: var(--muted); margin-left: 4px; cursor: help; }
 .combi-legend { margin-top: 4px; font-size: 11px; line-height: 1.5; }
+/* 🏆 chat-grade ideal pair: pinned verdict card + per-row membership badge + union chips. */
+.combi-ideal { font-size: 12px; border: 1px solid var(--accent); border-radius: 8px; padding: 6px 10px; margin: 4px 0 8px; background: color-mix(in srgb, var(--accent) 8%, transparent); line-height: 1.6; }
+.combi-ideal .mx-ideal-cells { margin: 4px 0 2px; display: flex; gap: 4px; flex-wrap: wrap; }
+.combi-ideal .mx-uchip { font-family: ui-monospace, monospace; cursor: help; }
+.combi-ideal .mx-uchip.u-yes { color: var(--ok); border-color: var(--ok); }
+.combi-ideal .mx-uchip.u-part { color: var(--warn); border-color: var(--warn); }
+.combi-ideal .mx-uchip.u-no { color: var(--err); border-color: var(--err); }
+.combi-matrix .mx-ideal { color: var(--accent); border-color: var(--accent); margin-left: 4px; font-weight: 600; cursor: help; }
 /* 🎯 Must-first list badges: covers-all is the top tier (green), a gap is a combine-candidate (amber). */
 .combined.must-all { color: var(--ok); font-weight: 600; }
 .combined.must-gap { color: var(--warn); }

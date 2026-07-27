@@ -3840,13 +3840,15 @@ def combi_results_ep(tab_id: int, top_pairs: int = 20):
     fresh = _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if _rigorous(d, elements)], bm)
     if not fresh:
         return {"ok": True, "has_results": False, "pairs": [], "solo": [],
-                "matrix": {"columns": [], "rows": []}, "elements": len(elements)}
+                "matrix": {"columns": [], "rows": []}, "elements": len(elements),
+                "ideal": _combi_ideal_payload(tab_id)}
     pairs = _combi_pairs(elements, fresh, top_pairs)
     solo = _combi_solo(elements, fresh)
     depth = "full" if fresh and all(d.get("combi_depth") == "full" for d in fresh) else "digest"
     return {"ok": True, "has_results": True, "assessed": len(fresh),
             "elements": len(elements), "complete": len([p for p in pairs if p["complete"]]),
-            "pairs": pairs, "solo": solo, "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": depth}
+            "pairs": pairs, "solo": solo, "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": depth,
+            "ideal": _combi_ideal_payload(tab_id)}
 
 
 @app.post("/api/tabs/{tab_id}/combi-screen")
@@ -4109,6 +4111,160 @@ def combi_verify_ep(tab_id: int, body: schemas.CombiVerifyRequest, bg: Backgroun
     return {"ok": True, "verified": len(chosen) - len(errors), "failed": len(errors),
             "elements": len(elements), "complete": len(complete), "pairs": pairs,
             "solo": solo, "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": "full"}
+
+
+# ---------- 🏆 chat-grade ideal pair ----------
+# Born from a real divergence (2026-07-27): the chat, grounded on the benchmark's full
+# claims+description and every candidate's stored verdict card, concluded that
+# CN109964136 + EP2088659 covers every dependent claim — while the matrix, derived from
+# the stricter per-element stage-2 read, held EP2088659 at rank 13 with ~/✗ cells. The
+# fix is NOT to bend one to the other by hand each time: this endpoint runs the SAME
+# chat-grade assessment on demand and then writes it INTO the stores the matrix renders
+# from, so both views come from one verdict.
+
+def _combi_ideal_payload(tab_id: int) -> dict | None:
+    """The stored 🏆 verdict, with the pair's publication numbers resolved (a doc may have
+    been deleted since — the verdict is then reported without cells to point at)."""
+    row = db.get_combi_ideal(tab_id)
+    if not row:
+        return None
+    for key, out in (("a_id", "a_number"), ("b_id", "b_number")):
+        d = db.get_document(row[key])
+        row[out] = (d or {}).get("number")
+    return row
+
+
+def _union_of(elements: list[dict], cov_a: list[dict], cov_b: list[dict]) -> list[dict]:
+    """Per-element UNION of the pair's verdicts: the better status wins; `by` names the
+    supplier(s) so the pinned verdict can say who brings what."""
+    rank = {"yes": 2, "partial": 1, "no": 0}
+    by_a = {c["name"]: c for c in cov_a or []}
+    by_b = {c["name"]: c for c in cov_b or []}
+    out = []
+    for e in elements:
+        sa = (by_a.get(e["name"], {}).get("status") or "no").lower()
+        sb = (by_b.get(e["name"], {}).get("status") or "no").lower()
+        best = sa if rank.get(sa, 0) >= rank.get(sb, 0) else sb
+        by = ("both" if rank.get(sa, 0) and rank.get(sa, 0) == rank.get(sb, 0)
+              else "A" if rank.get(sa, 0) > rank.get(sb, 0)
+              else "B" if rank.get(sb, 0) else "")
+        out.append({"name": e["name"], "kind": _kind(e), "weight": int(e.get("weight", 1)),
+                    "status": best, "by": by})
+    return out
+
+
+@app.post("/api/tabs/{tab_id}/combi/ideal")
+def combi_ideal_ep(tab_id: int, body: schemas.CombiIdealRequest, bg: BackgroundTasks):
+    """🏆 Run the canonical ideal-pair question through the CHAT pipeline (phase 1 —
+    identical grounding and model choice, so the conclusion IS what the chat would say),
+    then full-read the two chosen documents against the elements following that
+    conclusion's affirmative readings (phase 2), and store everything the matrix needs:
+    per-document cells (combi_coverage, depth full), the pair's combinability verdict,
+    and the pinned tab-level 🏆 card. Both the chat and the matrix then show ONE verdict."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    if not bm or not (bm.get("features") or []):
+        raise HTTPException(400, "combi needs benchmark features — define them first")
+    elements = _combi_elements(bm)
+    if len(_combi_mandatory(bm)) < 2:
+        raise HTTPException(400, "combination analysis needs at least TWO mandatory "
+                                 "elements — 🔬 Decompose the claim first")
+    model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
+    documents = db.list_documents(tab_id, full=True)
+    pool = _drop_benchmark([d for d in documents if d["status"] == "fetched"], bm)
+    if len(pool) < 2:
+        raise HTTPException(400, "need at least two fetched candidates")
+    # FOCUS = the matrix anchor (the ranked best document): its full text is what the
+    # chat run that motivated this feature was grounded on; every other candidate rides
+    # along as its stored verdict card, exactly like the chat roster.
+    matrix = _combi_matrix(elements, pool)
+    anchor_id = (matrix["rows"][0]["id"] if matrix.get("rows") else None)
+    focus = [d for d in pool if d["id"] == anchor_id] or None
+    roster = [d for d in pool if not focus or d["id"] != focus[0]["id"]]
+    history = db.list_messages(tab_id, limit=claude_bridge.MAX_HISTORY)
+    question = claude_bridge.IDEAL_COMBI_QUESTION
+    db.append_message(tab_id, "q", f"🏆 Ideal pair (chat-grade, {model}): {question}")
+    res = claude_bridge.chat(question + claude_bridge._IDEAL_PAIR_TRAILER,
+                             history=history, documents=roster, model=model,
+                             benchmark=bm, focus=focus, full=True)
+    out_messages = []
+    if "error" in res:
+        out_messages.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
+        return {"messages": out_messages, "error": res["error"]}
+    pair = claude_bridge.parse_ideal_pair(res["answer"])
+    prose = claude_bridge.strip_ideal_trailer(res["answer"])
+    participants = [{"kind": "model", "title": model},
+                    {"kind": "psa", "title": "🏆 ideal pair (chat-grade)"},
+                    {"kind": "benchmark", "title": _benchmark_label(bm)}]
+    if focus:
+        participants.append({"kind": "documents",
+                             "title": f"anchor {focus[0].get('number')} (full text)"})
+    out_messages.append(db.append_message(tab_id, "c", _verify_citations(tab_id, prose),
+                                          model=model, participants=participants))
+
+    def _fail(note: str) -> dict:
+        out_messages.append(db.append_message(tab_id, "s", note))
+        return {"messages": out_messages, "ok": False, "ideal": _combi_ideal_payload(tab_id)}
+
+    if not pair:
+        return _fail("🏆 The answer carried no machine-readable IDEAL PAIR line — the "
+                     "matrix was NOT updated. Re-run, or read the verdict above.")
+    by_base = {}
+    for d in pool:
+        by_base.setdefault(db._number_base(d.get("number") or "").upper(), d)
+    docs_ab = [by_base.get(db._number_base(n).upper()) for n in pair]
+    if not all(docs_ab):
+        missing = [n for n, d in zip(pair, docs_ab) if not d]
+        return _fail(f"🏆 The chat chose {' + '.join(pair)}, but "
+                     f"{', '.join(missing)} is not among this tab's fetched candidates — "
+                     "the matrix was NOT updated. Fetch it into the tab and re-run.")
+    doc_a, doc_b = docs_ab
+    # PHASE 2 — convert the prose verdict into per-element, per-document cells against
+    # both FULL texts (the affirmative, stretch-allowed read the analysis argued for).
+    ver = claude_bridge.combi_ideal_verify(elements, doc_a, doc_b, prose, model=model)
+    if "error" in ver:
+        return _fail(f"🏆 Pair chosen ({doc_a['number']} + {doc_b['number']}), but the "
+                     f"full-text element read failed: {ver['error']} — matrix not updated.")
+    results = ver.get("results") or {}
+    cov_a = results.get(doc_a["number"]) or results.get(pair[0])
+    cov_b = results.get(doc_b["number"]) or results.get(pair[1])
+    if not cov_a or not cov_b:
+        return _fail(f"🏆 Pair chosen ({doc_a['number']} + {doc_b['number']}), but the "
+                     "element read returned no parsable verdict block for "
+                     f"{'both documents' if not cov_a and not cov_b else (doc_a['number'] if not cov_a else doc_b['number'])} — matrix not updated.")
+    for d, cov in ((doc_a, cov_a), (doc_b, cov_b)):
+        db.update_document(d["id"], combi_coverage=json.dumps(cov, ensure_ascii=False),
+                           combi_depth="full")
+    db.set_combi_motivation(tab_id, doc_a["id"], doc_b["id"], bool(ver.get("combinable")),
+                            ver.get("reason") or "🏆 chat-grade ideal pair", model)
+    union = _union_of(elements, cov_a, cov_b)
+    mand_u = [u for u in union if u["kind"] == "M"]
+    m_yes = sum(1 for u in mand_u if u["status"] == "yes")
+    m_part = sum(1 for u in mand_u if u["status"] == "partial")
+    open_m = [u["name"] for u in mand_u if u["status"] == "no"]
+    db.set_combi_ideal(tab_id, doc_a["id"], doc_b["id"],
+                       {"answer": prose, "union": union,
+                        "combinable": bool(ver.get("combinable")),
+                        "reason": ver.get("reason") or "",
+                        "mand_yes": m_yes, "mand_partial": m_part,
+                        "mand_total": len(mand_u), "open": open_m}, model)
+    out_messages.append(db.append_message(
+        tab_id, "s",
+        f"🏆 Ideal pair {doc_a['number']} + {doc_b['number']}: union covers "
+        f"{m_yes}✓{f' +{m_part}~' if m_part else ''} of {len(mand_u)} Must element(s)"
+        + (f"; still open: {'; '.join(open_m)}" if open_m else "")
+        + f". {'Combinable' if ver.get('combinable') else '⛔ NOT combinable'}"
+        + (f" — {ver['reason']}" if ver.get("reason") else "") + ". Both documents were "
+        "re-read on FULL text following this verdict; their matrix cells and the pair "
+        "pin now reflect it."))
+    bg.add_task(_auto_judge_combi_safe, tab_id)
+    fresh = _drop_benchmark([d for d in db.list_documents(tab_id, full=True)
+                             if d.get("combi_coverage")], bm)
+    return {"ok": True, "messages": out_messages, "ideal": _combi_ideal_payload(tab_id),
+            "pairs": _combi_pairs(elements, fresh, 20), "solo": _combi_solo(elements, fresh),
+            "matrix": _combi_matrix(elements, _drop_benchmark(
+                [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"], bm)),
+            "depth": "full"}
 
 
 def _judge_combi_pairs(tab_id: int, bm: dict, pairs: list[dict], keys: list[tuple],

@@ -4176,3 +4176,79 @@ def test_figures_all_captions_failed_keeps_unread_not_zero(client, monkeypatch):
     client.post(f"/api/tabs/{t['id']}/documents/{did}/figures")
     doc = client.get(f"/api/tabs/{t['id']}/documents").json()["documents"][0]
     assert doc["figures_n"] is None       # unread (re-run heals), NOT 'no drawings'
+
+
+# ---------- 🏆 chat-grade ideal pair ----------
+
+def test_parse_ideal_pair_and_strip():
+    text = ("The pair is CN109964136 with EP2088659 because …\n\n"
+            "IDEAL PAIR: CN109964136 + EP2088659")
+    assert claude_bridge.parse_ideal_pair(text) == ("CN109964136", "EP2088659")
+    # the LAST match wins (the model may quote the requested format first), separators vary
+    text2 = ("Format reminder: IDEAL PAIR: XX0000000 + YY0000000\n…analysis…\n"
+             "IDEAL PAIR: US1111111 and EP2222222")
+    assert claude_bridge.parse_ideal_pair(text2) == ("US1111111", "EP2222222")
+    assert claude_bridge.parse_ideal_pair("no trailer here") is None
+    stripped = claude_bridge.strip_ideal_trailer(text)
+    assert "IDEAL PAIR" not in stripped and "CN109964136 with EP2088659" in stripped
+
+
+def _ideal_tab(client, db):
+    """Tab with a 2-mandatory-element benchmark and two fetched candidates."""
+    tid = client.post("/api/tabs", json={"name": "Ideal"}).json()["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features",
+                json={"features": [{"name": "a battery", "weight": 5},
+                                   {"name": "a gauge", "weight": 3}], "title": "b+g"})
+    ids = db.add_documents(tid, ["CN109964136A", "EP2088659A1"])["inserted"]
+    for i in ids:
+        db.update_document(i, status="fetched", claims="1. A method.", description="desc")
+    return tid, ids
+
+
+def test_combi_ideal_endpoint_writes_matrix_and_pins_verdict(client, monkeypatch):
+    tid, (a_id, b_id) = _ideal_tab(client, db)
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: {"answer": "A supplies X; B supplies Y.\n\n"
+                                                   "IDEAL PAIR: CN109964136 + EP2088659",
+                                         "model": "claude-opus-4-8"})
+    monkeypatch.setattr(claude_bridge, "combi_ideal_verify",
+        lambda els, da, dbdoc, rationale, model=None: {
+            "results": {
+                "CN109964136A": [{"name": "a battery", "weight": 5, "status": "yes", "evidence": "claim 1"},
+                                 {"name": "a gauge", "weight": 3, "status": "no", "evidence": ""}],
+                "EP2088659A1": [{"name": "a battery", "weight": 5, "status": "no", "evidence": ""},
+                                {"name": "a gauge", "weight": 3, "status": "yes", "evidence": "[0067]"}]},
+            "combinable": True, "reason": "same field, complementary teachings",
+            "model": "claude-opus-4-8"})
+    r = client.post(f"/api/tabs/{tid}/combi/ideal", json={"model": "claude-opus-4-8"}).json()
+    assert r["ok"] and r["ideal"]["a_number"] == "CN109964136A"
+    assert r["ideal"]["b_number"] == "EP2088659A1"
+    assert r["ideal"]["mand_yes"] == 2 and r["ideal"]["mand_total"] == 2
+    assert r["ideal"]["combinable"] is True and r["ideal"]["open"] == []
+    # pair cells written at FULL depth → the matrix now renders the chat verdict
+    da, dbb = db.get_document(a_id), db.get_document(b_id)
+    assert da["combi_depth"] == "full" and dbb["combi_depth"] == "full"
+    assert '"yes"' in dbb["combi_coverage"] and "0067" in dbb["combi_coverage"]
+    # combinability persisted for the pair
+    lo, hi = sorted((a_id, b_id))
+    assert db.get_combi_motivations(tid)[f"{lo}-{hi}"]["combinable"] is True
+    # survives reload: /combi-results rehydrates the pinned verdict
+    cr = client.get(f"/api/tabs/{tid}/combi-results").json()
+    assert cr["ideal"]["a_id"] == a_id and cr["ideal"]["union"][1]["by"] == "B"
+    # the prose and the union summary landed in the chat
+    msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
+    assert any("A supplies X" in m and "IDEAL PAIR" not in m for m in msgs)
+    assert any("🏆 Ideal pair CN109964136A + EP2088659A1" in m for m in msgs)
+
+
+def test_combi_ideal_pair_outside_tab_updates_nothing(client, monkeypatch):
+    tid, (a_id, b_id) = _ideal_tab(client, db)
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: {"answer": "Best is elsewhere.\n\n"
+                                                   "IDEAL PAIR: CN109964136 + US9999999",
+                                         "model": "claude-opus-4-8"})
+    r = client.post(f"/api/tabs/{tid}/combi/ideal", json={}).json()
+    assert r["ok"] is False and r["ideal"] is None
+    assert db.get_document(a_id)["combi_depth"] is None      # nothing written
+    msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
+    assert any("not among this tab's fetched candidates" in m for m in msgs)

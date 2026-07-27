@@ -1218,6 +1218,98 @@ def combi_coverage_full(elements: list[dict], doc: dict, model: str | None = Non
     return {"results": parse_coverage(res["answer"], elements), "model": res.get("model")}
 
 
+# 🏆 CHAT-GRADE IDEAL PAIR — the assessment the user otherwise runs by hand in chat
+# ("what is the ideal combination of two documents covering the whole benchmark…"),
+# packaged as one button. Phase 1 CHOOSES the pair through the chat pipeline itself
+# (identical grounding: benchmark block + anchor full text + every candidate's stored
+# verdict card + history), so its conclusion matches what the chat says by construction.
+# Phase 2 (combi_ideal_verify below) then re-reads BOTH chosen documents' FULL text and
+# converts the prose conclusion into per-element verdicts the coverage matrix renders —
+# that is how the matrix comes to reflect exactly what the chat concluded, instead of
+# the stricter per-element stage-2 read that used to diverge from it.
+IDEAL_COMBI_QUESTION = (
+    "What is the ideal combination of TWO documents covering the whole benchmark "
+    "document? Consider all other features from the dependent claims as well — the "
+    "combination should cover EVERYTHING (some stretch is allowed for dependent "
+    "claims). Name the two documents, say which claims/features each one supplies "
+    "with citations, and name any element the pair still leaves open.")
+
+_IDEAL_PAIR_TRAILER = (
+    "\n\nAfter the answer itself, end with EXACTLY one line in this machine-read "
+    "format (mandatory, publication numbers only):\n"
+    "IDEAL PAIR: <publication number> + <publication number>")
+
+_IDEAL_PAIR_RE = re.compile(
+    r"IDEAL\s+PAIR\s*:\s*([A-Z]{2}\s?\d[\dA-Z]*)\s*(?:\+|and|,|/)\s*([A-Z]{2}\s?\d[\dA-Z]*)",
+    re.IGNORECASE)
+
+
+def parse_ideal_pair(text: str) -> tuple[str, str] | None:
+    """The 'IDEAL PAIR: A + B' trailer → (numberA, numberB), spaces stripped. The LAST
+    match wins — the model may quote the requested format before complying with it."""
+    hits = _IDEAL_PAIR_RE.findall(text or "")
+    if not hits:
+        return None
+    a, b = hits[-1]
+    return a.replace(" ", "").upper(), b.replace(" ", "").upper()
+
+
+def strip_ideal_trailer(text: str) -> str:
+    """Remove the machine-read trailer line(s) from the prose shown to the user."""
+    return re.sub(r"^\s*IDEAL\s+PAIR\s*:.*$", "", text or "",
+                  flags=re.IGNORECASE | re.MULTILINE).strip()
+
+
+COMBI_IDEAL_PROMPT = (
+    "You are converting a CONCLUDED two-document combination analysis into per-element "
+    "verdicts, judged against the FULL PRIMARY TEXT of both documents.\n\n"
+    "A chat-grade analysis (reproduced below) already concluded that these two documents "
+    "TOGETHER cover the claimed invention. Your verdicts feed the coverage matrix that "
+    "must REFLECT that analysis: read AFFIRMATIVELY, crediting an element to a document "
+    "when it can honestly be read into its disclosure the way the analysis reads it — "
+    "implicit, functional and equivalent realisations count, and for dependent-claim "
+    "elements a reasonable stretch is allowed (e.g. a ratio met through a disclosed "
+    "midpoint embodiment). NEVER invent disclosure the text cannot carry: if even the "
+    "stretched reading fails against the primary text, answer NO and say in the evidence "
+    "why you depart from the analysis.\n\n"
+    + _COVERAGE_RULES +
+    "=== CONCLUDED ANALYSIS (chat-grade; your verdicts should follow its readings "
+    "wherever the primary text supports them) ===\n{rationale}\n\n"
+    "=== DOCUMENT A (full primary text) ===\n{doc_a}\n\n"
+    "=== DOCUMENT B (full primary text) ===\n{doc_b}\n\n"
+    "OUTPUT — one block for EACH document in this EXACT format, then the COMBINABLE "
+    "line, nothing else:\n"
+    "=== <PUBLICATION NUMBER> ===\n"
+    "<element number>: YES|PARTIAL|NO — <≤20 words, with the [00NN]/claim/Fig. cite>\n"
+    "(one line per element, numbered as listed above; after BOTH blocks add)\n"
+    "COMBINABLE: YES|NO — <one line: the motivation a skilled person has to combine them>")
+
+_COMBINABLE_RE = re.compile(r"COMBINABLE\s*:\s*(YES|NO)\b[\s—:.-]*(.*)", re.IGNORECASE)
+
+
+def combi_ideal_verify(elements: list[dict], doc_a: dict, doc_b: dict,
+                       rationale: str, model: str | None = None) -> dict:
+    """🏆 PHASE 2 — re-read the chosen pair's FULL primary text and score every element
+    per document, following the chat-grade analysis' affirmative readings. Returns
+    {results: {number: [element verdicts]}, combinable, reason, model} | {error}."""
+    if not elements or not doc_a or not doc_b:
+        return {"results": {}}
+    per = min(MAX_FULLTEXT_CHARS, MAX_FOCUS_CHARS // 2)
+    prompt = COMBI_IDEAL_PROMPT.format(
+        elements=_element_lines(elements),
+        rationale=(rationale or "").strip()[:30_000],
+        doc_a=f"=== {doc_a['number']} ===\n" + _document_block(doc_a, per, clipped=False),
+        doc_b=f"=== {doc_b['number']} ===\n" + _document_block(doc_b, per, clipped=False))
+    res = _run_claude(prompt, model or CHAT_MODEL, timeout=PSA_TIMEOUT)
+    if "error" in res:
+        return res
+    m = _COMBINABLE_RE.search(res["answer"])
+    return {"results": parse_coverage(res["answer"], elements),
+            "combinable": (m.group(1).upper() == "YES") if m else True,
+            "reason": (m.group(2).strip()[:300] if m else ""),
+            "model": res.get("model")}
+
+
 _PSA_INSTRUCTION = (
     "TASK — PROBLEM-SOLUTION APPROACH.\n"
     "The USER-SUPPLIED METHODOLOGY above is BINDING. Execute it STRICTLY, step by "

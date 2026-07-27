@@ -260,6 +260,14 @@ class AdditionalReadRequest(BaseModel):
     model: str | None = None
 
 
+class CombiIdealRequest(BaseModel):
+    """🏆 Chat-grade ideal pair: answer the canonical 'ideal combination of two documents
+    covering the whole benchmark (dependent claims included, stretch allowed)' question
+    through the CHAT pipeline (same grounding, same model choice as the 💬 chat), then
+    re-read the chosen pair's full texts so the coverage matrix reflects that answer."""
+    model: str | None = None
+
+
 class CombiPair(BaseModel):
     """One candidate PAIR the UI asks to judge for combinability. a_features / b_features =
     the mandatory feature names each reference uniquely supplies (for the LLM's context)."""

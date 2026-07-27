@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS combi_motivation(
   model TEXT,
   ts INTEGER NOT NULL,
   PRIMARY KEY(tab_id, a_id, b_id));
+-- 🏆 chat-grade ideal-pair verdict: ONE per tab (the latest run wins). data = JSON with
+-- the prose answer, per-element union and counts; the pair's per-document cells live in
+-- documents.combi_coverage like every other full-text verdict.
+CREATE TABLE IF NOT EXISTS combi_ideal(
+  tab_id INTEGER PRIMARY KEY REFERENCES tabs(id) ON DELETE CASCADE,
+  a_id INTEGER NOT NULL,
+  b_id INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  model TEXT,
+  ts INTEGER NOT NULL);
 -- Cross-tab knowledge graph. GLOBAL (not tab-scoped): one taxonomy that every tab's
 -- features attach to. Hierarchy = kg_node.parent_id (field ‹ block ‹ function ‹ option);
 -- non-hierarchical cross-links (⇄ related: MCU, gauge…) = kg_edge; which tabs/docs
@@ -1183,6 +1193,33 @@ def get_combi_motivations(tab_id: int) -> dict:
     return {f"{r['a_id']}-{r['b_id']}": {"combinable": bool(r["combinable"]),
                                          "reason": r["reason"] or "", "model": r["model"],
                                          "ts": r["ts"]} for r in rows}
+
+
+def set_combi_ideal(tab_id: int, a_id: int, b_id: int, data: dict,
+                    model: str | None) -> None:
+    """Persist the 🏆 chat-grade ideal-pair verdict — one per tab, latest run wins."""
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO combi_ideal(tab_id, a_id, b_id, data, model, ts) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(tab_id) DO UPDATE SET "
+            "a_id=excluded.a_id, b_id=excluded.b_id, data=excluded.data, "
+            "model=excluded.model, ts=excluded.ts",
+            (tab_id, int(a_id), int(b_id), json.dumps(data, ensure_ascii=False),
+             model, _now()))
+
+
+def get_combi_ideal(tab_id: int) -> dict | None:
+    """The tab's stored 🏆 ideal-pair verdict → {a_id, b_id, model, ts, …data} | None."""
+    with _conn() as c:
+        r = c.execute("SELECT a_id, b_id, data, model, ts FROM combi_ideal WHERE tab_id=?",
+                      (tab_id,)).fetchone()
+    if not r:
+        return None
+    try:
+        data = json.loads(r["data"] or "{}")
+    except (ValueError, TypeError):
+        data = {}
+    return {"a_id": r["a_id"], "b_id": r["b_id"], "model": r["model"], "ts": r["ts"], **data}
 
 
 # ---------- uploads ----------

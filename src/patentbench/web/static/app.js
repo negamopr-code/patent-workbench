@@ -1086,7 +1086,9 @@ async function combiScanCore({ quiet = false } = {}) {
                         { method: 'POST', body: JSON.stringify({ doc_ids: ids, model: readModelValue() }) });
   setBusy(false); if (btn) btn.disabled = false;
   if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return false; }
-  combiScan = { ...res, screened: pool, dropped: scr.dropped };
+  // carry the 🏆 verdict across — scan/verify responses don't recompute it
+  combiScan = { ...res, screened: pool, dropped: scr.dropped,
+                ideal: res.ideal || (combiScan && combiScan.ideal) || null };
   renderCombiScanPanel();
   await reloadChat();
   return true;
@@ -1124,7 +1126,35 @@ async function runCombiVerify({ ids: explicitIds = null } = {}) {
     method: 'POST', body: JSON.stringify({ doc_ids: ids, model: readModelValue() }) });
   setBusy(false);
   if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
-  combiScan = res;
+  combiScan = { ...res, ideal: res.ideal || (combiScan && combiScan.ideal) || null };
+  renderCombiScanPanel();
+  await reloadChat();
+}
+
+// 🏆 Chat-grade ideal pair: phase 1 = the canonical ideal-combination question through the
+// chat pipeline (same grounding + model as 💬 chat), phase 2 = full-text element read of the
+// two chosen documents following that verdict; server rewrites their combi cells + pins the
+// verdict, so the matrix reflects exactly what the chat concludes.
+async function runCombiIdeal() {
+  if (!activeTab) return;
+  const model = $('model').value;
+  if (!confirm(`🏆 CHAT-GRADE IDEAL PAIR — model: ${model}\n\n`
+      + `Phase 1 answers the chat question "what is the ideal combination of TWO documents `
+      + `covering the whole benchmark (dependent claims included, some stretch allowed)" with `
+      + `the SAME grounding the chat uses: benchmark, anchor full text, every stored verdict `
+      + `card, this tab's conversation.\n\n`
+      + `Phase 2 re-reads BOTH chosen documents on FULL text following that verdict and `
+      + `rewrites their matrix cells, pins the pair above the matrix, and posts the full `
+      + `answer to the chat.\n\n`
+      + `2 model calls on ${model} (the second reads two full documents — pick opus/fable in `
+      + `the 💬 selector for chat-grade quality). Continue?`)) return;
+  setBusy(true, '🏆 Ideal pair: chat-grade assessment (2 model calls, may take minutes)');
+  const res = await api(`/api/tabs/${activeTab}/combi/ideal`,
+    { method: 'POST', body: JSON.stringify({ model }) });
+  setBusy(false);
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); await reloadChat(); return; }
+  if (res.matrix) combiScan = { ...(combiScan || {}), ...res };
+  else if (combiScan) combiScan.ideal = res.ideal || combiScan.ideal;
   renderCombiScanPanel();
   await reloadChat();
 }
@@ -1210,7 +1240,50 @@ function renderCombiScanPanel() {
     jb.onclick = () => judgeMatrixCombinability(anchorRow, partnerRows, cols, mode);
     actions.appendChild(jb);
   }
+  // 🏆 chat-grade ideal pair: the SAME question the user asks in chat ("ideal combination
+  // of two documents covering the whole benchmark, dependent claims included, stretch
+  // allowed"), run through the chat pipeline, then written INTO the matrix — so the grid
+  // and the chat stop diverging (they used to: chat found a 6/6 pair the matrix ranked #13).
+  const ib = document.createElement('button');
+  ib.className = 'btn small';
+  ib.textContent = r.ideal ? '🏆 Re-run ideal pair (chat-grade)' : '🏆 Ideal pair (chat-grade)';
+  ib.title = 'Answers the canonical chat question — "what is the ideal combination of TWO documents covering the whole benchmark, dependent claims included, some stretch allowed" — with the SAME grounding the chat uses (benchmark + anchor full text + every stored verdict card + this tab\'s conversation), on the 💬 chat model. Then re-reads BOTH chosen documents on FULL text following that verdict and rewrites their cells here, pins the pair above the matrix, and posts the full prose answer to the chat. Pick the model in the 💬 selector (opus/fable for chat-grade quality).';
+  ib.onclick = () => runCombiIdeal();
+  actions.appendChild(ib);
   panel.appendChild(actions);
+  // Group-explicit column codes: ME# = Must, AE# = Additional, WE# = Whole-document, numbered
+  // within their own group so the group each element belongs to is always unambiguous.
+  // (Hoisted above the 🏆 banner, which labels its union chips with the same codes.)
+  const KIND_PREFIX = { M: 'ME', A: 'AE', W: 'WE' };
+  const _ctr = { M: 0, A: 0, W: 0 };
+  const colCodes = cols.map(c => { const k = c.kind || 'M'; return `${KIND_PREFIX[k] || 'ME'}${++_ctr[k]}`; });
+  // 🏆 Pinned verdict — the chat's own conclusion, always visible above the mechanical
+  // ranking, with the per-element union and who supplies what.
+  if (r.ideal && r.ideal.a_number && r.ideal.b_number) {
+    const iv = r.ideal;
+    const div = document.createElement('div');
+    div.className = 'combi-ideal';
+    const unionByName = new Map((iv.union || []).map(u => [u.name, u]));
+    const chips = cols.map((c, i) => {
+      const u = unionByName.get(c.name);
+      if (!u) return '';
+      const meta = CELL[u.status] || CELL.no;
+      const who = u.by === 'both' ? `${esc(iv.a_number)} + ${esc(iv.b_number)}`
+        : u.by === 'A' ? esc(iv.a_number) : u.by === 'B' ? esc(iv.b_number) : 'no one';
+      return `<span class="chip mx-uchip ${u.status === 'yes' ? 'u-yes' : u.status === 'partial' ? 'u-part' : 'u-no'}" `
+        + `title="${esc(c.name)} — ${meta.title} · supplied by ${who}">${colCodes[i]} ${meta.t}${u.by === 'both' ? '·A+B' : u.by ? '·' + u.by : ''}</span>`;
+    }).filter(Boolean).join(' ');
+    const when = iv.ts ? new Date(iv.ts * 1000).toLocaleString() : '';
+    div.innerHTML = `🏆 <b>Chat-grade ideal pair: ${esc(iv.a_number)} (A) + ${esc(iv.b_number)} (B)</b> — `
+      + `union covers <b>${iv.mand_yes}✓${iv.mand_partial ? `+${iv.mand_partial}~` : ''}/${iv.mand_total} Must</b>`
+      + ((iv.open || []).length ? ` · still open: <i>${iv.open.map(esc).join('; ')}</i>` : '')
+      + ` · ${iv.combinable ? '🔗 combinable' : '⛔ not combinable'}`
+      + (iv.reason ? ` <span class="muted" title="${esc(iv.reason)}">— ${esc(iv.reason.length > 90 ? iv.reason.slice(0, 90) + '…' : iv.reason)}</span>` : '')
+      + ` <span class="muted">· ${esc(iv.model || '')} · ${esc(when)}</span>`
+      + (chips ? `<div class="mx-ideal-cells">${chips}</div>` : '')
+      + `<div class="muted">This is the chat's own conclusion (full prose in the 💬 chat). Both documents' cells below were re-read on full text following it — the grid and the chat now show ONE verdict.</div>`;
+    panel.appendChild(div);
+  }
   if (!cols.length || !rows.length) {
     const m = document.createElement('div');
     m.className = 'muted';
@@ -1226,14 +1299,9 @@ function renderCombiScanPanel() {
   const table = document.createElement('table');
   table.className = 'combi-matrix';
   // Header: document | one column per mandatory element (short label, weight, full name on hover) | scores | depth.
+  // (Column codes are computed above, before the 🏆 banner.)
   const thead = document.createElement('thead');
   const htr = document.createElement('tr');
-  // Group-explicit column codes: ME# = Must, AE# = Additional, WE# = Whole-document, numbered
-  // within their own group so the group each element belongs to is always unambiguous.
-  const KIND_PREFIX = { M: 'ME', A: 'AE', W: 'WE' };
-  const _ctr = { M: 0, A: 0, W: 0 };
-  const colCodes = cols.map(c => { const k = c.kind || 'M'; return `${KIND_PREFIX[k] || 'ME'}${++_ctr[k]}`; });
-  const shortEl = (c, i) => colCodes[i];
   const hasW = rows.some(r => r.w_total);
   htr.innerHTML = `<th class="mx-doc">Document</th>`
     + cols.map((c, i) => {
@@ -1286,7 +1354,13 @@ function renderCombiScanPanel() {
       else if (info) pairBadge = ` <span class="chip mx-nopair" title="NOT combinable with the anchor: ${esc(info.reason || 'no motivation to combine / different technical field')}.">⛔ not combinable</span>`;
       else if (anchorRow) pairBadge = ` <span class="chip mx-unjudged" title="Combinability with the anchor not judged yet — click ⚖️ Judge combinability. Blank ≠ not combinable.">⚪ ?</span>`;
     }
-    const doc = `<td class="mx-doc"><b>${esc(row.number)}</b>${label}${fills}${pairBadge}</td>`;
+    // 🏆 member of the chat-grade ideal pair — its cells reflect that full-text verdict.
+    let idealBadge = '';
+    if (r.ideal && (row.id === r.ideal.a_id || row.id === r.ideal.b_id)) {
+      const letter = row.id === r.ideal.a_id ? 'A' : 'B';
+      idealBadge = ` <span class="chip mx-ideal" title="Document ${letter} of the 🏆 chat-grade ideal pair ${esc(r.ideal.a_number || '')} + ${esc(r.ideal.b_number || '')} — this row's cells were re-read on full text following the chat verdict.">🏆 ${letter}</span>`;
+    }
+    const doc = `<td class="mx-doc"><b>${esc(row.number)}</b>${label}${idealBadge}${fills}${pairBadge}</td>`;
     const fillSet = new Set(row.fills || []);
     const cells = row.cells.map((s, i) => {
       const meta = CELL[s] || CELL.no;
