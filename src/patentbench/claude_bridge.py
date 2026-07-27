@@ -1231,8 +1231,11 @@ IDEAL_COMBI_QUESTION = (
     "What is the ideal combination of TWO documents covering the whole benchmark "
     "document? Consider all other features from the dependent claims as well — the "
     "combination should cover EVERYTHING (some stretch is allowed for dependent "
-    "claims). Name the two documents, say which claims/features each one supplies "
-    "with citations, and name any element the pair still leaves open.")
+    "claims). Judge ONLY from the material provided in THIS request — the current "
+    "stored assessments and full texts — and re-derive the choice from scratch even "
+    "if an earlier analysis reached a conclusion. Name the two documents, say which "
+    "claims/features each one supplies with citations, and name any element the "
+    "pair still leaves open.")
 
 _IDEAL_PAIR_TRAILER = (
     "\n\nAfter the answer itself, end with EXACTLY one line in this machine-read "

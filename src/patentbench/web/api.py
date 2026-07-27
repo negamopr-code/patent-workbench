@@ -4229,11 +4229,16 @@ def combi_ideal_ep(tab_id: int, body: schemas.CombiIdealRequest, bg: BackgroundT
     anchor_id = (matrix["rows"][0]["id"] if matrix.get("rows") else None)
     focus = [d for d in pool if d["id"] == anchor_id] or None
     roster = [d for d in pool if not focus or d["id"] != focus[0]["id"]]
-    history = db.list_messages(tab_id, limit=claude_bridge.MAX_HISTORY)
+    # STATELESS on purpose — no chat history. The first version passed the tab's
+    # conversation in, and a re-run after fresh reads just echoed the PREVIOUS 🏆
+    # verdict sitting in that history instead of re-deriving from the updated cards
+    # (bit 2026-07-27: opus re-reads flipped the anchor, the button still answered
+    # the old pair). Each run must be grounded ONLY on the current stored data.
     question = claude_bridge.IDEAL_COMBI_QUESTION
-    db.append_message(tab_id, "q", f"🏆 Ideal pair (chat-grade, {model}): {question}")
+    db.append_message(tab_id, "q", f"🏆 Ideal pair (chat-grade, {model}, "
+                                   f"stateless re-run on current data): {question}")
     res = claude_bridge.chat(question + claude_bridge._IDEAL_PAIR_TRAILER,
-                             history=history, documents=roster, model=model,
+                             history=None, documents=roster, model=model,
                              benchmark=bm, focus=focus, full=True)
     out_messages = []
     if "error" in res:

@@ -4207,10 +4207,14 @@ def _ideal_tab(client, db):
 
 def test_combi_ideal_endpoint_writes_matrix_and_pins_verdict(client, monkeypatch):
     tid, (a_id, b_id) = _ideal_tab(client, db)
-    monkeypatch.setattr(claude_bridge, "chat",
-                        lambda *a, **k: {"answer": "A supplies X; B supplies Y.\n\n"
-                                                   "IDEAL PAIR: CN109964136 + EP2088659",
-                                         "model": "claude-opus-4-8"})
+    seen = {}
+
+    def _chat(*a, **k):
+        seen.update(k)
+        return {"answer": "A supplies X; B supplies Y.\n\n"
+                          "IDEAL PAIR: CN109964136 + EP2088659",
+                "model": "claude-opus-4-8"}
+    monkeypatch.setattr(claude_bridge, "chat", _chat)
     monkeypatch.setattr(claude_bridge, "combi_ideal_verify",
         lambda els, da, dbdoc, rationale, model=None: {
             "results": {
@@ -4221,6 +4225,9 @@ def test_combi_ideal_endpoint_writes_matrix_and_pins_verdict(client, monkeypatch
             "combinable": True, "reason": "same field, complementary teachings",
             "model": "claude-opus-4-8"})
     r = client.post(f"/api/tabs/{tid}/combi/ideal", json={"model": "claude-opus-4-8"}).json()
+    # STATELESS: no chat history may reach phase 1 — a prior 🏆 verdict in the
+    # conversation made re-runs echo the old pair instead of using fresh reads
+    assert seen.get("history") is None
     assert r["ok"] and r["ideal"]["a_number"] == "CN109964136A"
     assert r["ideal"]["b_number"] == "EP2088659A1"
     assert r["ideal"]["mand_yes"] == 2 and r["ideal"]["mand_total"] == 2
