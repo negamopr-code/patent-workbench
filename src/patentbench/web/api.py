@@ -4153,6 +4153,46 @@ def _union_of(elements: list[dict], cov_a: list[dict], cov_b: list[dict]) -> lis
     return out
 
 
+_STATUS_SYM = {"yes": "✓", "partial": "~", "no": "✗"}
+_KIND_LABEL = {"M": "Must elements", "A": "Additional features", "W": "Whole-document features"}
+
+
+def _ideal_mapping_text(a_num: str, b_num: str, elements: list[dict],
+                        cov_a: list[dict], cov_b: list[dict]) -> str:
+    """The DETAILED per-element mapping of the 🏆 pair, posted to the chat: every element
+    with its union verdict, which document supplies it, and the full-text evidence cite
+    the phase-2 read returned. Grouped Must / Additional / Whole-document with the same
+    ME/AE/WE codes the matrix uses, so chat and grid speak one language."""
+    by_a = {c["name"]: c for c in cov_a or []}
+    by_b = {c["name"]: c for c in cov_b or []}
+    rank = {"yes": 2, "partial": 1, "no": 0}
+    prefix, ctr = {"M": "ME", "A": "AE", "W": "WE"}, {"M": 0, "A": 0, "W": 0}
+    sections: dict[str, list[str]] = {"M": [], "A": [], "W": []}
+    for e in elements:
+        k = _kind(e)
+        ctr[k] += 1
+        code = f"{prefix[k]}{ctr[k]}"
+        sa = (by_a.get(e["name"], {}).get("status") or "no").lower()
+        sb = (by_b.get(e["name"], {}).get("status") or "no").lower()
+        union = sa if rank.get(sa, 0) >= rank.get(sb, 0) else sb
+        parts = []
+        for letter, num, st, cov in (("A", a_num, sa, by_a), ("B", b_num, sb, by_b)):
+            if st == "no":
+                continue
+            ev = (cov.get(e["name"], {}).get("evidence") or "").strip()
+            parts.append(f"{letter} {num} {_STATUS_SYM[st]}"
+                         + (f" ({ev})" if ev else ""))
+        line = f"{_STATUS_SYM.get(union, '✗')} {code} — {e['name']}: "
+        line += "; ".join(parts) if parts else "not disclosed by either document"
+        sections[k].append(line)
+    out = [f"🏆 Detailed feature mapping for {a_num} (A) + {b_num} (B), from the "
+           "full-text read of both documents:"]
+    for k in ("M", "A", "W"):
+        if sections[k]:
+            out.append(f"\n{_KIND_LABEL[k]}:\n" + "\n".join(sections[k]))
+    return "\n".join(out)
+
+
 @app.post("/api/tabs/{tab_id}/combi/ideal")
 def combi_ideal_ep(tab_id: int, body: schemas.CombiIdealRequest, bg: BackgroundTasks):
     """🏆 Run the canonical ideal-pair question through the CHAT pipeline (phase 1 —
@@ -4248,6 +4288,13 @@ def combi_ideal_ep(tab_id: int, body: schemas.CombiIdealRequest, bg: BackgroundT
                         "reason": ver.get("reason") or "",
                         "mand_yes": m_yes, "mand_partial": m_part,
                         "mand_total": len(mand_u), "open": open_m}, model)
+    # The DETAILED per-element mapping in the chat — the verdict must be readable there
+    # in full (element, supplier, evidence cite), not only as matrix cells.
+    out_messages.append(db.append_message(
+        tab_id, "c",
+        _ideal_mapping_text(doc_a["number"], doc_b["number"], elements, cov_a, cov_b),
+        model=model, participants=[{"kind": "model", "title": model},
+                                   {"kind": "psa", "title": "🏆 feature mapping"}]))
     out_messages.append(db.append_message(
         tab_id, "s",
         f"🏆 Ideal pair {doc_a['number']} + {doc_b['number']}: union covers "

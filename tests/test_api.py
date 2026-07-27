@@ -4239,6 +4239,11 @@ def test_combi_ideal_endpoint_writes_matrix_and_pins_verdict(client, monkeypatch
     msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
     assert any("A supplies X" in m and "IDEAL PAIR" not in m for m in msgs)
     assert any("🏆 Ideal pair CN109964136A + EP2088659A1" in m for m in msgs)
+    # the DETAILED per-element mapping is a chat message of its own, with codes,
+    # supplier and the full-text evidence cites
+    mapping = next(m for m in msgs if "Detailed feature mapping" in m)
+    assert "ME1 — a battery: A CN109964136A ✓ (claim 1)" in mapping
+    assert "ME2 — a gauge: B EP2088659A1 ✓ ([0067])" in mapping
 
 
 def test_combi_ideal_pair_outside_tab_updates_nothing(client, monkeypatch):
