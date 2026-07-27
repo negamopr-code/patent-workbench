@@ -4558,7 +4558,7 @@ NLM_DEBATE_PROMPT = (
 NLM_CHALLENGE_MAX = 10       # union of both sides' picks; still fits one bulk prompt per side
 CLAUDE_TOP_MIN = 7.0         # Claude's "good picks" worth challenging NotebookLM with
 # the block-by-block reconciliation is the decisive call → run it on the strong model
-DEBATE_MODEL = os.environ.get("PB_DEBATE_MODEL", "claude-opus-4-8")
+DEBATE_MODEL = os.environ.get("PB_DEBATE_MODEL", "claude-opus-5")
 
 
 def _claude_finalist_brief(d: dict) -> str:

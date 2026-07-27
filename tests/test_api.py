@@ -818,7 +818,7 @@ def test_nlm_challenge_debates_finalists_both_sides(client, monkeypatch):
     assert len(nlm_calls) == 1 and len(claude_calls) == 1  # one prompt per side
     assert docs[0]["number"] in nlm_calls[0]              # finalist named to NLM
     assert docs[0]["number"] in claude_calls[0][0]        # finalist digest given to Claude
-    assert debate_models[0] == "claude-opus-4-8"         # reconciliation runs on opus, not haiku
+    assert debate_models[0] == "claude-opus-5"           # reconciliation runs on opus, not haiku
     msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
     assert any(m["role"] == "c" and "NotebookLM" in m["text"] for m in msgs)
     assert any(m["role"] == "c" and "Claude" in m["text"] for m in msgs)

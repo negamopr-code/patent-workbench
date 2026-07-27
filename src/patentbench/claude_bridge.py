@@ -22,7 +22,11 @@ from . import citations
 
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 # Latest first — Fable 5 is the default; the UI offers the rest as a dropdown.
-MODELS = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]
+# Strength order (lower index = stronger) — drives the model-aware ▶️ Continue: a doc
+# read by a weaker model counts as "still to read" at a stronger selection. Opus 5 sits
+# between Fable 5 and Opus 4.8 (its drop-in successor at the same price tier).
+MODELS = ["claude-fable-5", "claude-opus-5", "claude-opus-4-8",
+          "claude-sonnet-4-6", "claude-haiku-4-5"]
 # Default chat/compile model: sonnet is the cost/quality optimum for routine
 # Q&A and deep-compare reduces — pick fable-5 from the dropdown for the final,
 # decisive ranking only (it weighs hardest on the subscription session limit).

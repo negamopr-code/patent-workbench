@@ -2792,7 +2792,7 @@ $('deep-selected').onclick = () => {
 $('deep-clear').onclick = () => { docSelection = new Set(); refreshDocs(); };
 
 /* ---------- funnel: 📓 NLM shortlist (free, broad) → 🤖 opus verify (precise, narrow) ---------- */
-const VERIFY_MODEL = 'claude-opus-4-8';   // shortlist is tiny, so default the precise read to opus
+const VERIFY_MODEL = 'claude-opus-5';   // shortlist is tiny, so default the precise read to opus
 // One fan-out NLM question → shortlist + ranked best/second-best + per-feature map.
 // notebookId restricts it to ONE notebook (e.g. the just-consolidated one → a true
 // single global pick); omitted = fan across every notebook the candidates live in.
