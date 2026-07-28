@@ -967,6 +967,15 @@ def _run_claude(prompt: str, model: str, extra_args: list[str] | None = None,
     return {"answer": answer, "model": model}
 
 
+def _chat_timeout(prompt_len: int) -> float:
+    """Wall-clock a chat turn is allowed, scaled to its prompt. The flat CHAT_TIMEOUT
+    (240 s) fits a normal turn, but a grounded prompt on a 1000+-doc tab runs 500-800k
+    chars — ingestion plus a long-form answer routinely beat it, so every big-tab chat
+    died with 'claude chat timed out' (bit 2026-07-28, tab 10 @ 1400 docs). +1 s per
+    2k chars on top of the base, capped at 20 min."""
+    return min(1200.0, CHAT_TIMEOUT + prompt_len / 2000.0)
+
+
 def chat(question: str, history: list[dict] | None = None,
          documents: list[dict] | None = None, sources: list[dict] | None = None,
          skills: list[dict] | None = None, model: str | None = None,
@@ -996,7 +1005,8 @@ def chat(question: str, history: list[dict] | None = None,
                               answer_format=answer_format, xrefs=xrefs,
                               other_docs=other_docs, coverage=coverage,
                               discussions=discussions, scale=scale)
-        res = _run_claude(prompt, model or CHAT_MODEL)
+        res = _run_claude(prompt, model or CHAT_MODEL,
+                          timeout=_chat_timeout(len(prompt)))
         if "prompt is too long" not in (res.get("error") or "").lower():
             if scale < 1.0 and res.get("answer"):
                 res["answer"] += ("\n\n*(context auto-trimmed to fit the model's "

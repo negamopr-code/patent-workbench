@@ -117,6 +117,24 @@ def test_chat_retries_shrunken_prompt_when_too_long(monkeypatch):
     assert len(calls) == 1
 
 
+def test_chat_timeout_scales_with_prompt_size(monkeypatch):
+    """A grounded prompt on a 1000+-doc tab (500-800k chars) needs more wall-clock
+    than the flat CHAT_TIMEOUT — every big-tab chat died with 'claude chat timed
+    out' (bit 2026-07-28). The timeout must grow with the prompt, capped."""
+    seen = []
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda p, m, extra_args=None, cwd=None, timeout=None:
+                        seen.append((len(p), timeout)) or {"answer": "ok", "model": m})
+    claude_bridge.chat("q")
+    small_len, small_to = seen[0]
+    claude_bridge.chat("q", focus=[{"number": "X", "claims": "c" * 500_000}])
+    big_len, big_to = seen[1]
+    assert small_to >= claude_bridge.CHAT_TIMEOUT
+    assert big_to > small_to                      # grows with the prompt
+    assert big_to == claude_bridge._chat_timeout(big_len)
+    assert claude_bridge._chat_timeout(10_000_000) == 1200.0   # capped
+
+
 def test_answer_format_edit_roundtrip(client, tmp_path, monkeypatch):
     monkeypatch.setattr(claude_bridge, "FMT_OVERRIDE_DIR", str(tmp_path / "fmt"))
     r = client.get("/api/answer-format/feature-map").json()
