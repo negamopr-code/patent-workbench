@@ -817,28 +817,47 @@ def build_prompt(question: str, history: list[dict] | None = None,
                         "it; SELECT this candidate to load full text for a verbatim quote)", dig)
             return ("", "")
         with_text = [d for d in documents if _summary(d)[1]]
-        per = (min(MAX_DOC_CHARS, max(MIN_DOC_CHARS, roster_budget // len(with_text)))
+        # roster_budget is a HARD total. The MIN_DOC_CHARS floor alone let this
+        # block grow without bound as the tab grew (1200 chars × 1150+ candidates
+        # ≈ 1.4M chars — every shrink-retry still overflowed the model window;
+        # bit 2026-07-28 on a 1158-doc tab). Assessment bodies go to the
+        # highest-scored candidates until the budget is spent; every other
+        # candidate stays on the roster header-only, and the block says so.
+        n_bodies = min(len(with_text), max(1, roster_budget // MIN_DOC_CHARS))
+        keep = sorted(with_text,
+                      key=lambda d: -1.0 if d.get("score") is None else float(d["score"]),
+                      reverse=True)[:n_bodies]
+        keep_ids = {id(d) for d in keep}
+        per = (min(MAX_DOC_CHARS, max(MIN_DOC_CHARS, roster_budget // n_bodies))
                if with_text else 0)
-        lines = []
+        lines, trimmed = [], 0
         for d in documents:
             head = f"• {d.get('number','?')} — {d.get('title') or 'no title'}"
             if d.get("score") is not None:
                 note = (d.get("score_note") or "").strip()
                 head += f"  [{d['score']:g}/10{(' — ' + note) if note else ''}]"
             label, body = _summary(d)
-            if body:
+            if body and id(d) in keep_ids:
                 clip = " …[clipped]" if len(body) > per else ""
                 head += f"\n  {label}: {body[:per]}{clip}"
+            elif body:
+                trimmed += 1
+                head += ("  (stored assessment did not fit this prompt — only its "
+                         "score/note is shown; SELECT it to load the full read)")
             else:
                 head += "  (not yet read; SELECT or Deep-compare to read it)"
             lines.append(head)
+        note = (f"\n\n(NOTE: only the {n_bodies} highest-scored candidates carry "
+                f"their stored assessment text here — {trimmed} more assessment(s) "
+                "did not fit the prompt budget and appear as score/note lines only.)"
+                if trimmed else "")
         parts.append(
             f"OTHER CANDIDATES in this tab ({len(documents)}) — each shown with its "
             "stored full-text ASSESSMENT (or digest) and match score, already computed "
             "at read time. Use these to REASON about and compare every candidate; you "
             "do NOT need the user to reload them. A candidate carrying an ASSESSMENT "
             "was read in full — rely on it; a digest-only candidate must be SELECTED "
-            "for a verbatim claim/[00NN] quote:\n" + "\n".join(lines))
+            "for a verbatim claim/[00NN] quote:\n" + "\n".join(lines) + note)
     elif documents:
         # EVERY candidate is always present: the per-candidate slice shrinks as
         # the list grows instead of dropping the tail (which is arbitrary —

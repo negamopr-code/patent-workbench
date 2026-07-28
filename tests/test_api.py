@@ -1752,6 +1752,34 @@ def test_build_prompt_roster_carries_digest_when_focused():
     assert "not yet read" in p                                       # un-read candidate flagged
 
 
+def test_build_prompt_focus_roster_budget_is_hard_cap():
+    """The MIN_DOC_CHARS floor must NOT multiply past the roster budget: on a tab
+    with 1000+ assessed candidates the roster block used to reach ~1.4M chars and
+    every shrink-retry still overflowed the model window (bit 2026-07-28). Bodies
+    go to the highest-scored candidates within budget; the rest stay listed
+    header-only, and the block says so."""
+    focus = [{"id": 0, "number": "CN111", "title": "f", "claims": "1. c",
+              "description": "[0001] focused body"}]
+    n = 1200
+    others = [{"id": i + 1, "number": f"CN{i:07d}A", "title": f"t{i}",
+               "verdict": f"ASSESSMENT-{i} " + "v" * 3000, "score": (i % 100) / 10}
+              for i in range(n)]
+    p = claude_bridge.build_prompt("q", focus=focus, documents=others)
+    bodies = p.count("ASSESSMENT vs benchmark")
+    assert bodies == claude_bridge.MAX_ROSTER_CHARS // claude_bridge.MIN_DOC_CHARS
+    assert p.count("• CN") == n                       # every candidate still listed
+    assert "did not fit this prompt" in p             # trimmed ones flagged in place
+    assert "highest-scored candidates carry" in p     # …and the block-level note
+    # top-scored keep their body, low-scored do not
+    top = max(others, key=lambda d: d["score"])
+    assert f"ASSESSMENT-{top['id'] - 1} " in p
+    # the whole block stays within budget + headers (order of magnitude, not 1.4M)
+    assert len(p) < claude_bridge.MAX_ROSTER_CHARS + n * 200 + 50_000
+    # shrink-retry now genuinely shrinks the roster too
+    p_small = claude_bridge.build_prompt("q", focus=focus, documents=others, scale=0.25)
+    assert p_small.count("ASSESSMENT vs benchmark") < bodies
+
+
 def test_chat_focus_and_full_plumbed(client, monkeypatch):
     seen = {}
     monkeypatch.setattr(claude_bridge, "chat",
