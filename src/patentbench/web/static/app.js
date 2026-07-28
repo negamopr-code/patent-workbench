@@ -1784,6 +1784,42 @@ function renderDocs(allDocs) {
       bar.appendChild(pickTop);
       bar.appendChild(nIn);
     }
+    // ☑ Bulk pick of the LATEST ADD-BATCH — when a fresh set of candidates lands in
+    // a tab already holding hundreds of unread ones, "read the new ones first" needs
+    // exactly those. A batch = fetched docs whose added_at timestamps cluster
+    // (consecutive gaps ≤30 min chain them), so one paste/import = one batch even
+    // when its fetching trickled in over a while.
+    const byAdd = allDocs.filter(d => d.status === 'fetched' && d.added_at)
+      .sort((a, b) => b.added_at - a.added_at);
+    // Only meaningful when the tab has MORE than the one batch — otherwise it would
+    // just re-select everything, which ☑-all semantics already imply.
+    if (byAdd.length) {
+      const GAP = 30 * 60;
+      const batch = [byAdd[0]];
+      for (let i = 1; i < byAdd.length
+                      && batch[batch.length - 1].added_at - byAdd[i].added_at <= GAP; i++) {
+        batch.push(byAdd[i]);
+      }
+      if (batch.length < byAdd.length) {
+        const when = new Date(byAdd[0].added_at * 1000)
+          .toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const pickNew = document.createElement('button');
+        pickNew.className = 'btn small';
+        pickNew.textContent = `☑ select ${batch.length} just added`;
+        pickNew.title =
+          `Tick the ${batch.length} fetched candidate(s) of the LATEST add-batch `
+          + `(added around ${when}; docs added within 30 min of each other count as one `
+          + 'batch), ADDING them to the selection — then 🏆 Deep-analyse selected reads '
+          + 'the newcomers first, before the older backlog.';
+        pickNew.onclick = () => {
+          for (const d of batch) docSelection.add(d.id);
+          // Same reason as ☑ not-rated above: an active filter would prune hidden picks.
+          docsFilter = 'all';
+          renderDocs(allDocs);
+        };
+        bar.appendChild(pickNew);
+      }
+    }
     // sort the palmares — feature mode adds the weighted key (and defaults to it)
     const fmode = featureMode();
     const hasRank = allDocs.some(d => d.rank);
