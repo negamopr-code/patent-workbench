@@ -328,6 +328,7 @@ textarea, select, input[type="text"] {
 .docs-summary .chip.warn { color: var(--warn); border: 1px solid var(--warn); }
 .docs-summary .btn.small { margin-left: auto; }
 .docs-summary .sort-sel { width: auto; padding: 2px 6px; font-size: 12px; }
+.docs-summary .top-n { width: 4em; padding: 2px 4px; font-size: 12px; margin-left: -4px; }
 .rate-bar { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .rate-bar #rate-status { font-size: 12px; }
 .rate-bar #rate-status.err { color: var(--err); }

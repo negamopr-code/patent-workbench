@@ -1598,6 +1598,18 @@ function scoreSortValue(d, key) {
   const cs = combinedScore(d);
   return cs == null ? -1 : cs;   // 'combined' (default), base only
 }
+function palmaresCompare(key) {
+  // THE ranking order of the candidate list ("palmarès"): base score first; among equal
+  // base, A-feature coverage, then CONSENSUS docs, then NLM's best-first order, then id.
+  // Shared by the list render and ☑ select-top-N so the two can never disagree.
+  const nlmRankOf = d => (d.nlm_rank != null ? d.nlm_rank : 1e9);
+  return (a, b) =>
+    scoreSortValue(b, key) - scoreSortValue(a, key)
+    || additionalBonus(b) - additionalBonus(a)   // A-feature coverage refines within a base tier
+    || (isConsensus(b) ? 1 : 0) - (isConsensus(a) ? 1 : 0)
+    || nlmRankOf(a) - nlmRankOf(b)
+    || a.id - b.id;
+}
 let lastDocs = [];
 let lastRankedDocIds = [];   // doc ids in the last rendered ranking order
 function renderDocs(allDocs) {
@@ -1732,6 +1744,46 @@ function renderDocs(allDocs) {
       };
       bar.appendChild(pick);
     }
+    // ☑ Bulk pick of the CURRENT leaders — stages the top-N of the palmarès for a
+    // targeted re-read on a stronger model: check → raise 📖 → 🏆 Deep-analyse
+    // selected re-reads exactly those (checked docs are re-read even when already
+    // scored, unlike ▶️ Continue which skips them). N is the user's to choose
+    // (10/20/30/…), remembered across sessions.
+    const rankedFetched = allDocs.filter(d =>
+      d.status === 'fetched' && (d.score != null || d.nlm_score != null || d.rank));
+    if (rankedFetched.length) {
+      const pickTop = document.createElement('button');
+      pickTop.className = 'btn small';
+      pickTop.textContent = '☑ select top';
+      pickTop.title =
+        'Tick the N best-ranked fetched candidates under the CURRENT sort order '
+        + '(N = the number field to the right), ADDING them to the selection. Then '
+        + 'raise the 📖 reading model and hit 🏆 Deep-analyse selected — it re-reads '
+        + 'exactly the checked docs, even ones already scored (▶️ Continue would skip those).';
+      const nIn = document.createElement('input');
+      nIn.type = 'number';
+      nIn.className = 'top-n';
+      nIn.min = 1; nIn.max = rankedFetched.length; nIn.step = 1;
+      nIn.value = Math.min(rankedFetched.length,
+                           parseInt(localStorage.getItem('pb_top_pick_n'), 10) || 30);
+      nIn.title = `How many of the best-ranked candidates ☑ select top picks `
+        + `(1–${rankedFetched.length} ranked in this tab).`;
+      nIn.onclick = e => e.stopPropagation();
+      pickTop.onclick = () => {
+        const topN = Math.max(1, Math.min(rankedFetched.length,
+                                          parseInt(nIn.value, 10) || 30));
+        localStorage.setItem('pb_top_pick_n', String(topN));
+        const key = (!docsSortTouched && featureMode())
+          ? (allDocs.some(d => d.rank) ? 'must' : 'weighted') : docsSort;
+        const top = [...rankedFetched].sort(palmaresCompare(key)).slice(0, topN);
+        for (const d of top) docSelection.add(d.id);
+        // Same reason as ☑ not-rated above: an active filter would prune hidden picks.
+        docsFilter = 'all';
+        renderDocs(allDocs);
+      };
+      bar.appendChild(pickTop);
+      bar.appendChild(nIn);
+    }
     // sort the palmares — feature mode adds the weighted key (and defaults to it)
     const fmode = featureMode();
     const hasRank = allDocs.some(d => d.rank);
@@ -1759,13 +1811,7 @@ function renderDocs(allDocs) {
   // there's no circularity (the taper is a display/position effect computed below).
   const sortKey = (!docsSortTouched && featureMode())
     ? (allDocs.some(d => d.rank) ? 'must' : 'weighted') : docsSort;
-  const nlmRankOf = d => (d.nlm_rank != null ? d.nlm_rank : 1e9);
-  let docs = [...allDocs].sort((a, b) =>
-    scoreSortValue(b, sortKey) - scoreSortValue(a, sortKey)
-    || additionalBonus(b) - additionalBonus(a)   // A-feature coverage refines within a base tier
-    || (isConsensus(b) ? 1 : 0) - (isConsensus(a) ? 1 : 0)
-    || nlmRankOf(a) - nlmRankOf(b)
-    || a.id - b.id);
+  let docs = [...allDocs].sort(palmaresCompare(sortKey));
   // tapered consensus bonus by POSITION among consensus docs (1st → +0.4 … floor +0.1) — so
   // they always separate (8.4/8.3/8.2…), ordered by NLM rank once a shortlist sets it.
   consensusBonusById = new Map();
