@@ -4848,7 +4848,13 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
         # so pausing loses nothing — the unassessed ones keep score=None and ▶️
         # Continue (skip_scored) picks them up, possibly with a different model.
         pause_path = _claude_read_pause_path(tab_id)
-        verdicts, paused = [], False
+        # AUTH CIRCUIT BREAKER — a revoked/expired OAuth token fails EVERY call the
+        # same way, so once a full worker-window has produced nothing but auth errors
+        # the rest of the batch cannot fare better. Without this the pool ground
+        # through all candidates earning nothing and the UI sat on "assessing 0/N"
+        # (bit 2026-07-28: 577 × 401 after a container-recreate rotated the token).
+        _auth_err = re.compile(r"401|OAuth|revoked|authenticat", re.IGNORECASE)
+        verdicts, paused, auth_dead = [], False, False
         with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
             pending, nxt = {}, iter(docs)
             for _ in range(DIGEST_WORKERS):           # prime the window
@@ -4861,6 +4867,14 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                 for fut in done:
                     pending.pop(fut)
                     verdicts.append(fut.result())
+                if (not any(v["ok"] for v in verdicts)
+                        and len(verdicts) >= DIGEST_WORKERS
+                        and all(_auth_err.search(v["verdict"] or "") for v in verdicts)):
+                    auth_dead = True                  # nothing will succeed — stop the batch
+                    for fut in pending:
+                        verdicts.append(fut.result())
+                    pending.clear()
+                    break
                 if os.path.exists(pause_path):        # stop launching new work; drain in-flight
                     paused = True
                     for fut in pending:
@@ -4872,6 +4886,16 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                     if d is None:
                         break
                     pending[ex.submit(one, d)] = d
+        if auth_dead:
+            db.append_message(
+                tab_id, "s",
+                f"⛔ Deep-read ABORTED after {len(verdicts)} attempt(s): every call failed "
+                "with an AUTHENTICATION error (the container's Claude token is revoked or "
+                f"expired) — e.g. {verdicts[0]['verdict'][:160]}. Nothing was assessed or "
+                "overwritten. Reseed the token "
+                "(`bash ~/.claude/scripts/reseed-claude-containers.sh` on the host side), "
+                "then ▶️ Continue deep-read — it resumes exactly these candidates.")
+            return
         read = sum(1 for v in verdicts if v["ok"])
         failed = len(verdicts) - read
         if paused:

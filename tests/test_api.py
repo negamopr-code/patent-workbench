@@ -486,6 +486,36 @@ def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch)
     assert after["CN114853847"]["score_model"] == "claude-sonnet-4-6"   # records which model read it
 
 
+def test_deep_read_aborts_on_dead_auth_token(client, monkeypatch):
+    """A revoked OAuth token fails EVERY call identically — after one worker-window
+    of pure auth errors the batch must ABORT, write nothing, and tell the user how
+    to recover, instead of grinding through all N earning nothing while the UI sits
+    on 'assessing 0/N' (bit 2026-07-28: 577 × 401 after a container recreate)."""
+    tab = client.post("/api/tabs", json={"name": "Auth"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    nums = " ".join(f"CN11485{i:04d}" for i in range(40))
+    client.post(f"/api/tabs/{tid}/documents", json={"text": nums})
+    calls = []
+    monkeypatch.setattr(
+        claude_bridge, "deep_map",
+        lambda bm, d, model=None, features=None: calls.append(d["number"]) or
+        {"error": "Failed to authenticate. API Error: 401 OAuth access token has been revoked."})
+    reduced = []
+    monkeypatch.setattr(claude_bridge, "deep_reduce",
+                        lambda *a, **k: reduced.append(1) or {"answer": "ranking"})
+    client.post(f"/api/tabs/{tid}/deep-compare", json={})
+    _wait_read(client, tid)
+    assert len(calls) < 40                                  # aborted early, not ground through
+    assert not reduced                                      # no ranking over nothing
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    assert all(d["score"] is None for d in docs)            # nothing written
+    msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
+    note = [m for m in msgs if "ABORTED" in m]
+    assert note and "AUTHENTICATION" in note[0] and "reseed" in note[0].lower()
+    assert "Continue" in note[0]                            # recovery path named
+
+
 def test_deep_compare_batch_reads_top_N_by_prior_score(client, monkeypatch):
     """Best match's batching: cap the run to the top-N still needing a read, MOST-PROMISING
     first (by prior score), so 50-at-a-time spends on the best candidates and reports how
