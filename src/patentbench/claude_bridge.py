@@ -957,11 +957,13 @@ def build_prompt(question: str, history: list[dict] | None = None,
             f"{t.get('name') or '?'}]\n" + (t.get("text") or "").strip()[:per]
             for t in tet_docs)
         parts.append(
-            "TET SUPPORTING DOCUMENTS — prosecution documents the user supplied "
-            "for the technical effect argumentation: amended set of claims, "
-            "applicant arguments, new description, initial search report, and "
-            "similar. These are the CURRENT versions of the case. Build the "
-            "argumentation on THEM: where an amended claim or description differs "
+            "TET SUPPORTING DOCUMENTS — prosecution documents of THIS case, "
+            "supplied by the user: amended set of claims, applicant arguments, "
+            "new description, initial search report, application as filed, and "
+            "similar. Use them for WHATEVER the current question is — any "
+            "question touching the claims, amendments, arguments, basis or the "
+            "search report refers to THESE documents. Where an argumentation is "
+            "asked for, build it on them: where an amended claim or description differs "
             "from the benchmark document's original text, the version below "
             "governs. Applicant arguments are positions to build on and stay "
             "consistent with, not prior art. An initial search report / search "

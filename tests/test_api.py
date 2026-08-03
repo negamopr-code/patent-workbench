@@ -203,7 +203,8 @@ def test_tet_supporting_docs_crud_and_chat_wiring(client, monkeypatch):
     assert "text" not in lst["docs"][0]              # list is metadata-only
     full = client.get(f"/api/tabs/{tid}/tet-docs/{doc_id}").json()
     assert "flange" in full["text"]
-    # chat: tech-effect passes the docs through, default format passes None
+    # chat: the case docs ride along on EVERY answer, whatever the format —
+    # "build on the amended claims" must work without the tech-effect preset
     seen = {}
     monkeypatch.setattr(claude_bridge, "chat",
                         lambda *a, **k: seen.update(k) or {"answer": "ok", "model": "m"})
@@ -211,7 +212,7 @@ def test_tet_supporting_docs_crud_and_chat_wiring(client, monkeypatch):
                 json={"question": "argue", "answer_format": "tech-effect"})
     assert [d["id"] for d in seen["tet_docs"]] == [doc_id]
     client.post(f"/api/tabs/{tid}/chat", json={"question": "argue"})
-    assert seen["tet_docs"] is None
+    assert [d["id"] for d in seen["tet_docs"]] == [doc_id]
     # prompt injection: block header + governing rule + the document text
     p = claude_bridge.build_prompt(
         "q", answer_format="tech-effect",

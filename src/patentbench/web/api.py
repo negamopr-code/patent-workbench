@@ -2880,10 +2880,12 @@ def chat(tab_id: int, body: schemas.ChatRequest):
             participants.append({"kind": "tab-docs",
                                  "title": f"«{c['tab_name']}» {c['fetched']}/{c['total']} docs"})
 
-    # 📄 tech-effect answers get the tab's TET supporting documents (amended
-    # claims, applicant arguments, new description) as governing case versions.
-    tet_docs = (db.list_tet_docs(tab_id, full=True, ready_only=True)
-                if body.answer_format == "tech-effect" else None) or None
+    # 📄 the tab's TET supporting documents (amended claims, applicant
+    # arguments, ESOP, as-filed texts) ride along on EVERY chat answer — a plain
+    # question like "build on the ESOP and the amended claims" must see them
+    # without requiring the 📐 tech-effect preset (bit 2026-08-03: the format
+    # gate made exactly that question run blind).
+    tet_docs = db.list_tet_docs(tab_id, full=True, ready_only=True) or None
     if tet_docs:
         participants.append({"kind": "documents",
                              "title": f"{len(tet_docs)} TET supporting doc(s)"})
