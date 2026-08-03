@@ -2450,23 +2450,25 @@ function downloadMsgPdf(m) {
   const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const t = tabs.find(x => x.id === activeTab);
   const when = m.ts ? new Date(m.ts * 1000).toLocaleString() : new Date().toLocaleString();
-  const who = m.role === 'a' ? 'NotebookLM' : 'Claude';
-  const chips = (m.participants || []).map(p => esc(p.title)).join(' · ');
+  // minimal header per user request: «<tab> <date> <N> documents seen» — N is
+  // the candidates count from the answer's participants (nothing else shown)
+  const cand = (m.participants || [])
+    .map(p => /^(\d+) candidates$/.exec(p.title || '')).find(Boolean);
+  const hdr = `${esc(t ? t.name : 'Patent Workbench')} ${esc(when)}`
+    + (cand ? ` ${cand[1]} documents seen` : '');
   const w = window.open('', '_blank');
   if (!w) { alert('Allow pop-ups for this page to export a PDF.'); return; }
   w.document.write(`<!doctype html><html><head><meta charset="utf-8">
-<title>${esc(t ? t.name : 'Patent Workbench')} — ${who} answer ${esc(when)}</title>
+<title>${hdr}</title>
 <style>
   body { font: 13px/1.6 "Segoe UI", Arial, sans-serif; color: #111;
          max-width: 820px; margin: 32px auto; padding: 0 24px; }
   .hdr { color: #555; font-size: 11px; border-bottom: 1px solid #bbb;
          padding-bottom: 10px; margin-bottom: 18px; }
-  .hdr b { color: #111; font-size: 13px; }
   .body { white-space: pre-wrap; word-break: break-word; }
   @media print { body { margin: 0 auto; } }
 </style></head><body>
-<div class="hdr"><b>${esc(t ? t.name : 'Patent Workbench')}</b> — ${who} · ${esc(when)}
-${chips ? '<br>' + chips : ''}</div>
+<div class="hdr">${hdr}</div>
 <div class="body">${renderMarkdown(m.text)}</div>
 </body></html>`);
   w.document.close();
