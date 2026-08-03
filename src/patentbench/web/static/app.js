@@ -2622,7 +2622,14 @@ let tetRoles = null;
 $('answer-format').addEventListener('change', async () => {
   if ($('answer-format').value !== 'tech-effect' || !activeTab) return;
   const r = await tetPickRoles(tetRoles);
-  if (r) tetRoles = { ...r, pending: true };
+  if (!r) return;                                   // cancelled — nothing sent
+  tetRoles = { ...r, pending: true };
+  // «Build argumentation» BUILDS right away: anything already typed in the chat
+  // box becomes additional instructions; an empty box gets the default request.
+  if (!$('q').value.trim()) {
+    $('q').value = 'Build the technical effect argumentation for this case.';
+  }
+  sendChat(false);
 });
 
 async function sendChat(notebookOnly) {
