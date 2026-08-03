@@ -324,6 +324,9 @@ def test_tet_123_check_prompt_assembly(monkeypatch):
     assert "no initial set of claims was provided" in p     # the missing-doc note
     assert "directly and unambiguously derivable" in p
     assert "HOUSE STYLE" in p                                # house style rides along
+    # ready-to-file closing paragraph + explicit overall conclusion
+    assert "Basis for amendments (Art. 123(2), 76(1) EPC)" in p
+    assert "whether basis for the amendments is there" in p
 
 
 def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):

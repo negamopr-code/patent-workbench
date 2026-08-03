@@ -487,6 +487,24 @@ that were not presented in combination — name the gap precisely;
 Step 4 — SUMMARY. An overall Art. 123(2) verdict per amended claim, then, for \
 every RISK or NOT SUPPORTED finding, a suggested wording change that would \
 cure it while keeping the amendment's intent.
+
+Step 5 — BASIS PARAGRAPH. Close with the ready-to-file paragraph for the \
+argumentation, in EXACTLY this format (group consecutive claims when their \
+basis statement is identical; use the location style the as-filed documents \
+actually carry — paragraph [00NN], or page/line "p.N, l.N-N", or original \
+claim numbers; write "of the parent application" only when the initial \
+documents are a parent application, else "as originally filed"):
+
+Basis for amendments (Art. 123(2), 76(1) EPC)
+Claim 1: original claim 1 + features from the description, p.4, l.31-32.
+Claims 2-13: original claims 2-13.
+Claim 14: corresponding to claim 1.
+
+Every basis stated here must repeat a basis already established in Step 2 — \
+never introduce a new, unverified citation in this paragraph. Then ONE closing \
+sentence stating plainly whether basis for the amendments is there: either \
+that all amendments have a direct and unambiguous basis in the application as \
+filed, or that basis is missing or at risk for the named claims/features.
 """
 
 _TET_123_DOC_CAP = 150_000   # per-document char budget in the 123(2) prompt
