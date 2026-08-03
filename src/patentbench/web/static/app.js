@@ -2443,6 +2443,37 @@ function renderMarkdown(text) {
             .replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
 }
 
+/* ⬇ PDF: open ONE answer in a clean print view and invoke the browser's print
+   dialog — "Save as PDF" there produces the file, with the on-screen formatting
+   (bold/italic) preserved. The document title becomes the suggested filename. */
+function downloadMsgPdf(m) {
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const t = tabs.find(x => x.id === activeTab);
+  const when = m.ts ? new Date(m.ts * 1000).toLocaleString() : new Date().toLocaleString();
+  const who = m.role === 'a' ? 'NotebookLM' : 'Claude';
+  const chips = (m.participants || []).map(p => esc(p.title)).join(' · ');
+  const w = window.open('', '_blank');
+  if (!w) { alert('Allow pop-ups for this page to export a PDF.'); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8">
+<title>${esc(t ? t.name : 'Patent Workbench')} — ${who} answer ${esc(when)}</title>
+<style>
+  body { font: 13px/1.6 "Segoe UI", Arial, sans-serif; color: #111;
+         max-width: 820px; margin: 32px auto; padding: 0 24px; }
+  .hdr { color: #555; font-size: 11px; border-bottom: 1px solid #bbb;
+         padding-bottom: 10px; margin-bottom: 18px; }
+  .hdr b { color: #111; font-size: 13px; }
+  .body { white-space: pre-wrap; word-break: break-word; }
+  @media print { body { margin: 0 auto; } }
+</style></head><body>
+<div class="hdr"><b>${esc(t ? t.name : 'Patent Workbench')}</b> — ${who} · ${esc(when)}
+${chips ? '<br>' + chips : ''}</div>
+<div class="body">${renderMarkdown(m.text)}</div>
+</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 300);   // let the new window lay out first
+}
+
 function appendMsg(m) {
   const wrap = $('chat');
   const el = document.createElement('div');
@@ -2470,6 +2501,14 @@ function appendMsg(m) {
     btn.textContent = '💾 Save as lesson';
     btn.onclick = () => openLessonModal(m.text);
     el.appendChild(btn);
+  }
+  if (m.role === 'c' || m.role === 'a') {
+    const pdf = document.createElement('button');
+    pdf.className = 'btn small lesson-btn';
+    pdf.textContent = '⬇ PDF';
+    pdf.title = 'Open just this answer in the print dialog — pick «Save as PDF» as the destination to download it.';
+    pdf.onclick = () => downloadMsgPdf(m);
+    el.appendChild(pdf);
   }
   wrap.appendChild(el);
   wrap.scrollTop = wrap.scrollHeight;
