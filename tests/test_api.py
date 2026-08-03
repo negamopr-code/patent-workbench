@@ -255,6 +255,33 @@ def test_tet_scanned_pdf_upload_goes_through_ocr(client, monkeypatch):
     assert all(d["status"] == "ready" for d in seen["tet_docs"])
 
 
+def test_tet_esop_citations_extraction(client):
+    """📄 D-labeled and bare patent numbers are pulled out of a search-report
+    TET doc (labeled first, own/benchmark number excluded); the literal
+    /citations path does not collide with the /{doc_id} route."""
+    tid = client.post("/api/tabs", json={"name": "T"}).json()["id"]
+    db.set_benchmark(tid, source="number", number="EP4444444A1")
+    esop = ("EXTENDED EUROPEAN SEARCH REPORT for EP 4444444 A1.\n"
+            "Category X: D1: US 2016/0123456 A1 (SMITH) claims 1-5.\n"
+            "Category Y: D2 EP 1234567 B1 (JONES).\n"
+            "Also of interest: WO 2019/055123 A1.\n")
+    client.post(f"/api/tabs/{tid}/tet-docs/text",
+                json={"kind": "search-report", "text": esop})
+    cits = client.get(f"/api/tabs/{tid}/tet-docs/citations").json()["citations"]
+    by_num = {c["number"]: c["label"] for c in cits}
+    assert by_num.get("US20160123456A1") == "D1"
+    assert by_num.get("EP1234567B1") == "D2"
+    assert "WO2019055123A1" in by_num and by_num["WO2019055123A1"] is None
+    assert "EP4444444A1" not in by_num                 # the case's own number
+    assert [c["label"] for c in cits[:2]] == ["D1", "D2"]   # labeled lead
+    # a non-search-report doc contributes nothing
+    client.post(f"/api/tabs/{tid}/tet-docs/text",
+                json={"kind": "applicant-arguments",
+                      "text": "We disagree with the citation of US 9999999 B2 entirely."})
+    cits2 = client.get(f"/api/tabs/{tid}/tet-docs/citations").json()["citations"]
+    assert all(c["number"] != "US9999999B2" for c in cits2)
+
+
 def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):
     """🖋 the ONE global formatting space: editable, persisted, and injected into
     EVERY answer path — chat prompts, the deep-compare reduce, and ⚖️ PSA runs."""

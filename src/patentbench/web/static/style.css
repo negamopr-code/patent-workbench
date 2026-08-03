@@ -217,6 +217,9 @@ textarea, select, input[type="text"] {
    while scrolling and typing (each row still occupies its estimated height). */
 .doc { content-visibility: auto; contain-intrinsic-size: auto 120px; }
 .docs-more { display: block; width: 100%; margin-top: 8px; }
+/* 📐 roles popup: paste-a-number filter above each select */
+.tet-search { display: block; width: 100%; margin: 4px 0 2px; padding: 4px 8px;
+  font-size: 13px; box-sizing: border-box; }
 
 /* 🖼 drawing sheets in the viewer */
 .view-figs { margin: 8px 0 12px; }

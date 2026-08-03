@@ -2512,6 +2512,25 @@ function tetRolesText(r) {
     : '';
 }
 
+/* 🔍 type/paste a number above a roles select → the list filters to matches and
+   the first match is selected — no endless scrolling (the full list stays
+   available when the field is empty). Number comparison ignores spaces/-/. */
+function wireTetSearch(inputId, selId) {
+  const inp = $(inputId), sel = $(selId);
+  inp.value = '';
+  inp.oninput = () => {
+    const q = inp.value.trim().toUpperCase().replace(/[\s/.-]/g, '');
+    let first = null;
+    for (const o of sel.options) {
+      const hay = (o.value + ' ' + o.textContent).toUpperCase().replace(/[\s/.-]/g, '');
+      const hit = !q || hay.includes(q);
+      o.hidden = q ? !hit : false;
+      if (hit && q && o.value && !first) first = o;
+    }
+    if (first) sel.value = first.value;
+  };
+}
+
 async function tetPickRoles(prefill) {
   const fetched = (lastDocs || []).filter(d => d.status === 'fetched' && d.number);
   const picked = fetched.filter(d => docSelection.has(d.id));
@@ -2520,6 +2539,10 @@ async function tetPickRoles(prefill) {
   const td = await api(`/api/tabs/${activeTab}/tet-docs`);
   const tdocs = td.docs || [];
   const hasEsop = tdocs.some(d => d.kind === 'search-report' && d.status === 'ready');
+  // 📄 concrete citations extracted from the ESOP → direct D1/D2 picks
+  const esopCits = hasEsop
+    ? ((await api(`/api/tabs/${activeTab}/tet-docs/citations`)).citations || [])
+    : [];
   const fill = (sel, blankLabel, esopLabel, preset) => {
     sel.innerHTML = '';
     const blank = document.createElement('option');
@@ -2530,6 +2553,13 @@ async function tetPickRoles(prefill) {
       o.value = TET_ESOP;
       o.textContent = `📄 ${esopLabel}`;
       o.title = 'Take this role from the initial search report (ESOP) in the TET supporting documents — the argumentation anchors on its citations and objections.';
+      sel.appendChild(o);
+    }
+    for (const c of esopCits) {
+      const o = document.createElement('option');
+      o.value = c.number;
+      o.textContent = `📄 ${c.label ? c.label + ' in ESOP' : 'cited in ESOP'}: ${c.number}`;
+      o.title = 'A document cited in the initial search report. Picking it names the concrete number, so its full text is loaded when it is also a candidate of this tab.';
       sel.appendChild(o);
     }
     for (const d of ordered) {
@@ -2564,6 +2594,9 @@ async function tetPickRoles(prefill) {
        (prefill && prefill.d1) || (picked[0] && picked[0].number) || (hasEsop ? TET_ESOP : ''));
   fill($('tet-d2'), '— none —', 'further citation of the search report',
        (prefill && prefill.d2) || (picked[1] && picked[1].number));
+  wireTetSearch('tet-target-search', 'tet-target');
+  wireTetSearch('tet-d1-search', 'tet-d1');
+  wireTetSearch('tet-d2-search', 'tet-d2');
   const rd = $('tet-roles-docs');
   const ready = tdocs.filter(d => d.status === 'ready').length;
   const busy = tdocs.filter(d => d.status === 'pending').length;

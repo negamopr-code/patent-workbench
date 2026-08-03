@@ -347,6 +347,37 @@ def tet_doc_paste(tab_id: int, body: schemas.TetDocText):
     return db.add_tet_doc(tab_id, body.kind, name[:200], body.text.strip())
 
 
+# NOTE: registered BEFORE /tet-docs/{doc_id} so the literal path wins routing.
+@app.get("/api/tabs/{tab_id}/tet-docs/citations")
+def tet_doc_citations(tab_id: int):
+    """Patent numbers cited in the tab's READY initial search report(s), with
+    their D-labels where the report names them — offered in the 📐 roles popup
+    as direct D1/D2 picks. The application's own (benchmark) number is excluded."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id, full=False) or {}
+    own = patents.normalize(bm.get("number") or "") or None
+    labeled: dict[str, str] = {}
+    order: list[str] = []
+    dnum_re = re.compile(r"\bD(\d{1,2})\b[\s:=–—-]{0,3}" + patents.NUMBER_RE.pattern)
+    for doc in db.list_tet_docs(tab_id, full=True, ready_only=True):
+        if doc["kind"] != "search-report":
+            continue
+        text = doc.get("text") or ""
+        for m in dnum_re.finditer(text):
+            n = patents.normalize(m.group(2))
+            if patents.is_plausible(n):
+                labeled.setdefault(n, f"D{m.group(1)}")
+        for m in patents.NUMBER_RE.finditer(text):
+            n = patents.normalize(m.group(1))
+            if patents.is_plausible(n) and n != own and n not in order:
+                order.append(n)
+    pos = {n: i for i, n in enumerate(order)}
+    cits = [{"number": n, "label": labeled.get(n)} for n in order[:30]]
+    cits.sort(key=lambda c: (c["label"] is None,
+                             int(c["label"][1:]) if c["label"] else pos[c["number"]]))
+    return {"citations": cits}
+
+
 @app.get("/api/tabs/{tab_id}/tet-docs/{doc_id}")
 def tet_doc_get(tab_id: int, doc_id: int):
     _tab_or_404(tab_id)
