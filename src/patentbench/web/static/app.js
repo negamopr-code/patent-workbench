@@ -3512,6 +3512,23 @@ async function backfillDigests(n) {
   await refreshDocs();
   await reloadChat();
 }
+// 🧮 Recalc: rebuild every stored score from the ALREADY-STORED per-element verdicts under
+// the CURRENT M/A labels — zero model calls. For after relabeling features (M → A): the
+// verdicts still match by name, only the frozen 0-10 aggregation was made with old labels.
+$('score-recalc').onclick = async () => {
+  if (!activeTab) return;
+  if (!confirm('🧮 Recalculate all stored scores from the per-element verdicts already on '
+      + 'file, using the CURRENT M/A labels?\n\nFree and instant — ZERO model calls, nothing '
+      + 'is re-read. Score becomes the weighted Must-rating; additional-feature coverage '
+      + 'goes into the note as a bonus.')) return;
+  const btn = $('score-recalc'); btn.disabled = true;
+  setBusy(true, 'Recalculating scores from stored verdicts (no model)');
+  const res = await api(`/api/tabs/${activeTab}/score-recalc`, { method: 'POST' });
+  setBusy(false); btn.disabled = false;
+  if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); return; }
+  await refreshDocs();
+  await reloadChat();
+};
 // ♻️ Re-check over EVERY candidate with a digest, not just the top-N: after a benchmark
 // change the WHOLE list is stale, not only the documents that happened to be on top.
 $('digest-rescore-all').onclick = async () => {

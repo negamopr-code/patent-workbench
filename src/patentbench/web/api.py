@@ -3552,6 +3552,52 @@ def digest_rescore_ep(tab_id: int, body: schemas.DigestRescoreRequest, bg: Backg
             "failed_batches": len(errors), "results": results}
 
 
+@app.post("/api/tabs/{tab_id}/score-recalc")
+def score_recalc_ep(tab_id: int, bg: BackgroundTasks):
+    """🧮 RECALC (free, instant). Recompute every candidate's stored score from its
+    ALREADY-STORED per-element verdicts under the benchmark's CURRENT feature kinds —
+    no model call, no re-read, no digest pass.
+
+    This is the button for 'the features were RELABELED after the reads ran' (e.g.
+    dependent-claim features moved M → A): the per-element verdicts are still valid —
+    they match by element NAME — but the 0-10 score frozen on each document was
+    aggregated under the old kinds. Score becomes the weighted Must-rating (the same
+    number the unified ranking uses); the A/W bonus rides in the note."""
+    _tab_or_404(tab_id)
+    bm = db.get_benchmark(tab_id)
+    els = (bm or {}).get("features") or []
+    if not any(_kind(e) == "M" for e in els):
+        raise HTTPException(400, "the benchmark has no mandatory (M) elements to score against")
+    now = int(time.time())
+    updated = no_verdicts = 0
+    for d in db.list_documents(tab_id, full=True):
+        if d["status"] != "fetched":
+            continue
+        u = _unified_score(els, d)
+        if not u["assessed"]:            # nothing per-element stored → keep the old score
+            no_verdicts += 1
+            continue
+        note = (f"recalc: M {u['mand_full']}✓ {u['mand_partial']}~ of {u['mand_total']}"
+                + (f" · A-bonus {u['add_bonus']} ({u['add_full']}✓ {u['add_partial']}~ "
+                   f"of {u['add_total']})" if u["add_total"] else "")
+                + (f" · W-bonus {u['w_bonus']}" if u["w_total"] else ""))
+        db.update_document(d["id"], score=u["mand_rating"], score_note=note,
+                           scored_at=now, score_model="recalc·stored-verdicts")
+        updated += 1
+    if not updated:
+        raise HTTPException(400, "no candidate has stored per-element verdicts yet — run a "
+                                 "🏆 deep-compare / 🔎 combi / ➕ additional read first")
+    db.append_message(tab_id, "s",
+        f"🧮 Recalculated {updated} candidate score(s) from their STORED per-element verdicts "
+        f"under the current M/A/W labels — zero model calls, nothing re-read. Score = weighted "
+        f"Must-rating over the {sum(1 for e in els if _kind(e) == 'M')} mandatory element(s); "
+        f"additional-feature coverage is a bonus in the note."
+        + (f" ⚠ {no_verdicts} candidate(s) kept their old score — no per-element verdicts "
+           "stored (only a holistic read); re-read those to refresh them." if no_verdicts else ""))
+    bg.add_task(_auto_judge_combi_safe, tab_id)
+    return {"ok": True, "updated": updated, "no_verdicts": no_verdicts}
+
+
 @app.get("/api/tabs/{tab_id}/digest-gap")
 def digest_gap_ep(tab_id: int):
     """How many candidates are OUT OF SCOPE of every digest-based tool (➕ additional read,

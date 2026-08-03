@@ -16,6 +16,12 @@ def client(tmp_path, monkeypatch):
                                    "claims": "1. A method.", "description": "desc"})
     monkeypatch.setattr(claude_bridge, "chat",
                         lambda *a, **k: {"answer": "claude says hi", "model": "claude-fable-5"})
+    # 🧪 The EPC sanity pass is a SECOND claude call made by the API on top of
+    # the (stubbed) psa/chat/tet_123_check answer — without this stub every
+    # PSA / 123-check / tech-effect test spawns the real `claude -p` binary.
+    # The sanity tests override this with their own monkeypatch.
+    monkeypatch.setattr(claude_bridge, "epc_sanity",
+                        lambda answer, model=None: {"clean": True})
     monkeypatch.setattr(claude_bridge, "digest_document",
                         lambda n, t, x, model=None: {"digest": f"digest of {n}"})
     monkeypatch.setattr(claude_bridge, "deep_map",
@@ -3779,6 +3785,47 @@ def test_additional_read_all_docs_errors_when_every_batch_fails(client, monkeypa
     monkeypatch.setattr(cb, "additional_read", lambda *a, **k: {"error": "session limit"})
     r = client.post(f"/api/tabs/{tid}/additional-read", json={"all_docs": True})
     assert r.status_code == 400 and "session limit" in r.json()["detail"]
+
+
+def test_score_recalc_reaggregates_stored_verdicts_under_current_kinds(client):
+    """🧮 recalc: after relabeling features (M → A) the stored per-element verdicts are
+    re-aggregated under the CURRENT kinds — zero model calls. A doc that missed only
+    now-A features must jump to a 10/10 Must-rating."""
+    import patentbench.db as db
+    tab = client.post("/api/tabs", json={"name": "Recalc"}).json()
+    tid = tab["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "cover body", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "outer pole", "weight": 5, "kind": "M", "sl": 5},
+        {"name": "clamping structure", "weight": 3, "kind": "A", "sl": 5},   # was M once
+    ]})
+    # covers both (current) M elements, misses the now-A one; frozen score = old low note
+    d1 = _feature_doc(db, tid, "EP5500001", [
+        {"name": "cover body", "status": "yes"}, {"name": "outer pole", "status": "yes"},
+        {"name": "clamping structure", "status": "no"}])
+    db.update_document(d1, score=4.0, score_note="old all-M framing", score_model="opus")
+    # no per-element verdicts at all → must keep its old holistic score untouched
+    d2 = db.add_documents(tid, ["EP5500002"])["inserted"][0]
+    db.update_document(d2, status="fetched", score=7.0, score_note="holistic only")
+    r = client.post(f"/api/tabs/{tid}/score-recalc").json()
+    assert r["updated"] == 1 and r["no_verdicts"] == 1
+    docs = {d["number"]: d for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    assert docs["EP5500001"]["score"] == 10.0                    # both M ✓ → full Must-rating
+    assert docs["EP5500001"]["score_model"] == "recalc·stored-verdicts"
+    assert docs["EP5500002"]["score"] == 7.0                     # untouched, no verdicts stored
+    assert docs["EP5500002"]["score_note"] == "holistic only"
+
+
+def test_score_recalc_needs_mandatory_elements_and_verdicts(client):
+    import patentbench.db as db
+    tab = client.post("/api/tabs", json={"name": "RecalcE"}).json()
+    tid = tab["id"]
+    r = client.post(f"/api/tabs/{tid}/score-recalc")
+    assert r.status_code == 400 and "mandatory" in r.json()["detail"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"title": "t", "features": [
+        {"name": "cover body", "weight": 5, "kind": "M", "sl": 5}]})
+    r = client.post(f"/api/tabs/{tid}/score-recalc")
+    assert r.status_code == 400 and "per-element" in r.json()["detail"]
 
 
 def test_parse_digest_rescore():
