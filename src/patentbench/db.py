@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS tet_doc(
   kind TEXT NOT NULL,
   name TEXT NOT NULL,
   text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',   -- ready | pending (vision OCR) | error
+  progress TEXT,
+  error TEXT,
   added_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_messages_tab ON messages(tab_id, id);
 CREATE INDEX IF NOT EXISTS idx_documents_tab ON documents(tab_id, id);
@@ -168,6 +171,11 @@ def _conn():
             con.execute("ALTER TABLE benchmark ADD COLUMN progress TEXT")
         if "features_json" not in cols:    # weighted target features [{name,weight}]
             con.execute("ALTER TABLE benchmark ADD COLUMN features_json TEXT")
+        tetcols = {r[1] for r in con.execute("PRAGMA table_info(tet_doc)")}
+        if tetcols and "status" not in tetcols:   # scanned-PDF OCR support
+            con.execute("ALTER TABLE tet_doc ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'")
+            con.execute("ALTER TABLE tet_doc ADD COLUMN progress TEXT")
+            con.execute("ALTER TABLE tet_doc ADD COLUMN error TEXT")
         dcols = {r[1] for r in con.execute("PRAGMA table_info(documents)")}
         if "digest" not in dcols:
             con.execute("ALTER TABLE documents ADD COLUMN digest TEXT")
@@ -750,12 +758,17 @@ def cross_scan_mark(tab_id: int, bm_fp: str, results: dict[str, bool]) -> None:
 
 # ---------- 📄 TET supporting documents (per tab) ----------
 
-def list_tet_docs(tab_id: int, full: bool = False) -> list[dict]:
+def list_tet_docs(tab_id: int, full: bool = False,
+                  ready_only: bool = False) -> list[dict]:
     """The tab's TET supporting documents (amended claims, applicant arguments,
-    new description …). full=False returns metadata only (text length, not text)."""
-    cols = "*" if full else "id, tab_id, kind, name, length(text) AS chars, added_at"
+    new description …). full=False returns metadata only (text length, not text);
+    ready_only=True excludes rows still in vision OCR or failed (prompt path)."""
+    cols = ("*" if full else
+            "id, tab_id, kind, name, length(text) AS chars, status, progress, "
+            "error, added_at")
+    where = "tab_id=?" + (" AND status='ready'" if ready_only else "")
     with _conn() as c:
-        rows = c.execute(f"SELECT {cols} FROM tet_doc WHERE tab_id=? ORDER BY id",
+        rows = c.execute(f"SELECT {cols} FROM tet_doc WHERE {where} ORDER BY id",
                          (tab_id,)).fetchall()
         return [dict(r) for r in rows]
 
@@ -767,13 +780,24 @@ def get_tet_doc(tab_id: int, doc_id: int) -> dict | None:
         return dict(r) if r else None
 
 
-def add_tet_doc(tab_id: int, kind: str, name: str, text: str) -> dict:
+def add_tet_doc(tab_id: int, kind: str, name: str, text: str,
+                status: str = "ready") -> dict:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO tet_doc(tab_id, kind, name, text, added_at) VALUES(?,?,?,?,?)",
-            (tab_id, kind, name, text, int(time.time())))
+            "INSERT INTO tet_doc(tab_id, kind, name, text, status, added_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (tab_id, kind, name, text, status, int(time.time())))
         return {"id": cur.lastrowid, "tab_id": tab_id, "kind": kind, "name": name,
-                "chars": len(text)}
+                "chars": len(text), "status": status}
+
+
+def update_tet_doc(doc_id: int, **fields) -> None:
+    if not fields:
+        return
+    sets = ", ".join(f"{k}=?" for k in fields)
+    with _conn() as c:
+        c.execute(f"UPDATE tet_doc SET {sets} WHERE id=?",
+                  (*fields.values(), doc_id))
 
 
 def delete_tet_doc(tab_id: int, doc_id: int) -> bool:

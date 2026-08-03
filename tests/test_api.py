@@ -225,6 +225,36 @@ def test_tet_supporting_docs_crud_and_chat_wiring(client, monkeypatch):
     assert client.delete(f"/api/tabs/{tid}/tet-docs/{doc_id}").status_code == 404
 
 
+def test_tet_scanned_pdf_upload_goes_through_ocr(client, monkeypatch):
+    """📄 a scanned (no-text-layer) TET PDF is NOT rejected: it lands as a
+    ⏳ pending row, the background vision OCR fills it in, and only READY rows
+    reach the tech-effect prompt."""
+    tid = client.post("/api/tabs", json={"name": "T"}).json()["id"]
+    monkeypatch.setattr(api.extract, "text_from_pdf",
+                        lambda p: {"error": "no text layer"})
+    def fake_ocr(doc_id, pdf_path):
+        db.update_tet_doc(doc_id, text="OCR-TRANSCRIBED CLAIMS " * 5,
+                          status="ready", progress=None, error=None)
+    monkeypatch.setattr(api, "_transcribe_tet_doc", fake_ocr)
+    r = client.post(f"/api/tabs/{tid}/tet-docs",
+                    data={"kind": "amended-claims"},
+                    files={"file": ("scan.pdf", b"%PDF-1.4 fake",
+                                    "application/pdf")}).json()
+    assert r["pending"] is True and r["status"] == "pending"
+    # TestClient runs background tasks on response completion → already ready
+    docs = client.get(f"/api/tabs/{tid}/tet-docs").json()["docs"]
+    assert docs[0]["status"] == "ready" and docs[0]["chars"] > 0
+    # a row still in OCR never reaches the prompt (ready_only filter)
+    db.add_tet_doc(tid, "other", "still-scanning.pdf", "", status="pending")
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: seen.update(k) or {"answer": "ok", "model": "m"})
+    client.post(f"/api/tabs/{tid}/chat",
+                json={"question": "argue", "answer_format": "tech-effect"})
+    assert [d["name"] for d in seen["tet_docs"]] == ["scan.pdf"]
+    assert all(d["status"] == "ready" for d in seen["tet_docs"])
+
+
 def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):
     """🖋 the ONE global formatting space: editable, persisted, and injected into
     EVERY answer path — chat prompts, the deep-compare reduce, and ⚖️ PSA runs."""

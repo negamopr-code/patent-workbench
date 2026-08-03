@@ -237,16 +237,73 @@ def _tet_kind_or_400(kind: str) -> str:
 @app.get("/api/tabs/{tab_id}/tet-docs")
 def tet_docs_list(tab_id: int):
     _tab_or_404(tab_id)
-    return {"docs": db.list_tet_docs(tab_id),
-            "kinds": claude_bridge.TET_DOC_KINDS}
+    docs = db.list_tet_docs(tab_id)
+    # A container rebuild kills an in-flight OCR thread and leaves its row
+    # 'pending' forever — flip long-dead ones to an actionable error.
+    for d in docs:
+        if d["status"] == "pending" and time.time() - (d["added_at"] or 0) > 7200:
+            db.update_tet_doc(d["id"], status="error",
+                              error="OCR interrupted (app restarted) — delete and re-upload")
+            d["status"], d["error"] = "error", "OCR interrupted (app restarted) — delete and re-upload"
+    return {"docs": docs, "kinds": claude_bridge.TET_DOC_KINDS}
+
+
+def _transcribe_tet_doc(doc_id: int, pdf_path: str) -> None:
+    """Background: a SCANNED (image-only) TET supporting PDF → page PNGs
+    (pdftoppm) → vision transcription per page (same engine as the benchmark
+    photo pages and ⚖️ PSA scans) → the tet_doc row's text. Progress/errors are
+    written to the row so the 📄 manager can poll them."""
+    pages_dir = pdf_path + "-pages"
+    shutil.rmtree(pages_dir, ignore_errors=True)
+    os.makedirs(pages_dir, exist_ok=True)
+    try:
+        try:
+            subprocess.run(["pdftoppm", "-r", "150", "-png", pdf_path,
+                            os.path.join(pages_dir, "pg")],
+                           check=True, timeout=180, capture_output=True)
+        except (subprocess.SubprocessError, OSError) as e:
+            db.update_tet_doc(doc_id, status="error", error=f"pdftoppm failed: {e}")
+            return
+        pages = sorted(os.listdir(pages_dir))
+        if not pages:
+            db.update_tet_doc(doc_id, status="error",
+                              error="the PDF produced no page images")
+            return
+        db.update_tet_doc(doc_id, progress=f"0/{len(pages)}")
+        texts: list[str] = [""] * len(pages)
+        done = 0
+
+        def one(ip):
+            i, p = ip
+            r = extract.text_from_image(os.path.join(pages_dir, p))
+            return i, (r.get("text") or "")
+
+        with ThreadPoolExecutor(max_workers=TRANSCRIBE_WORKERS) as ex:
+            for i, t in ex.map(one, enumerate(pages)):
+                texts[i] = t
+                done += 1
+                db.update_tet_doc(doc_id, progress=f"{done}/{len(pages)}")
+        text = "\n\n".join(f"— page {i + 1} —\n{t.strip()}"
+                           for i, t in enumerate(texts) if t.strip()).strip()
+        if len(text) < 50:
+            db.update_tet_doc(doc_id, status="error",
+                              error="vision transcription yielded almost no text")
+            return
+        db.update_tet_doc(doc_id, text=text, status="ready", progress=None, error=None)
+    finally:
+        shutil.rmtree(pages_dir, ignore_errors=True)
+        try:
+            os.remove(pdf_path)
+        except OSError:
+            pass
 
 
 @app.post("/api/tabs/{tab_id}/tet-docs")
-async def tet_doc_upload(tab_id: int, kind: str = Form(...),
+async def tet_doc_upload(tab_id: int, bg: BackgroundTasks, kind: str = Form(...),
                          file: UploadFile = File(...)):
-    """Upload a TET supporting document (PDF with a text layer, TXT or MD) into
-    THIS tab. Scanned image-only PDFs are rejected with a hint to paste the text
-    instead (✍️) — these documents are usually generated, not scanned."""
+    """Upload a TET supporting document (PDF, TXT or MD) into THIS tab. A
+    scanned image-only PDF is vision-OCR'd page by page in the background — the
+    row appears immediately as ⏳ pending and flips to ready when transcribed."""
     _tab_or_404(tab_id)
     _tet_kind_or_400(kind)
     data = await file.read()
@@ -255,21 +312,22 @@ async def tet_doc_upload(tab_id: int, kind: str = Form(...),
     name = os.path.basename(file.filename or kind)
     ext = os.path.splitext(name)[1].lower()
     if ext == ".pdf":
-        tmp = os.path.join(UPLOADS, f"tet-{uuid.uuid4().hex}.pdf")
         os.makedirs(UPLOADS, exist_ok=True)
+        tmp = os.path.join(UPLOADS, f"tet-{uuid.uuid4().hex}.pdf")
         with open(tmp, "wb") as fh:
             fh.write(data)
-        try:
-            res = extract.text_from_pdf(tmp)
-        finally:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        res = extract.text_from_pdf(tmp)
         text = (res.get("text") or "").strip()
         if "error" in res or len(text) < 50:
-            raise HTTPException(400, f"{name}: no usable text layer (scanned PDF?) "
-                                     "— paste the text via ✍️ instead")
+            # scanned image-only PDF — no text layer. Same answer as the ⚖️ PSA
+            # and benchmark photo paths: vision-transcribe in the background.
+            doc = db.add_tet_doc(tab_id, kind, name, "", status="pending")
+            bg.add_task(_transcribe_tet_doc, doc["id"], tmp)
+            return {**doc, "pending": True}
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
     elif ext in (".txt", ".md"):
         text = data.decode("utf-8", errors="replace").strip()
     else:
@@ -2754,7 +2812,7 @@ def chat(tab_id: int, body: schemas.ChatRequest):
 
     # 📄 tech-effect answers get the tab's TET supporting documents (amended
     # claims, applicant arguments, new description) as governing case versions.
-    tet_docs = (db.list_tet_docs(tab_id, full=True)
+    tet_docs = (db.list_tet_docs(tab_id, full=True, ready_only=True)
                 if body.answer_format == "tech-effect" else None) or None
     if tet_docs:
         participants.append({"kind": "documents",

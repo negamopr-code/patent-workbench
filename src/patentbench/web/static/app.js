@@ -2531,10 +2531,14 @@ function tetPickRoles() {
   const rd = $('tet-roles-docs');
   rd.textContent = '';
   api(`/api/tabs/${activeTab}/tet-docs`).then(r => {
-    const n = (r.docs || []).length;
-    rd.textContent = n
-      ? `📎 ${n} supporting document(s) of this tab (amended claims / arguments / description) will be included.`
-      : '📎 No supporting documents in this tab yet — add amended claims / applicant arguments via 📄 TET if the argumentation should build on them.';
+    const ready = (r.docs || []).filter(d => d.status === 'ready').length;
+    const busy = (r.docs || []).filter(d => d.status === 'pending').length;
+    rd.textContent = ready
+      ? `📎 ${ready} supporting document(s) of this tab (amended claims / arguments / description) will be included.`
+        + (busy ? ` ⏳ ${busy} still in OCR — not included yet.` : '')
+      : busy
+        ? `⏳ ${busy} supporting document(s) still in vision OCR — not ready yet, this answer will not include them.`
+        : '📎 No supporting documents in this tab yet — add amended claims / applicant arguments via 📄 TET if the argumentation should build on them.';
   });
   return new Promise(resolve => {
     const done = v => { $('tet-modal').classList.add('hidden'); resolve(v); };
@@ -2681,7 +2685,10 @@ $('house-style-btn').onclick = async () => {
    lives in the global toolbar so upload works from EVERY tab; the documents it
    manages always belong to the tab that is open. ---------- */
 
+let tetDocsPoll = null;   // OCR-progress poll while the 📄 manager shows a pending doc
+
 async function refreshTetDocs() {
+  clearTimeout(tetDocsPoll);
   const wrap = $('tet-docs-list');
   if (!activeTab) { wrap.textContent = 'Open a tab first — the documents belong to a tab.'; return; }
   const r = await api(`/api/tabs/${activeTab}/tet-docs`);
@@ -2696,25 +2703,41 @@ async function refreshTetDocs() {
     const row = document.createElement('div');
     row.className = 'doc-row';
     const label = document.createElement('span');
-    label.textContent = `📎 ${kinds[d.kind] || d.kind}: ${d.name} (${(d.chars / 1000).toFixed(1)}k chars)`;
+    if (d.status === 'pending') {
+      label.textContent = `📎 ${kinds[d.kind] || d.kind}: ${d.name} — ⏳ vision OCR ${d.progress || 'starting'}…`;
+      label.title = 'Scanned PDF: each page is being vision-transcribed in the background. The document joins the argumentation once ready.';
+    } else if (d.status === 'error') {
+      label.textContent = `📎 ${kinds[d.kind] || d.kind}: ${d.name} — ⚠ ${d.error || 'failed'}`;
+    } else {
+      label.textContent = `📎 ${kinds[d.kind] || d.kind}: ${d.name} (${(d.chars / 1000).toFixed(1)}k chars)`;
+    }
     row.appendChild(label);
-    const view = document.createElement('button');
-    view.className = 'btn small'; view.textContent = '👁 view';
-    view.onclick = async () => {
-      const full = await api(`/api/tabs/${activeTab}/tet-docs/${d.id}`);
-      if (full.error) { alert(full.error); return; }
-      openViewer(`📎 ${kinds[d.kind] || d.kind} — ${d.name}`, { text: full.text });
-    };
-    row.appendChild(view);
-    const del = document.createElement('button');
-    del.className = 'btn small del'; del.textContent = '🗑';
-    del.title = 'Remove this supporting document from the tab';
-    del.onclick = async () => {
-      await api(`/api/tabs/${activeTab}/tet-docs/${d.id}`, { method: 'DELETE' });
-      refreshTetDocs();
-    };
-    row.appendChild(del);
+    if (d.status === 'ready') {
+      const view = document.createElement('button');
+      view.className = 'btn small'; view.textContent = '👁 view';
+      view.onclick = async () => {
+        const full = await api(`/api/tabs/${activeTab}/tet-docs/${d.id}`);
+        if (full.error) { alert(full.error); return; }
+        openViewer(`📎 ${kinds[d.kind] || d.kind} — ${d.name}`, { text: full.text });
+      };
+      row.appendChild(view);
+    }
+    if (d.status !== 'pending') {
+      const del = document.createElement('button');
+      del.className = 'btn small del'; del.textContent = '🗑';
+      del.title = 'Remove this supporting document from the tab';
+      del.onclick = async () => {
+        await api(`/api/tabs/${activeTab}/tet-docs/${d.id}`, { method: 'DELETE' });
+        refreshTetDocs();
+      };
+      row.appendChild(del);
+    }
     wrap.appendChild(row);
+  }
+  // keep polling while an OCR runs and the manager is open
+  if (r.docs.some(d => d.status === 'pending')
+      && !$('tet-mgr-modal').classList.contains('hidden')) {
+    tetDocsPoll = setTimeout(refreshTetDocs, 3000);
   }
 }
 
@@ -2726,7 +2749,10 @@ $('tet-btn').onclick = async () => {
   $('tet-mgr-modal').classList.remove('hidden');
   refreshTetDocs();
 };
-$('tet-mgr-close').onclick = () => $('tet-mgr-modal').classList.add('hidden');
+$('tet-mgr-close').onclick = () => {
+  clearTimeout(tetDocsPoll);
+  $('tet-mgr-modal').classList.add('hidden');
+};
 
 $('tet-edit-template').onclick = async () => {
   const r = await api('/api/tet');
@@ -2750,7 +2776,9 @@ $('tet-doc-file').onchange = async () => {
   $('tet-mgr-status').textContent = `Uploading ${f.name}…`;
   const r = await api(`/api/tabs/${activeTab}/tet-docs`, { method: 'POST', body: fd });
   $('tet-mgr-status').textContent = r.error ? `Upload failed: ${r.error}`
-    : `Added ${r.name} (${((r.chars || 0) / 1000).toFixed(1)}k chars).`;
+    : r.pending
+      ? `${r.name}: scanned PDF — vision OCR started, the document joins the argumentation once ready (progress below).`
+      : `Added ${r.name} (${((r.chars || 0) / 1000).toFixed(1)}k chars).`;
   if (!r.error) refreshTetDocs();
 };
 
