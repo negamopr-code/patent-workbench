@@ -352,8 +352,11 @@ def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):
     assert r["overridden"] is False
     assert "HOUSE STYLE" in r["text"]
     assert "additional features" in r["text"].lower()
+    # the problem-never-contains-the-solution rule (recurring bug 2026-08-03)
+    assert "THE PROBLEM NEVER CONTAINS THE SOLUTION" in r["text"]
     # default reaches the chat prompt path
     assert "HOUSE STYLE (BINDING)" in claude_bridge.build_prompt("q")
+    assert "THE PROBLEM NEVER CONTAINS THE SOLUTION" in claude_bridge.build_prompt("q")
     # edited version replaces the default everywhere; empty resets
     r = client.put("/api/house-style", json={"text": "MY GLOBAL STYLE RULES"}).json()
     assert r["overridden"] is True

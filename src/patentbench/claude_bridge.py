@@ -335,7 +335,10 @@ _FMT_TECH_EFFECT = (
     "as the assessed invention and the focused candidates as D1/D2, and say so "
     "in your first line. Every sentence that states a disclosure carries the "
     "document reference and the exact citation in place: paragraph [00NN] or "
-    "claim number, plus the figure (Fig. N) whenever one exists."
+    "claim number, plus the figure (Fig. N) whenever one exists. The objective "
+    "technical problem states ONLY the effect to be achieved — it must contain "
+    "no pointer to the claimed solution (house style rule 'THE PROBLEM NEVER "
+    "CONTAINS THE SOLUTION')."
 )
 
 # Ordered; first entry ("") is the default. `instruction=None` → fall back to
@@ -394,6 +397,22 @@ it is routine;
 6. Rankings and coverage statements must agree with the app's coverage matrix \
 numbers; where your reading differs, say so explicitly and cite the paragraph \
 that justifies the difference.
+7. THE PROBLEM NEVER CONTAINS THE SOLUTION. Whenever you formulate a problem, \
+in particular the objective technical problem or any sentence starting with \
+"How to", state ONLY the effect to be achieved. The claimed means, structure \
+or mechanism that achieves it must NOT appear in the problem statement. \
+Wrong: "How to make the two supplies independent of one another, structurally \
+by separate units and functionally by separate frequencies" (names the \
+solution: separate units, separate frequencies). Right: "How to allow the \
+magnitude and the timing of the power delivered to each device to be chosen \
+independently." Wrong: "How to obtain a position reading from a device that \
+has neither a power wire nor a signal wire" is acceptable ONLY if wirelessness \
+is already in the starting point; if the wireless link IS the distinguishing \
+feature, the problem is "How to obtain a position reading of a moving \
+actuator without additional installation effort." Self-check EVERY problem \
+sentence before writing it: if a phrase names a distinguishing feature of the \
+claim or of the document combination, delete that phrase; if the sentence \
+then collapses, reformulate it from the effect alone.
 """
 
 HOUSE_STYLE_FILE = "house-style.txt"
@@ -425,7 +444,8 @@ disclose ... .
 2. The distinguishing technical feature is therefore ... .
 3. This feature provides the technical effect of ... , because ... (benchmark \
 [00NN] or claim N).
-4. The objective technical problem is how to ... .
+4. The objective technical problem is how to ... (the effect alone — never \
+name the claimed solution in the problem).
 5. D2 (number) discloses ... (Fig. N; [00NN] or claim N), which addresses \
 this problem by ... .
 6. The claimed solution keeps the effect of ... over the combination of D1 \
@@ -560,7 +580,9 @@ most, with document references and figure/paragraph citations in place.
 ... ."
 2. "The distinguishing technical feature is ... ."
 3. "The technical effect of this feature is ... ."
-4. "The objective technical problem is therefore ... ."
+4. "The objective technical problem is therefore ... ." (state ONLY the effect \
+to be achieved — the problem must contain no pointer to the claimed solution, \
+no distinguishing structure, means or mechanism)
 5. "A person skilled in the art, starting from D1 and seeking a solution to \
 this problem, would consider the teachings of D2 (number), because ... \
 (Fig. N; [00NN] or claim N)."
@@ -1563,7 +1585,12 @@ _PSA_INSTRUCTION = (
     "(e.g. closest prior art and combination document — assign their roles as the "
     "methodology directs).\n"
     "• Ground every factual statement in the provided texts with [00NN]/claim/"
-    "Fig. citations, per the grounding rules above.")
+    "Fig. citations, per the grounding rules above.\n"
+    "• When the methodology reaches the OBJECTIVE TECHNICAL PROBLEM: formulate "
+    "it from the technical effect ALONE — the problem must contain NO pointer "
+    "to the claimed solution (no distinguishing structure, means or mechanism). "
+    "See the house style rule 'THE PROBLEM NEVER CONTAINS THE SOLUTION'; it "
+    "applies to every problem sentence in this run.")
 
 
 _PSA_STRETCH_INSTRUCTION = (
