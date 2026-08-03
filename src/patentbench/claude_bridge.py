@@ -434,6 +434,17 @@ and D2, because ... .
 
 TET_FILE = "tet.txt"
 
+# Per-tab TET SUPPORTING DOCUMENTS (db.tet_doc) — the prosecution versions the
+# argumentation is built on. Keys are validated at the API; labels head each
+# document's block in the prompt so the model can cite them by name.
+TET_DOC_KINDS = {
+    "amended-claims": "Amended set of claims",
+    "applicant-arguments": "Applicant arguments",
+    "new-description": "New description",
+    "other": "Supporting document",
+}
+MAX_TET_CHARS = 150_000   # total budget for TET supporting documents in a prompt
+
 
 def tet_template() -> str:
     """The ACTIVE technical effect template: the user's pasted example, else
@@ -793,6 +804,7 @@ def build_prompt(question: str, history: list[dict] | None = None,
                  other_docs: list[dict] | None = None,
                  coverage: list[dict] | None = None,
                  discussions: list[dict] | None = None,
+                 tet_docs: list[dict] | None = None,
                  scale: float = 1.0) -> str:
     # `scale` < 1 shrinks the big variable budgets (focused full texts, candidate
     # roster, cross-tab talk, history depth) — chat() retries with it when the
@@ -845,6 +857,24 @@ def build_prompt(question: str, history: list[dict] | None = None,
             "BENCHMARK DOCUMENT — the reference document of this tab. Candidates "
             "are compared AGAINST this; when ranking or matching, anchor on its "
             "claims and technical solution:\n\n" + _benchmark_block(benchmark))
+    if tet_docs:
+        # 📄 prosecution documents the user supplied for the technical effect
+        # argumentation — the CURRENT versions of the case, which govern over the
+        # benchmark document's original text wherever they differ.
+        per = max(MIN_DOC_CHARS, int(MAX_TET_CHARS * scale) // len(tet_docs))
+        blocks = "\n\n".join(
+            f"[{TET_DOC_KINDS.get(t.get('kind'), 'Supporting document')} — "
+            f"{t.get('name') or '?'}]\n" + (t.get("text") or "").strip()[:per]
+            for t in tet_docs)
+        parts.append(
+            "TET SUPPORTING DOCUMENTS — prosecution documents the user supplied "
+            "for the technical effect argumentation: amended set of claims, "
+            "applicant arguments, new description, and similar. These are the "
+            "CURRENT versions of the case. Build the argumentation on THEM: where "
+            "an amended claim or description differs from the benchmark document's "
+            "original text, the version below governs. Applicant arguments are "
+            "positions to build on and stay consistent with, not prior art. Cite "
+            "these documents by their bracketed label:\n\n" + blocks)
     if focus:
         # the FULL primary text of the candidate(s) the user selected — divide the
         # focus budget across them so each is as complete as possible.
@@ -1047,7 +1077,8 @@ def chat(question: str, history: list[dict] | None = None,
          xrefs: list[dict] | None = None,
          other_docs: list[dict] | None = None,
          coverage: list[dict] | None = None,
-         discussions: list[dict] | None = None) -> dict:
+         discussions: list[dict] | None = None,
+         tet_docs: list[dict] | None = None) -> dict:
     """One stateless turn. Returns {answer, model, lessons:[(skill, text)]} | {error}.
     No tools — pure text; benchmark + documents arrive pre-fetched from the local DB.
     `focus` = user-selected candidates loaded with FULL primary text; `full` =
@@ -1067,7 +1098,8 @@ def chat(question: str, history: list[dict] | None = None,
                               benchmark=benchmark, focus=focus, full=full,
                               answer_format=answer_format, xrefs=xrefs,
                               other_docs=other_docs, coverage=coverage,
-                              discussions=discussions, scale=scale)
+                              discussions=discussions, tet_docs=tet_docs,
+                              scale=scale)
         res = _run_claude(prompt, model or CHAT_MODEL,
                           timeout=_chat_timeout(len(prompt)))
         if "prompt is too long" not in (res.get("error") or "").lower():

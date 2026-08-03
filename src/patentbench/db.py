@@ -132,6 +132,16 @@ CREATE TABLE IF NOT EXISTS kg_feature(
   status TEXT,                        -- yes/partial/no/benchmark
   note TEXT,
   ts INTEGER NOT NULL);
+-- 📄 TET supporting documents (PER TAB): the prosecution versions the technical
+-- effect argumentation is built on — amended set of claims, applicant
+-- arguments, new description, or anything else the user supplies.
+CREATE TABLE IF NOT EXISTS tet_doc(
+  id INTEGER PRIMARY KEY,
+  tab_id INTEGER NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  added_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_messages_tab ON messages(tab_id, id);
 CREATE INDEX IF NOT EXISTS idx_documents_tab ON documents(tab_id, id);
 CREATE INDEX IF NOT EXISTS idx_kg_node_parent ON kg_node(parent_id);
@@ -736,6 +746,40 @@ def cross_scan_mark(tab_id: int, bm_fp: str, results: dict[str, bool]) -> None:
             "INSERT OR REPLACE INTO cross_scan(tab_id, number, bm_fp, matched, checked_at) "
             "VALUES(?,?,?,?,?)",
             [(tab_id, n, bm_fp, 1 if m else 0, now) for n, m in results.items()])
+
+
+# ---------- 📄 TET supporting documents (per tab) ----------
+
+def list_tet_docs(tab_id: int, full: bool = False) -> list[dict]:
+    """The tab's TET supporting documents (amended claims, applicant arguments,
+    new description …). full=False returns metadata only (text length, not text)."""
+    cols = "*" if full else "id, tab_id, kind, name, length(text) AS chars, added_at"
+    with _conn() as c:
+        rows = c.execute(f"SELECT {cols} FROM tet_doc WHERE tab_id=? ORDER BY id",
+                         (tab_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_tet_doc(tab_id: int, doc_id: int) -> dict | None:
+    with _conn() as c:
+        r = c.execute("SELECT * FROM tet_doc WHERE id=? AND tab_id=?",
+                      (doc_id, tab_id)).fetchone()
+        return dict(r) if r else None
+
+
+def add_tet_doc(tab_id: int, kind: str, name: str, text: str) -> dict:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO tet_doc(tab_id, kind, name, text, added_at) VALUES(?,?,?,?,?)",
+            (tab_id, kind, name, text, int(time.time())))
+        return {"id": cur.lastrowid, "tab_id": tab_id, "kind": kind, "name": name,
+                "chars": len(text)}
+
+
+def delete_tet_doc(tab_id: int, doc_id: int) -> bool:
+    with _conn() as c:
+        cur = c.execute("DELETE FROM tet_doc WHERE id=? AND tab_id=?", (doc_id, tab_id))
+        return cur.rowcount > 0
 
 
 # ---------- knowledge graph (cross-tab feature taxonomy) ----------

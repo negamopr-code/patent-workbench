@@ -181,6 +181,50 @@ def test_tet_roundtrip_and_injection(client, tmp_path, monkeypatch):
         "q", answer_format="tech-effect")
 
 
+def test_tet_supporting_docs_crud_and_chat_wiring(client, monkeypatch):
+    """📄 per-tab TET supporting documents: paste/list/get/delete, kind
+    validation, and the chat wiring — tech-effect answers carry them, other
+    formats do not."""
+    tab = client.post("/api/tabs", json={"name": "T"}).json()
+    tid = tab["id"]
+    # bad kind is rejected
+    r = client.post(f"/api/tabs/{tid}/tet-docs/text",
+                    json={"kind": "bogus", "text": "x" * 100})
+    assert r.status_code == 400
+    # paste an amended set of claims
+    r = client.post(f"/api/tabs/{tid}/tet-docs/text",
+                    json={"kind": "amended-claims",
+                          "text": "1. An amended widget with a flange."}).json()
+    assert r["kind"] == "amended-claims" and r["chars"] > 0
+    doc_id = r["id"]
+    lst = client.get(f"/api/tabs/{tid}/tet-docs").json()
+    assert [d["id"] for d in lst["docs"]] == [doc_id]
+    assert "amended-claims" in lst["kinds"]
+    assert "text" not in lst["docs"][0]              # list is metadata-only
+    full = client.get(f"/api/tabs/{tid}/tet-docs/{doc_id}").json()
+    assert "flange" in full["text"]
+    # chat: tech-effect passes the docs through, default format passes None
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: seen.update(k) or {"answer": "ok", "model": "m"})
+    client.post(f"/api/tabs/{tid}/chat",
+                json={"question": "argue", "answer_format": "tech-effect"})
+    assert [d["id"] for d in seen["tet_docs"]] == [doc_id]
+    client.post(f"/api/tabs/{tid}/chat", json={"question": "argue"})
+    assert seen["tet_docs"] is None
+    # prompt injection: block header + governing rule + the document text
+    p = claude_bridge.build_prompt(
+        "q", answer_format="tech-effect",
+        tet_docs=[{"kind": "amended-claims", "name": "claims-v2.pdf",
+                   "text": "1. An amended widget with a flange."}])
+    assert "TET SUPPORTING DOCUMENTS" in p
+    assert "[Amended set of claims — claims-v2.pdf]" in p and "flange" in p
+    # delete
+    assert client.delete(f"/api/tabs/{tid}/tet-docs/{doc_id}").json()["ok"] is True
+    assert client.get(f"/api/tabs/{tid}/tet-docs").json()["docs"] == []
+    assert client.delete(f"/api/tabs/{tid}/tet-docs/{doc_id}").status_code == 404
+
+
 def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):
     """🖋 the ONE global formatting space: editable, persisted, and injected into
     EVERY answer path — chat prompts, the deep-compare reduce, and ⚖️ PSA runs."""

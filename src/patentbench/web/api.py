@@ -225,6 +225,87 @@ def tet_put(body: schemas.AnswerFormatEdit):
     return tet_get()
 
 
+# ---------- 📄 TET supporting documents (per tab: amended claims, arguments …) ----------
+
+def _tet_kind_or_400(kind: str) -> str:
+    if kind not in claude_bridge.TET_DOC_KINDS:
+        raise HTTPException(400, f"unknown TET document kind '{kind}' — one of: "
+                                 + ", ".join(claude_bridge.TET_DOC_KINDS))
+    return kind
+
+
+@app.get("/api/tabs/{tab_id}/tet-docs")
+def tet_docs_list(tab_id: int):
+    _tab_or_404(tab_id)
+    return {"docs": db.list_tet_docs(tab_id),
+            "kinds": claude_bridge.TET_DOC_KINDS}
+
+
+@app.post("/api/tabs/{tab_id}/tet-docs")
+async def tet_doc_upload(tab_id: int, kind: str = Form(...),
+                         file: UploadFile = File(...)):
+    """Upload a TET supporting document (PDF with a text layer, TXT or MD) into
+    THIS tab. Scanned image-only PDFs are rejected with a hint to paste the text
+    instead (✍️) — these documents are usually generated, not scanned."""
+    _tab_or_404(tab_id)
+    _tet_kind_or_400(kind)
+    data = await file.read()
+    if len(data) > MAX_UPLOAD:
+        raise HTTPException(413, "too large (25 MB max)")
+    name = os.path.basename(file.filename or kind)
+    ext = os.path.splitext(name)[1].lower()
+    if ext == ".pdf":
+        tmp = os.path.join(UPLOADS, f"tet-{uuid.uuid4().hex}.pdf")
+        os.makedirs(UPLOADS, exist_ok=True)
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        try:
+            res = extract.text_from_pdf(tmp)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        text = (res.get("text") or "").strip()
+        if "error" in res or len(text) < 50:
+            raise HTTPException(400, f"{name}: no usable text layer (scanned PDF?) "
+                                     "— paste the text via ✍️ instead")
+    elif ext in (".txt", ".md"):
+        text = data.decode("utf-8", errors="replace").strip()
+    else:
+        raise HTTPException(400, f"{name}: only PDF, TXT or MD accepted")
+    if len(text) < 20:
+        raise HTTPException(400, "the document yielded almost no text")
+    return db.add_tet_doc(tab_id, kind, name, text)
+
+
+@app.post("/api/tabs/{tab_id}/tet-docs/text")
+def tet_doc_paste(tab_id: int, body: schemas.TetDocText):
+    """Add a TET supporting document from pasted text."""
+    _tab_or_404(tab_id)
+    _tet_kind_or_400(body.kind)
+    name = (body.name or "").strip() \
+        or f"{claude_bridge.TET_DOC_KINDS[body.kind]} (pasted)"
+    return db.add_tet_doc(tab_id, body.kind, name[:200], body.text.strip())
+
+
+@app.get("/api/tabs/{tab_id}/tet-docs/{doc_id}")
+def tet_doc_get(tab_id: int, doc_id: int):
+    _tab_or_404(tab_id)
+    doc = db.get_tet_doc(tab_id, doc_id)
+    if not doc:
+        raise HTTPException(404, "TET document not found")
+    return doc
+
+
+@app.delete("/api/tabs/{tab_id}/tet-docs/{doc_id}")
+def tet_doc_delete(tab_id: int, doc_id: int):
+    _tab_or_404(tab_id)
+    if not db.delete_tet_doc(tab_id, doc_id):
+        raise HTTPException(404, "TET document not found")
+    return {"ok": True}
+
+
 # ---------- tabs ----------
 
 @app.get("/api/tabs")
@@ -2671,12 +2752,19 @@ def chat(tab_id: int, body: schemas.ChatRequest):
             participants.append({"kind": "tab-docs",
                                  "title": f"«{c['tab_name']}» {c['fetched']}/{c['total']} docs"})
 
+    # 📄 tech-effect answers get the tab's TET supporting documents (amended
+    # claims, applicant arguments, new description) as governing case versions.
+    tet_docs = (db.list_tet_docs(tab_id, full=True)
+                if body.answer_format == "tech-effect" else None) or None
+    if tet_docs:
+        participants.append({"kind": "documents",
+                             "title": f"{len(tet_docs)} TET supporting doc(s)"})
     res = claude_bridge.chat(body.question, history=history, documents=documents,
                              sources=nlm_sources, skills=skill_blocks, model=model,
                              benchmark=benchmark, focus=focus, full=body.full,
                              answer_format=body.answer_format, xrefs=xrefs,
                              other_docs=other_docs, coverage=coverage,
-                             discussions=discussions)
+                             discussions=discussions, tet_docs=tet_docs)
     if "error" in res:
         out_messages.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
         return {"messages": out_messages, "error": res["error"]}

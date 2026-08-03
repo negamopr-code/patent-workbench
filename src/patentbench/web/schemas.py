@@ -313,6 +313,14 @@ class AnswerFormatEdit(BaseModel):
     text: str = Field(default="", max_length=40000)
 
 
+class TetDocText(BaseModel):
+    """📄 Add a TET supporting document from PASTED text (amended set of claims,
+    applicant arguments, new description …) to the active tab."""
+    kind: str
+    name: str | None = Field(default=None, max_length=200)
+    text: str = Field(min_length=20, max_length=2_000_000)
+
+
 class LessonCreate(BaseModel):
     skill: str
     lesson: str = Field(min_length=1, max_length=8000)

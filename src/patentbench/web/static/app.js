@@ -2528,6 +2528,14 @@ function tetPickRoles() {
   }
   fill($('tet-d1'), '— pick D1 —', picked[0] && picked[0].number);
   fill($('tet-d2'), '— none —', picked[1] && picked[1].number);
+  const rd = $('tet-roles-docs');
+  rd.textContent = '';
+  api(`/api/tabs/${activeTab}/tet-docs`).then(r => {
+    const n = (r.docs || []).length;
+    rd.textContent = n
+      ? `📎 ${n} supporting document(s) of this tab (amended claims / arguments / description) will be included.`
+      : '📎 No supporting documents in this tab yet — add amended claims / applicant arguments via 📄 TET if the argumentation should build on them.';
+  });
   return new Promise(resolve => {
     const done = v => { $('tet-modal').classList.add('hidden'); resolve(v); };
     $('tet-go').onclick = () => {
@@ -2668,11 +2676,97 @@ $('house-style-btn').onclick = async () => {
   openTextEditor('/api/house-style', '🖋 House style — applied to EVERY answer, all tabs', r);
 };
 
+/* ---------- 📄 TET manager: global template + the ACTIVE tab's supporting docs
+   (amended set of claims, applicant arguments, new description). The button
+   lives in the global toolbar so upload works from EVERY tab; the documents it
+   manages always belong to the tab that is open. ---------- */
+
+async function refreshTetDocs() {
+  const wrap = $('tet-docs-list');
+  if (!activeTab) { wrap.textContent = 'Open a tab first — the documents belong to a tab.'; return; }
+  const r = await api(`/api/tabs/${activeTab}/tet-docs`);
+  if (r.error) { wrap.textContent = r.error; return; }
+  const kinds = r.kinds || {};
+  wrap.innerHTML = '';
+  if (!(r.docs || []).length) {
+    wrap.textContent = 'None yet — upload or paste the amended claims / applicant arguments / new description of this case.';
+    return;
+  }
+  for (const d of r.docs) {
+    const row = document.createElement('div');
+    row.className = 'doc-row';
+    const label = document.createElement('span');
+    label.textContent = `📎 ${kinds[d.kind] || d.kind}: ${d.name} (${(d.chars / 1000).toFixed(1)}k chars)`;
+    row.appendChild(label);
+    const view = document.createElement('button');
+    view.className = 'btn small'; view.textContent = '👁 view';
+    view.onclick = async () => {
+      const full = await api(`/api/tabs/${activeTab}/tet-docs/${d.id}`);
+      if (full.error) { alert(full.error); return; }
+      openViewer(`📎 ${kinds[d.kind] || d.kind} — ${d.name}`, { text: full.text });
+    };
+    row.appendChild(view);
+    const del = document.createElement('button');
+    del.className = 'btn small del'; del.textContent = '🗑';
+    del.title = 'Remove this supporting document from the tab';
+    del.onclick = async () => {
+      await api(`/api/tabs/${activeTab}/tet-docs/${d.id}`, { method: 'DELETE' });
+      refreshTetDocs();
+    };
+    row.appendChild(del);
+    wrap.appendChild(row);
+  }
+}
+
 $('tet-btn').onclick = async () => {
+  const t = tabs.find(x => x.id === activeTab);
+  $('tet-mgr-tab').textContent = t ? `«${t.name}»` : 'this tab';
+  $('tet-mgr-status').textContent = '';
+  $('tet-paste-wrap').classList.add('hidden');
+  $('tet-mgr-modal').classList.remove('hidden');
+  refreshTetDocs();
+};
+$('tet-mgr-close').onclick = () => $('tet-mgr-modal').classList.add('hidden');
+
+$('tet-edit-template').onclick = async () => {
   const r = await api('/api/tet');
   if (r.error) { alert(r.error); return; }
+  $('tet-mgr-modal').classList.add('hidden');   // the editor modal replaces it
   openTextEditor('/api/tet',
     '📄 TET — paste your example technical effect argumentation (adapted to the chosen documents)', r);
+};
+
+$('tet-doc-upload').onclick = () => {
+  if (!activeTab) { alert('Open a tab first.'); return; }
+  $('tet-doc-file').click();
+};
+$('tet-doc-file').onchange = async () => {
+  const f = $('tet-doc-file').files[0];
+  $('tet-doc-file').value = '';
+  if (!f || !activeTab) return;
+  const fd = new FormData();
+  fd.append('kind', $('tet-doc-kind').value);
+  fd.append('file', f);
+  $('tet-mgr-status').textContent = `Uploading ${f.name}…`;
+  const r = await api(`/api/tabs/${activeTab}/tet-docs`, { method: 'POST', body: fd });
+  $('tet-mgr-status').textContent = r.error ? `Upload failed: ${r.error}`
+    : `Added ${r.name} (${((r.chars || 0) / 1000).toFixed(1)}k chars).`;
+  if (!r.error) refreshTetDocs();
+};
+
+$('tet-doc-paste').onclick = () => $('tet-paste-wrap').classList.toggle('hidden');
+$('tet-paste-add').onclick = async () => {
+  const text = $('tet-paste-text').value.trim();
+  if (!activeTab) { alert('Open a tab first.'); return; }
+  if (text.length < 20) { $('tet-mgr-status').textContent = 'Paste the document text first (a real document, not a title).'; return; }
+  const r = await api(`/api/tabs/${activeTab}/tet-docs/text`, {
+    method: 'POST',
+    body: JSON.stringify({ kind: $('tet-doc-kind').value, text }) });
+  if (r.error) { $('tet-mgr-status').textContent = `Failed: ${r.error}`; return; }
+  $('tet-paste-text').value = '';
+  $('tet-paste-wrap').classList.add('hidden');
+  $('tet-mgr-status').textContent = `Added ${r.name} (${((r.chars || 0) / 1000).toFixed(1)}k chars).`;
+  refreshTetDocs();
 };
 
 $('psa-method-edit').onclick = async () => {
