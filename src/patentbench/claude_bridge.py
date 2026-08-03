@@ -441,6 +441,7 @@ TET_DOC_KINDS = {
     "amended-claims": "Amended set of claims",
     "applicant-arguments": "Applicant arguments",
     "new-description": "New description",
+    "search-report": "Initial search report",
     "other": "Supporting document",
 }
 MAX_TET_CHARS = 150_000   # total budget for TET supporting documents in a prompt
@@ -869,11 +870,15 @@ def build_prompt(question: str, history: list[dict] | None = None,
         parts.append(
             "TET SUPPORTING DOCUMENTS — prosecution documents the user supplied "
             "for the technical effect argumentation: amended set of claims, "
-            "applicant arguments, new description, and similar. These are the "
-            "CURRENT versions of the case. Build the argumentation on THEM: where "
-            "an amended claim or description differs from the benchmark document's "
-            "original text, the version below governs. Applicant arguments are "
-            "positions to build on and stay consistent with, not prior art. Cite "
+            "applicant arguments, new description, initial search report, and "
+            "similar. These are the CURRENT versions of the case. Build the "
+            "argumentation on THEM: where an amended claim or description differs "
+            "from the benchmark document's original text, the version below "
+            "governs. Applicant arguments are positions to build on and stay "
+            "consistent with, not prior art. An initial search report / search "
+            "opinion states the searcher's citations and objections: anchor the "
+            "argumentation on its cited documents and its reasoning, and address "
+            "or rebut each objection that touches the features at issue. Cite "
             "these documents by their bracketed label:\n\n" + blocks)
     if focus:
         # the FULL primary text of the candidate(s) the user selected — divide the

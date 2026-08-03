@@ -199,7 +199,7 @@ def test_tet_supporting_docs_crud_and_chat_wiring(client, monkeypatch):
     doc_id = r["id"]
     lst = client.get(f"/api/tabs/{tid}/tet-docs").json()
     assert [d["id"] for d in lst["docs"]] == [doc_id]
-    assert "amended-claims" in lst["kinds"]
+    assert "amended-claims" in lst["kinds"] and "search-report" in lst["kinds"]
     assert "text" not in lst["docs"][0]              # list is metadata-only
     full = client.get(f"/api/tabs/{tid}/tet-docs/{doc_id}").json()
     assert "flange" in full["text"]

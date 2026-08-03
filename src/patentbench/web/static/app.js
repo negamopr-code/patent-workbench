@@ -225,6 +225,7 @@ async function selectTab(id) {
     docSelection = new Set();
     docsRenderCap = DOCS_RENDER_CAP;    // fresh tab → fresh render budget
     docsFingerprint = '';
+    tetRoles = null;                    // 📐 roles belong to a tab's case
   }
   activeTab = id;
   location.hash = id;
@@ -2489,19 +2490,48 @@ function setBusy(busy, label) {
   } else if (th) th.remove();
 }
 
-/* 📐 Technical effect argumentation: before sending, ask WHO plays WHICH role —
-   assessed towards what (benchmark by default) and which candidate is D1 / D2.
-   Resolves to a text block appended to the question (a candidate named there is
-   auto-focused with its FULL text server-side), '' = no roles, null = cancel. */
-function tetPickRoles() {
+/* 📐 Technical effect argumentation: ask WHO plays WHICH role — assessed
+   towards what (benchmark by default) and which document is D1 / D2. The popup
+   opens BOTH when the preset is picked in the dropdown (per user expectation)
+   and before a send that has no roles yet; the last choices are remembered per
+   tab and pre-filled. When the tab has an initial search report (ESOP) in its
+   TET documents, D1/D2 offer "as identified in the search report" — the
+   argumentation then anchors on the ESOP's citations. Resolves to
+   {target, d1, d2} or null on cancel. */
+const TET_ESOP = '__esop__';
+
+function tetRolesText(r) {
+  const lines = [];
+  const esop = which => `the document the initial search report (ESOP, provided in the `
+    + `TET supporting documents) identifies as ${which}`;
+  if (r.target) lines.push(`- assessed towards: ${r.target}`);
+  if (r.d1) lines.push(`- D1 (closest prior art): ${r.d1 === TET_ESOP ? esop('the closest prior art') : r.d1}`);
+  if (r.d2) lines.push(`- D2 (combination partner): ${r.d2 === TET_ESOP ? esop('the further relevant citation to combine') : r.d2}`);
+  return lines.length
+    ? 'ASSESSMENT ROLES for the technical effect argumentation:\n' + lines.join('\n')
+    : '';
+}
+
+async function tetPickRoles(prefill) {
   const fetched = (lastDocs || []).filter(d => d.status === 'fetched' && d.number);
   const picked = fetched.filter(d => docSelection.has(d.id));
   const ordered = [...picked, ...fetched.filter(d => !docSelection.has(d.id))];
-  const fill = (sel, blankLabel, preset) => {
+  // the tab's TET documents decide whether the ESOP-derived options exist
+  const td = await api(`/api/tabs/${activeTab}/tet-docs`);
+  const tdocs = td.docs || [];
+  const hasEsop = tdocs.some(d => d.kind === 'search-report' && d.status === 'ready');
+  const fill = (sel, blankLabel, esopLabel, preset) => {
     sel.innerHTML = '';
     const blank = document.createElement('option');
     blank.value = ''; blank.textContent = blankLabel;
     sel.appendChild(blank);
+    if (hasEsop) {
+      const o = document.createElement('option');
+      o.value = TET_ESOP;
+      o.textContent = `📄 ${esopLabel}`;
+      o.title = 'Take this role from the initial search report (ESOP) in the TET supporting documents — the argumentation anchors on its citations and objections.';
+      sel.appendChild(o);
+    }
     for (const d of ordered) {
       const o = document.createElement('option');
       o.value = d.number;
@@ -2509,14 +2539,16 @@ function tetPickRoles() {
       sel.appendChild(o);
     }
     if (preset) sel.value = preset;
+    if (preset && sel.value !== preset) sel.value = '';   // stale remembered pick
   };
   const bmName = currentBm
     ? (currentBm.number || currentBm.title || 'the uploaded benchmark') : null;
+  const bmValue = bmName ? `the BENCHMARK document (${bmName})` : null;
   const target = $('tet-target');
   target.innerHTML = '';
-  if (bmName) {
+  if (bmValue) {
     const o = document.createElement('option');
-    o.value = `the BENCHMARK document (${bmName})`;
+    o.value = bmValue;
     o.textContent = `🎯 Benchmark (${bmName})`;
     target.appendChild(o);
   }
@@ -2526,42 +2558,53 @@ function tetPickRoles() {
     o.textContent = d.number + (docSelection.has(d.id) ? ' ☑' : '');
     target.appendChild(o);
   }
-  fill($('tet-d1'), '— pick D1 —', picked[0] && picked[0].number);
-  fill($('tet-d2'), '— none —', picked[1] && picked[1].number);
+  if (prefill && prefill.target) target.value = prefill.target;
+  // D1 default: remembered pick, else first checked candidate, else the ESOP
+  fill($('tet-d1'), '— pick D1 —', 'as identified in the search report',
+       (prefill && prefill.d1) || (picked[0] && picked[0].number) || (hasEsop ? TET_ESOP : ''));
+  fill($('tet-d2'), '— none —', 'further citation of the search report',
+       (prefill && prefill.d2) || (picked[1] && picked[1].number));
   const rd = $('tet-roles-docs');
-  rd.textContent = '';
-  api(`/api/tabs/${activeTab}/tet-docs`).then(r => {
-    const ready = (r.docs || []).filter(d => d.status === 'ready').length;
-    const busy = (r.docs || []).filter(d => d.status === 'pending').length;
-    rd.textContent = ready
-      ? `📎 ${ready} supporting document(s) of this tab (amended claims / arguments / description) will be included.`
-        + (busy ? ` ⏳ ${busy} still in OCR — not included yet.` : '')
-      : busy
-        ? `⏳ ${busy} supporting document(s) still in vision OCR — not ready yet, this answer will not include them.`
-        : '📎 No supporting documents in this tab yet — add amended claims / applicant arguments via 📄 TET if the argumentation should build on them.';
-  });
+  const ready = tdocs.filter(d => d.status === 'ready').length;
+  const busy = tdocs.filter(d => d.status === 'pending').length;
+  rd.textContent = ready
+    ? `📎 ${ready} supporting document(s) of this tab (amended claims / arguments / search report) will be included.`
+      + (busy ? ` ⏳ ${busy} still in OCR — not included yet.` : '')
+    : busy
+      ? `⏳ ${busy} supporting document(s) still in vision OCR — not ready yet, this answer will not include them.`
+      : '📎 No supporting documents in this tab yet — add amended claims / the search report via 📄 TET if the argumentation should build on them.';
   return new Promise(resolve => {
     const done = v => { $('tet-modal').classList.add('hidden'); resolve(v); };
-    $('tet-go').onclick = () => {
-      const lines = [];
-      if ($('tet-target').value) lines.push(`- assessed towards: ${$('tet-target').value}`);
-      if ($('tet-d1').value) lines.push(`- D1 (closest prior art): ${$('tet-d1').value}`);
-      if ($('tet-d2').value) lines.push(`- D2 (combination partner): ${$('tet-d2').value}`);
-      done(lines.length
-        ? 'ASSESSMENT ROLES for the technical effect argumentation:\n' + lines.join('\n')
-        : '');
-    };
+    $('tet-go').onclick = () =>
+      done({ target: $('tet-target').value, d1: $('tet-d1').value, d2: $('tet-d2').value });
     $('tet-cancel').onclick = () => done(null);
     $('tet-modal').classList.remove('hidden');
   });
 }
 
+// 📐 remembered roles of the active tab; `pending` = picked via the dropdown,
+// not yet consumed by a send (so that send does not re-ask immediately).
+let tetRoles = null;
+
+$('answer-format').addEventListener('change', async () => {
+  if ($('answer-format').value !== 'tech-effect' || !activeTab) return;
+  const r = await tetPickRoles(tetRoles);
+  if (r) tetRoles = { ...r, pending: true };
+});
+
 async function sendChat(notebookOnly) {
   let q = $('q').value.trim();
   if (!q || !activeTab) return;
   if (!notebookOnly && $('answer-format').value === 'tech-effect') {
-    const roles = await tetPickRoles();
-    if (roles === null) return;              // cancelled — question stays in the box
+    let r;
+    if (tetRoles && tetRoles.pending) {
+      r = tetRoles;                          // just picked via the dropdown — use as-is
+    } else {
+      r = await tetPickRoles(tetRoles);      // pre-filled with the last choices
+      if (r === null) return;                // cancelled — question stays in the box
+    }
+    tetRoles = { ...r, pending: false };
+    const roles = tetRolesText(r);
     if (roles) q += '\n\n' + roles;
   }
   appendMsg({ role: 'q', text: q });
