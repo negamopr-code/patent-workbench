@@ -2865,6 +2865,26 @@ $('tet-doc-file').onchange = async () => {
   if (!r.error) refreshTetDocs();
 };
 
+$('tet-123-btn').onclick = async () => {
+  if (!activeTab) { alert('Open a tab first.'); return; }
+  const btn = $('tet-123-btn');
+  btn.disabled = true;
+  const model = $('model').value;
+  $('tet-mgr-status').textContent =
+    `⚖ Running the Art. 123(2) check with ${model.replace('claude-', '')}… `
+    + '(can take a few minutes on a long description; the analysis lands in the chat)';
+  const r = await api(`/api/tabs/${activeTab}/tet-123check`,
+                      { method: 'POST', body: JSON.stringify({ model }) });
+  btn.disabled = false;
+  if (r.error && !(r.messages || []).length) {
+    $('tet-mgr-status').textContent = `⚖ ${r.error}`;
+    return;
+  }
+  $('tet-mgr-status').textContent = r.error
+    ? `⚖ failed: ${r.error}` : '⚖ 123(2) check done — see the chat.';
+  reloadChat();
+};
+
 $('tet-doc-paste').onclick = () => $('tet-paste-wrap').classList.toggle('hidden');
 $('tet-paste-add').onclick = async () => {
   const text = $('tet-paste-text').value.trim();

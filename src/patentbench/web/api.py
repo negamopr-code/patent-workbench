@@ -395,6 +395,45 @@ def tet_doc_delete(tab_id: int, doc_id: int):
     return {"ok": True}
 
 
+@app.post("/api/tabs/{tab_id}/tet-123check")
+def tet_123_check_run(tab_id: int, body: schemas.Tet123Request):
+    """⚖ Art. 123(2) check: diff the amended set of claims against the initial
+    one, then verify EVERY amended feature has a direct and unambiguous basis in
+    the application as filed (initial claims + initial description). Uses the
+    tab's READY TET documents; the analysis lands in the tab's chat."""
+    _tab_or_404(tab_id)
+    by: dict[str, list[dict]] = {}
+    for d in db.list_tet_docs(tab_id, full=True, ready_only=True):
+        by.setdefault(d["kind"], []).append(d)
+    amended = by.get("amended-claims") or []
+    init_cl = by.get("initial-claims") or []
+    init_de = by.get("initial-description") or []
+    if not amended:
+        raise HTTPException(400, "no ready «Amended set of claims» among this tab's "
+                                 "TET documents — upload it first (📄 TET)")
+    if not (init_cl or init_de):
+        raise HTTPException(400, "nothing filed to check against — upload the "
+                                 "«Initial set of claims» and/or «Initial "
+                                 "description» (application as filed) first (📄 TET)")
+    model = body.model if body.model in claude_bridge.MODELS else claude_bridge.CHAT_MODEL
+    res = claude_bridge.tet_123_check(amended, init_cl, init_de, model=model)
+    out = []
+    if "error" in res:
+        out.append(db.append_message(tab_id, "s", f"Claude error: {res['error']}"))
+        return {"messages": out, "error": res["error"]}
+    participants = [{"kind": "model", "title": model},
+                    {"kind": "psa", "title": "⚖ Art. 123(2) check"}]
+    participants += [{"kind": "documents",
+                      "title": f"{claude_bridge.TET_DOC_KINDS[k]}: "
+                               + ", ".join(d["name"] for d in v)}
+                     for k, v in (("amended-claims", amended),
+                                  ("initial-claims", init_cl),
+                                  ("initial-description", init_de)) if v]
+    out.append(db.append_message(tab_id, "c", res["answer"],
+                                 model=model, participants=participants))
+    return {"messages": out}
+
+
 # ---------- tabs ----------
 
 @app.get("/api/tabs")

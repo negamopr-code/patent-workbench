@@ -439,8 +439,10 @@ TET_FILE = "tet.txt"
 # document's block in the prompt so the model can cite them by name.
 TET_DOC_KINDS = {
     "amended-claims": "Amended set of claims",
+    "initial-claims": "Initial set of claims",
     "applicant-arguments": "Applicant arguments",
     "new-description": "New description",
+    "initial-description": "Initial description",
     "search-report": "Initial search report",
     "other": "Supporting document",
 }
@@ -457,6 +459,75 @@ def tet_template() -> str:
         return text or TET_DEFAULT
     except OSError:
         return TET_DEFAULT
+
+
+# ⚖ Art. 123(2) EPC check — amendments vs the application as filed.
+_TET_123_INSTRUCTION = """\
+TASK: ARTICLE 123(2) EPC CHECK (added subject-matter).
+
+Step 1 — AMENDMENTS. Compare the INITIAL SET OF CLAIMS with the AMENDED SET OF \
+CLAIMS, claim by claim. List every amendment: added features, deleted features, \
+changed wording, new claims, deleted claims, changed dependencies. Quote the \
+amended wording verbatim.
+
+Step 2 — BASIS. For EVERY feature of the amended claims — with special \
+attention to the added or changed ones — find the basis in the APPLICATION AS \
+FILED (the initial description and the initial claims provided below). Quote \
+the exact basis passage verbatim with its location (paragraph [00NN], \
+page/line, or original claim number). Never invent a basis passage; if you \
+cannot find one, say so.
+
+Step 3 — VERDICT per amendment, one of:
+- OK: literal or directly and unambiguously derivable basis exists (cite it);
+- RISK: basis exists only via an intermediate generalisation, an isolated \
+extraction from a specific embodiment, or a combination of separate passages \
+that were not presented in combination — name the gap precisely;
+- NOT SUPPORTED: no basis found — name the unsupported feature precisely.
+
+Step 4 — SUMMARY. An overall Art. 123(2) verdict per amended claim, then, for \
+every RISK or NOT SUPPORTED finding, a suggested wording change that would \
+cure it while keeping the amendment's intent.
+"""
+
+_TET_123_DOC_CAP = 150_000   # per-document char budget in the 123(2) prompt
+
+
+def tet_123_check(amended: list[dict], initial_claims: list[dict],
+                  initial_desc: list[dict], model: str | None = None) -> dict:
+    """⚖ Art. 123(2) check: every feature of the AMENDED claims must be directly
+    and unambiguously derivable from the application AS FILED (initial claims +
+    initial description). Documents arrive as tet_doc rows (kind/name/text).
+    Same return contract as chat()."""
+    parts = [_PREAMBLE, _house_style_part(), _TET_123_INSTRUCTION]
+
+    def block(title, docs):
+        return title + ":\n\n" + "\n\n".join(
+            f"[{d.get('name') or '?'}]\n"
+            + (d.get("text") or "").strip()[:_TET_123_DOC_CAP] for d in docs)
+
+    if initial_claims:
+        parts.append(block("INITIAL SET OF CLAIMS (application as filed)",
+                           initial_claims))
+    if initial_desc:
+        parts.append(block("INITIAL DESCRIPTION (application as filed)",
+                           initial_desc))
+    if not initial_claims:
+        parts.append("NOTE: no initial set of claims was provided — derive the "
+                     "amendments by comparing against the initial description "
+                     "only, and say explicitly that the claim-to-claim diff "
+                     "could not be made.")
+    if not initial_desc:
+        parts.append("NOTE: no initial description was provided — the basis "
+                     "search is limited to the initial claims; say explicitly "
+                     "that description basis could not be checked.")
+    parts.append(block("AMENDED SET OF CLAIMS (current wording under review)",
+                       amended))
+    res = _run_claude("\n\n---\n\n".join(parts), model or CHAT_MODEL,
+                      timeout=PSA_TIMEOUT)
+    if "error" in res:
+        return res
+    res["answer"] = _strip_cjk(res["answer"])
+    return res
 
 
 # ⚖️ Default OUTPUT FORMAT for problem-solution runs — the user's dictated
@@ -878,8 +949,11 @@ def build_prompt(question: str, history: list[dict] | None = None,
             "consistent with, not prior art. An initial search report / search "
             "opinion states the searcher's citations and objections: anchor the "
             "argumentation on its cited documents and its reasoning, and address "
-            "or rebut each objection that touches the features at issue. Cite "
-            "these documents by their bracketed label:\n\n" + blocks)
+            "or rebut each objection that touches the features at issue. "
+            "Documents labeled 'Initial ...' are the application AS FILED — they "
+            "are the reference for what was originally disclosed (Art. 123(2)), "
+            "not the current wording. Cite these documents by their bracketed "
+            "label:\n\n" + blocks)
     if focus:
         # the FULL primary text of the candidate(s) the user selected — divide the
         # focus budget across them so each is as complete as possible.

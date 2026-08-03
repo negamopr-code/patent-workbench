@@ -293,14 +293,17 @@
     <p class="muted">The template (your worked example) is global — one for all tabs. The supporting documents below belong to <b id="tet-mgr-tab">this tab</b>'s case and are loaded into every 📐 «Technical effect argumentation» answer of that tab: where an amended claim or description differs from the benchmark, the uploaded version governs.</p>
     <div class="row">
       <button id="tet-edit-template" class="btn">✎ Template (the worked example to mimic)</button>
+      <button id="tet-123-btn" class="btn" title="⚖ Art. 123(2) EPC check: diffs the «Amended set of claims» against the «Initial set of claims», then verifies EVERY amended feature has a direct and unambiguous basis in the application as filed (initial claims + initial description). Needs the amended claims plus at least one initial document uploaded below. Uses the chat's 💬 model; the analysis lands in this tab's chat.">⚖ 123(2) check</button>
     </div>
     <h4>📎 Supporting documents of this tab</h4>
     <div id="tet-docs-list" class="muted">—</div>
     <div class="row">
       <select id="tet-doc-kind">
         <option value="amended-claims">Amended set of claims</option>
+        <option value="initial-claims">Initial set of claims</option>
         <option value="applicant-arguments">Applicant arguments</option>
         <option value="new-description">New description</option>
+        <option value="initial-description">Initial description</option>
         <option value="search-report">Initial search report</option>
         <option value="other">Other supporting document</option>
       </select>

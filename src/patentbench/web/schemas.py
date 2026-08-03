@@ -321,6 +321,11 @@ class TetDocText(BaseModel):
     text: str = Field(min_length=20, max_length=2_000_000)
 
 
+class Tet123Request(BaseModel):
+    """⚖ Run the Art. 123(2) check over the tab's TET documents."""
+    model: str | None = None
+
+
 class LessonCreate(BaseModel):
     skill: str
     lesson: str = Field(min_length=1, max_length=8000)

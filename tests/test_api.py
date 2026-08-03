@@ -282,6 +282,50 @@ def test_tet_esop_citations_extraction(client):
     assert all(c["number"] != "US9999999B2" for c in cits2)
 
 
+def test_tet_123_check(client, monkeypatch):
+    """⚖ Art. 123(2): needs amended claims + at least one 'as filed' document;
+    passes the right doc sets to the bridge; the analysis lands in the chat."""
+    tid = client.post("/api/tabs", json={"name": "T"}).json()["id"]
+    r = client.post(f"/api/tabs/{tid}/tet-123check", json={})
+    assert r.status_code == 400 and "Amended set of claims" in r.json()["detail"]
+    client.post(f"/api/tabs/{tid}/tet-docs/text",
+                json={"kind": "amended-claims",
+                      "text": "1. A widget comprising a flange and a seal."})
+    r = client.post(f"/api/tabs/{tid}/tet-123check", json={})
+    assert r.status_code == 400 and "Initial" in r.json()["detail"]
+    client.post(f"/api/tabs/{tid}/tet-docs/text",
+                json={"kind": "initial-description",
+                      "text": "The widget may comprise a flange [0007]."})
+    seen = {}
+    monkeypatch.setattr(claude_bridge, "tet_123_check",
+                        lambda amended, init_cl, init_de, model=None:
+                        seen.update(a=amended, c=init_cl, d=init_de, m=model)
+                        or {"answer": "OK: flange has basis in [0007]."})
+    r = client.post(f"/api/tabs/{tid}/tet-123check", json={}).json()
+    assert seen["a"][0]["kind"] == "amended-claims"
+    assert seen["c"] == [] and seen["d"][0]["kind"] == "initial-description"
+    assert r["messages"][0]["text"].startswith("OK: flange")
+    titles = [p["title"] for p in r["messages"][0]["participants"]]
+    assert "⚖ Art. 123(2) check" in titles
+
+
+def test_tet_123_check_prompt_assembly(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda prompt, model, extra_args=None, cwd=None, timeout=None:
+                        captured.update(p=prompt) or {"answer": "ok", "model": model})
+    claude_bridge.tet_123_check(
+        amended=[{"name": "claims-v2", "text": "1. A widget with a flange."}],
+        initial_claims=[],
+        initial_desc=[{"name": "as-filed", "text": "A flange is optional [0007]."}])
+    p = captured["p"]
+    assert "ARTICLE 123(2) EPC CHECK" in p
+    assert "AMENDED SET OF CLAIMS" in p and "INITIAL DESCRIPTION" in p
+    assert "no initial set of claims was provided" in p     # the missing-doc note
+    assert "directly and unambiguously derivable" in p
+    assert "HOUSE STYLE" in p                                # house style rides along
+
+
 def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):
     """🖋 the ONE global formatting space: editable, persisted, and injected into
     EVERY answer path — chat prompts, the deep-compare reduce, and ⚖️ PSA runs."""
