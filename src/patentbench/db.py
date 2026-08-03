@@ -152,7 +152,11 @@ CREATE INDEX IF NOT EXISTS idx_kg_feature_node ON kg_feature(node_id);
 CREATE INDEX IF NOT EXISTS idx_kg_feature_tabdoc ON kg_feature(tab_id, doc_id);
 """
 
-MAX_TEXT = 20_000  # message text cap
+# Message text cap. 20k truncated a long ⚖ 123(2) analysis MID-CLAIM (bit
+# 2026-08-03: claims 5-10 + summary silently lost from the chat). 80k fits the
+# longest single analysis; the PROMPT history path clips each turn to
+# MAX_TURN_CHARS (4k) anyway, so bigger stored messages cost nothing there.
+MAX_TEXT = 80_000
 
 
 @contextmanager

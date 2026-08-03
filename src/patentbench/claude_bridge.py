@@ -444,6 +444,7 @@ TET_DOC_KINDS = {
     "new-description": "New description",
     "initial-description": "Initial description",
     "search-report": "Initial search report",
+    "123-check": "Art. 123(2) check result",   # system-stored, latest run
     "other": "Supporting document",
 }
 MAX_TET_CHARS = 150_000   # total budget for TET supporting documents in a prompt
@@ -972,8 +973,12 @@ def build_prompt(question: str, history: list[dict] | None = None,
             "or rebut each objection that touches the features at issue. "
             "Documents labeled 'Initial ...' are the application AS FILED — they "
             "are the reference for what was originally disclosed (Art. 123(2)), "
-            "not the current wording. Cite these documents by their bracketed "
-            "label:\n\n" + blocks)
+            "not the current wording. An 'Art. 123(2) check result' is the "
+            "STORED PRIOR ANALYSIS of this case's amendments: REUSE its 'Basis "
+            "for amendments' paragraph and its verdicts wherever the basis of "
+            "the amendments is needed — do not redo that check unless the "
+            "question explicitly asks for it. Cite these documents by their "
+            "bracketed label:\n\n" + blocks)
     if focus:
         # the FULL primary text of the candidate(s) the user selected — divide the
         # focus budget across them so each is as complete as possible.

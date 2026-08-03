@@ -429,6 +429,16 @@ def tet_123_check_run(tab_id: int, body: schemas.Tet123Request):
                      for k, v in (("amended-claims", amended),
                                   ("initial-claims", init_cl),
                                   ("initial-description", init_de)) if v]
+    # 💾 persist the result as a system TET document (latest run wins) — it then
+    # rides along on every chat answer, so «Build argumentation» reuses the
+    # established Basis-for-amendments instead of re-running the check, and the
+    # basis survives history clipping/scrolling.
+    for d in db.list_tet_docs(tab_id):
+        if d["kind"] == "123-check":
+            db.delete_tet_doc(tab_id, d["id"])
+    db.add_tet_doc(tab_id, "123-check",
+                   f"⚖ 123(2) check ({model.replace('claude-', '')})",
+                   res["answer"])
     out.append(db.append_message(tab_id, "c", res["answer"],
                                  model=model, participants=participants))
     return {"messages": out}

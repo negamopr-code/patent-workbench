@@ -308,6 +308,20 @@ def test_tet_123_check(client, monkeypatch):
     assert r["messages"][0]["text"].startswith("OK: flange")
     titles = [p["title"] for p in r["messages"][0]["participants"]]
     assert "⚖ Art. 123(2) check" in titles
+    # 💾 the result is stored as a system TET doc, so later chat answers reuse
+    # the established basis instead of re-running the check; latest run wins
+    stored = [d for d in client.get(f"/api/tabs/{tid}/tet-docs").json()["docs"]
+              if d["kind"] == "123-check"]
+    assert len(stored) == 1
+    assert "flange" in client.get(
+        f"/api/tabs/{tid}/tet-docs/{stored[0]['id']}").json()["text"]
+    client.post(f"/api/tabs/{tid}/tet-123check", json={})       # re-run
+    stored2 = [d for d in client.get(f"/api/tabs/{tid}/tet-docs").json()["docs"]
+               if d["kind"] == "123-check"]
+    assert len(stored2) == 1                                    # replaced, not stacked
+    # ...and the check itself never feeds on its own stored result
+    assert all(d["kind"] != "123-check"
+               for d in seen["a"] + seen["c"] + seen["d"])
 
 
 def test_tet_123_check_prompt_assembly(monkeypatch):
