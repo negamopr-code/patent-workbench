@@ -213,6 +213,10 @@ textarea, select, input[type="text"] {
 .feat-doc-note { margin-top: 5px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; color: var(--text); }
 .feat-xref-hdr { margin: 14px 0 8px; padding-top: 10px; border-top: 1px dashed var(--border); font-size: 13px; font-weight: 600; color: var(--muted, #889); }
 .doc.doc-flash { outline: 2px solid var(--accent); transition: outline-color 1.4s; }
+/* Offscreen doc rows skip layout & paint entirely — long lists stay responsive
+   while scrolling and typing (each row still occupies its estimated height). */
+.doc { content-visibility: auto; contain-intrinsic-size: auto 120px; }
+.docs-more { display: block; width: 100%; margin-top: 8px; }
 
 /* 🖼 drawing sheets in the viewer */
 .view-figs { margin: 8px 0 12px; }

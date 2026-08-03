@@ -35,6 +35,17 @@ let ratePoll = null;
 let readPoll = null;
 let readWasRunning = false;
 let docSelection = new Set();   // candidate ids picked for a scoped deep compare
+// Docs-list render throttles. A 1600-doc tab is ~50k DOM nodes; rebuilding them
+// synchronously on every 4-5 s poll froze typing and triggered the browser's
+// "page unresponsive" prompt (bit 2026-08-03, tab 10 @ 1641 docs / 6.7 MB JSON).
+const DOCS_RENDER_CAP = 300;    // rows rendered initially; ⬇ show-more raises it
+const DOCS_RENDER_CHUNK = 100;  // rows built per animation frame
+let docsRenderCap = DOCS_RENDER_CAP;
+let docsRenderGen = 0;          // bumping this cancels an in-flight chunked render
+let docsFingerprint = '';       // last rendered payload — identical polls skip the rebuild
+let lastReadProgress = '';      // deep-read "done/total" at the last docs refresh
+let lastRateProgress = '';      // NLM-rate "done/total" at the last docs refresh
+let chatFingerprint = '';       // last rendered chat — identical reloads skip the rebuild
 let currentBm = null;           // last-rendered benchmark (for weighted feature ranking)
 let combiResult = null;         // last computed { pairs, mand, add, ... } for 🧩 Combi (null = not run)
 let combiMotivations = {};      // persisted pair verdicts: 'loId-hiId' → {combinable, reason, model}
@@ -210,7 +221,11 @@ function resetTransientUI() {
 }
 
 async function selectTab(id) {
-  if (activeTab !== id) docSelection = new Set();
+  if (activeTab !== id) {
+    docSelection = new Set();
+    docsRenderCap = DOCS_RENDER_CAP;    // fresh tab → fresh render budget
+    docsFingerprint = '';
+  }
   activeTab = id;
   location.hash = id;
   $('main').classList.remove('hidden');
@@ -1872,7 +1887,7 @@ function renderDocs(allDocs) {
       .forEach((d, i) => mustPos.set(d.id, i + 1));
   }
   lastRankedDocIds = docs.map(d => d.id);   // ranked order, for ➕ additional read's top-N
-  for (const d of docs) {
+  const buildRow = d => {
     const el = document.createElement('div');
     el.className = 'doc';
     el.dataset.docId = d.id;
@@ -2168,8 +2183,34 @@ function renderDocs(allDocs) {
       row2.appendChild(edit);
     }
     el.appendChild(row2);
-    wrap.appendChild(el);
-  }
+    return el;
+  };
+  // Build rows in requestAnimationFrame chunks, capped at docsRenderCap — the
+  // top of the ranking appears immediately and the main thread is never blocked
+  // long enough to freeze typing. Bulk actions above operate on the FULL docs
+  // array, so the cap changes only what is drawn, never what a button covers.
+  const gen = ++docsRenderGen;
+  const toRender = docs.slice(0, docsRenderCap);
+  let ri = 0;
+  const step = () => {
+    if (gen !== docsRenderGen) return;        // a newer render started — abandon
+    const frag = document.createDocumentFragment();
+    for (const end = Math.min(ri + DOCS_RENDER_CHUNK, toRender.length); ri < end; ri++)
+      frag.appendChild(buildRow(toRender[ri]));
+    wrap.appendChild(frag);
+    if (ri < toRender.length) { requestAnimationFrame(step); return; }
+    if (docs.length > toRender.length) {
+      const more = document.createElement('button');
+      more.className = 'btn small docs-more';
+      more.textContent =
+        `⬇ show ${Math.min(500, docs.length - toRender.length)} more (${toRender.length}/${docs.length} drawn)`;
+      more.title = 'Long lists draw only their top to keep the page responsive. '
+        + 'Buttons and counts above always cover ALL documents, drawn or not.';
+      more.onclick = () => { docsRenderCap += 500; renderDocs(lastDocs); };
+      wrap.appendChild(more);
+    }
+  };
+  step();
   // prune selection of deleted/refetched-away docs
   const ids = new Set(docs.map(d => d.id));
   docSelection = new Set([...docSelection].filter(id => ids.has(id)));
@@ -2228,8 +2269,18 @@ async function autoSplitNotInNlm(ids) {
 async function refreshDocs() {
   if (!activeTab) return;
   const res = await api(`/api/tabs/${activeTab}/documents`);
-  renderDocs(res.documents || []);
-  scheduleDocsPoll(res.documents || []);
+  const docs = res.documents || [];
+  // Fingerprint-skip: the polling loops land here every 4-5 s; when neither the
+  // data nor the render inputs (benchmark timestamp → ⏳ stale flags, reading
+  // model → ▶️ Continue count) changed, skip the expensive DOM rebuild entirely.
+  // A stringify of even a 6.7 MB payload is ~20x cheaper than rendering it.
+  const fp = JSON.stringify(docs) + '|' + ((currentBm && currentBm.updated_at) || 0)
+    + '|' + readModelValue();
+  if (fp !== docsFingerprint) {
+    docsFingerprint = fp;
+    renderDocs(docs);
+  }
+  scheduleDocsPoll(docs);
 }
 
 function scheduleDocsPoll(docs) {
@@ -2796,7 +2847,10 @@ async function pollRead() {
       ? `⏸ pausing… assessed ${s.done}/${s.total}${mdl} (finishing in-flight; scores saved)`
       : `🤖 assessing ${s.done}/${s.total}${mdl} vs benchmark… ${pending} to go (scores land below; safe to reload)`;
     if (pauseBtn) pauseBtn.classList.toggle('hidden', s.paused);   // hide once a pause is requested
-    refreshDocs();
+    // Refetch the (multi-MB on big tabs) docs list only when a new score actually
+    // landed — the status line above still updates on every tick.
+    const prog = `${s.done}/${s.total}`;
+    if (prog !== lastReadProgress) { lastReadProgress = prog; refreshDocs(); }
     readPoll = setTimeout(pollRead, s.paused ? 2000 : 5000);
   } else if (readWasRunning) {
     readWasRunning = false;
@@ -2823,7 +2877,15 @@ async function reloadChat() {
   if (!activeTab) return;
   const tabAt = activeTab;
   const st = await api(`/api/tabs/${activeTab}/state`);
-  if (activeTab === tabAt && !st.error) renderChat(st.messages || []);
+  if (activeTab !== tabAt || st.error) return;
+  // Skip the full chat re-render when nothing new arrived — pollPipeline calls
+  // this every 3 s, and long chats with big markdown answers rebuild slowly.
+  const msgs = st.messages || [];
+  const fp = tabAt + '|' + msgs.length + '|'
+    + JSON.stringify(msgs[msgs.length - 1] || null);
+  if (fp === chatFingerprint) return;
+  chatFingerprint = fp;
+  renderChat(msgs);
 }
 
 // 🏆 Best match considers ALL relevant documents, including OTHER tabs: first a
@@ -3275,7 +3337,10 @@ async function pollRate() {
   if (s.running) {
     const left = Math.max(0, (s.total || 0) - s.done);
     el.textContent = `📓 rating ${s.done}/${s.total || '…'}… (NotebookLM is slow — ~${Math.max(1, Math.round(left * 0.4))} min left; scores appear below as they land)`;
-    refreshDocs();                       // scores fill in live as the palmares updates
+    // scores fill in live as the palmares updates — but refetch the (multi-MB on
+    // big tabs) docs list only when a new rating actually landed
+    const rprog = `${s.done}/${s.total || 0}`;
+    if (rprog !== lastRateProgress) { lastRateProgress = rprog; refreshDocs(); }
     ratePoll = setTimeout(pollRate, 5000);
   } else if (s.total) {
     const unscored = (s.total || 0) - (s.rated || 0);
@@ -3399,7 +3464,17 @@ function docFeatureEntry(d, name, kind) {
 }
 function scrollToDoc(id) {
   const card = document.querySelector(`.doc[data-doc-id="${id}"]`);
-  if (!card) return;
+  if (!card) {
+    // Target sits beyond the render cap → raise the cap to include it and retry
+    // once the chunked render has drawn that far.
+    const idx = lastRankedDocIds.indexOf(id);
+    if (idx >= 0 && idx >= docsRenderCap) {
+      docsRenderCap = idx + 50;
+      renderDocs(lastDocs);
+      setTimeout(() => scrollToDoc(id), 300);
+    }
+    return;
+  }
   card.scrollIntoView({ behavior: 'smooth', block: 'center' });
   card.classList.add('doc-flash');
   setTimeout(() => card.classList.remove('doc-flash'), 1600);
