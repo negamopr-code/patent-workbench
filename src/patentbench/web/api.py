@@ -39,6 +39,11 @@ AUTO_COMBI = os.environ.get("PB_AUTO_COMBI", "1") not in ("0", "", "false", "no"
 # 🔁 digest-backfill, or per add with the 🧠 checkbox.
 AUTO_DIGEST = os.environ.get("PB_AUTO_DIGEST", "0") not in ("0", "", "false", "no")
 MAX_UPLOAD = 25 * 1024 * 1024
+# 🧪 automatic EPC sanity pass over argumentation-class answers (tech-effect,
+# ⚖ PSA, 123(2) check): a second model call that repairs methodology violations
+# (problem containing the solution, hindsight, unverified basis) before the
+# answer reaches the user. Costs roughly one extra answer-sized call per run.
+EPC_SANITY = os.environ.get("PB_EPC_SANITY", "1") not in ("0", "", "false", "no")
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 app = FastAPI(title="Patent Workbench")
@@ -59,6 +64,21 @@ async def _no_store_api(request: Request, call_next):
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"error": f"{exc.__class__.__name__}: {exc}"})
+
+
+def _epc_sanitized(answer: str, model: str) -> tuple[str, str, str | None]:
+    """🧪 Run the EPC sanity pass over an argumentation answer.
+    Returns (final_answer, chip_title, correction_notes|None). On checker
+    failure the ORIGINAL answer is kept — the pass never loses content."""
+    if not EPC_SANITY:
+        return answer, "", None
+    res = claude_bridge.epc_sanity(answer, model=model)
+    if res.get("error"):
+        return answer, f"🧪 EPC sanity: unavailable ({res['error'][:80]})", None
+    if res.get("clean"):
+        return answer, "🧪 EPC sanity: clean", None
+    n = len([ln for ln in res["notes"].splitlines() if ln.strip()])
+    return res["answer"], f"🧪 EPC sanity: {n} correction(s)", res["notes"]
 
 
 def _tab_or_404(tab_id: int) -> None:
@@ -429,6 +449,11 @@ def tet_123_check_run(tab_id: int, body: schemas.Tet123Request):
                      for k, v in (("amended-claims", amended),
                                   ("initial-claims", init_cl),
                                   ("initial-description", init_de)) if v]
+    # 🧪 EPC sanity pass BEFORE storing/showing — the stored basis must already
+    # be methodology-clean (verbatim basis, no invented citations).
+    answer, chip, notes = _epc_sanitized(res["answer"], model)
+    if chip:
+        participants.append({"kind": "psa", "title": chip})
     # 💾 persist the result as a system TET document (latest run wins) — it then
     # rides along on every chat answer, so «Build argumentation» reuses the
     # established Basis-for-amendments instead of re-running the check, and the
@@ -438,9 +463,12 @@ def tet_123_check_run(tab_id: int, body: schemas.Tet123Request):
             db.delete_tet_doc(tab_id, d["id"])
     db.add_tet_doc(tab_id, "123-check",
                    f"⚖ 123(2) check ({model.replace('claude-', '')})",
-                   res["answer"])
-    out.append(db.append_message(tab_id, "c", res["answer"],
+                   answer)
+    out.append(db.append_message(tab_id, "c", answer,
                                  model=model, participants=participants))
+    if notes:
+        out.append(db.append_message(
+            tab_id, "s", "🧪 EPC sanity check corrected the answer above:\n" + notes))
     return {"messages": out}
 
 
@@ -2744,8 +2772,16 @@ def psa_run(tab_id: int, body: schemas.PsaRequest):
                                       f"({len(g['exchanges'])})"})
     participants += [{"kind": "documents", "title": f"D{i} {d.get('number') or '?'}"}
                      for i, d in enumerate(docs, 1)]
-    out.append(db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
+    # 🧪 EPC sanity pass: methodology violations (problem-with-solution,
+    # hindsight, single-reference novelty) are repaired before display.
+    answer, chip, notes = _epc_sanitized(res["answer"], model)
+    if chip:
+        participants.append({"kind": "psa", "title": chip})
+    out.append(db.append_message(tab_id, "c", _verify_citations(tab_id, answer),
                                  model=model, participants=participants))
+    if notes:
+        out.append(db.append_message(
+            tab_id, "s", "🧪 EPC sanity check corrected the answer above:\n" + notes))
     return {"messages": out}
 
 
@@ -2930,8 +2966,20 @@ def chat(tab_id: int, body: schemas.ChatRequest):
             tab_id, "s", f"🌐 Considered documents across all tabs — "
             + "; ".join(parts) + f".  (fetched/total; {cross} cross-tab fetched docs "
             "were available to this answer.)"))
-    out_messages.append(db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
+    # 🧪 EPC sanity pass on argumentation answers (tech-effect format only —
+    # ordinary chat turns are not methodology documents and skip the extra call)
+    answer = res["answer"]
+    if body.answer_format == "tech-effect":
+        answer, chip, sanity_notes = _epc_sanitized(answer, model)
+        if chip:
+            participants.append({"kind": "psa", "title": chip})
+    else:
+        sanity_notes = None
+    out_messages.append(db.append_message(tab_id, "c", _verify_citations(tab_id, answer),
                                           model=model, participants=participants))
+    if sanity_notes:
+        out_messages.append(db.append_message(
+            tab_id, "s", "🧪 EPC sanity check corrected the answer above:\n" + sanity_notes))
 
     for les in res.get("lessons", []):
         saved = lessons.append_lesson(les["skill"], les["lesson"])

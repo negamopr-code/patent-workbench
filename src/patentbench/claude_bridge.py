@@ -482,6 +482,75 @@ def tet_template() -> str:
         return TET_DEFAULT
 
 
+# 🧪 EPC SANITY CHECK — an automatic second pass over every argumentation-class
+# answer (technical effect argumentation, ⚖ problem-solution, 123(2) check).
+# The checker applies the EPC / Guidelines doctrine itself and REPAIRS
+# violations before the user sees the answer, so methodology errors (problem
+# containing the solution, hindsight combination, unverified basis) do not
+# depend on the user spotting them.
+_EPC_SANITY_PROMPT = """\
+You are performing an EPC SANITY CHECK on a patent argumentation drafted by \
+another model. Check it against the checklist below and repair what violates \
+it. You are checking methodology, not re-arguing the case: keep every \
+compliant sentence, every citation and the whole structure untouched; change \
+ONLY what violates a checklist item.
+
+CHECKLIST (legal anchor in brackets):
+1. PROBLEM WITHOUT SOLUTION (GL G-VII, 5.2). Every problem formulation — the \
+objective technical problem, any "How to ..." sentence — states only the \
+effect to be achieved. If it names a distinguishing feature, structure, means \
+or mechanism of the claimed solution, reformulate it from the effect alone.
+2. EFFECT-PROBLEM CHAIN (GL G-VII, 5.2). The objective technical problem must \
+be derived from the technical effect of the distinguishing feature over the \
+closest prior art; the stated effect must actually follow from that feature.
+3. COULD-WOULD (GL G-VII, 5.3). The motivation to combine must come from the \
+prior art itself (what D2 teaches for the objective problem) — never "the \
+skilled person could", never reasons only visible with knowledge of the \
+invention.
+4. NO EX POST FACTO ANALYSIS (GL G-VII, 8). Remove any reasoning that uses \
+the claimed invention as a roadmap through the prior art.
+5. NOVELTY IS SINGLE-REFERENCE (GL G-VI, 1). A novelty attack or concession \
+rests on ONE document; combinations belong only to inventive step.
+6. BASIS IS VERBATIM (Art. 123(2); GL H-IV, 2). Every basis statement quotes \
+or precisely locates an as-filed passage; an intermediate generalisation or a \
+combination of passages never presented together is labeled as such, not \
+passed off as direct basis. Never let a basis citation appear that the \
+argumentation has not actually shown.
+7. GROUNDED CITATIONS. Every sentence stating a disclosure carries its \
+document and locator (paragraph [00NN], claim number, or Fig. N). Do not \
+invent locators; if one is missing and cannot be derived from the answer \
+itself, mark the sentence "(locator missing)" rather than fabricating one.
+
+OUTPUT RULES — follow exactly:
+- If the answer passes every item, output exactly: CLEAN
+- Otherwise output the FULL corrected answer first, then a line containing \
+exactly ---CORRECTIONS--- , then one line per correction: the checklist item \
+number, a short quote of what was wrong, and how it was fixed.
+
+ANSWER UNDER CHECK:
+
+"""
+
+
+def epc_sanity(answer: str, model: str | None = None) -> dict:
+    """🧪 Verify + repair an argumentation answer against the EPC checklist.
+    Returns {clean: True} | {clean: False, answer, notes} | {error}. The caller
+    keeps the ORIGINAL answer on error — the check never loses content."""
+    res = _run_claude(_EPC_SANITY_PROMPT + (answer or "")[:200_000],
+                      model or CHAT_MODEL, timeout=PSA_TIMEOUT)
+    if "error" in res:
+        return res
+    out = _strip_cjk(res["answer"]).strip()
+    if out.split("\n", 1)[0].strip().rstrip(".") == "CLEAN" and len(out) < 400:
+        return {"clean": True}
+    if "---CORRECTIONS---" in out:
+        fixed, notes = out.split("---CORRECTIONS---", 1)
+        fixed = fixed.strip()
+        if fixed:
+            return {"clean": False, "answer": fixed, "notes": notes.strip()}
+    return {"error": "sanity check returned an unparseable verdict"}
+
+
 # ⚖ Art. 123(2) EPC check — amendments vs the application as filed.
 _TET_123_INSTRUCTION = """\
 TASK: ARTICLE 123(2) EPC CHECK (added subject-matter).

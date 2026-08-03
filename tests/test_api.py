@@ -344,6 +344,68 @@ def test_tet_123_check_prompt_assembly(monkeypatch):
     assert "whether basis for the amendments is there" in p
 
 
+def test_epc_sanity_parsing(monkeypatch):
+    """🧪 the checker's three outcomes: clean, corrected (answer + notes split
+    on the marker), unparseable (treated as error so the caller keeps the
+    original answer)."""
+    outs = {}
+
+    def fake_run(prompt, model, extra_args=None, cwd=None, timeout=None):
+        outs["p"] = prompt
+        return {"answer": outs["next"], "model": model}
+    monkeypatch.setattr(claude_bridge, "_run_claude", fake_run)
+    outs["next"] = "CLEAN"
+    assert claude_bridge.epc_sanity("some answer")["clean"] is True
+    outs["next"] = ("The objective technical problem is how to choose power "
+                    "independently.\n---CORRECTIONS---\n1: problem named separate "
+                    "frequencies; reformulated from the effect alone.")
+    r = claude_bridge.epc_sanity("bad answer")
+    assert r["clean"] is False
+    assert r["answer"].startswith("The objective technical problem")
+    assert "reformulated" in r["notes"]
+    outs["next"] = "some rambling with no verdict"
+    assert "error" in claude_bridge.epc_sanity("whatever")
+    # the checklist itself carries the load-bearing rules
+    assert "PROBLEM WITHOUT SOLUTION" in outs["p"]
+    assert "COULD-WOULD" in outs["p"] and "EX POST FACTO" in outs["p"]
+    assert "123(2)" in outs["p"]
+
+
+def test_epc_sanity_repairs_tech_effect_chat(client, monkeypatch):
+    """🧪 a tech-effect chat answer is replaced by the checker's corrected
+    version, the chip lands in participants and the notes in a system message;
+    a checker FAILURE keeps the original answer."""
+    tid = client.post("/api/tabs", json={"name": "T"}).json()["id"]
+    monkeypatch.setattr(claude_bridge, "chat",
+                        lambda *a, **k: {"answer": "problem with solution inside",
+                                         "model": "m"})
+    monkeypatch.setattr(claude_bridge, "epc_sanity",
+                        lambda answer, model=None:
+                        {"clean": False, "answer": "problem from the effect alone",
+                         "notes": "1: fixed"})
+    r = client.post(f"/api/tabs/{tid}/chat",
+                    json={"question": "build", "answer_format": "tech-effect"}).json()
+    texts = [m["text"] for m in r["messages"]]
+    assert any("effect alone" in t for t in texts)
+    assert not any("solution inside" in t for t in texts)
+    assert any("🧪 EPC sanity check corrected" in t for t in texts)
+    chips = [p["title"] for m in r["messages"] for p in (m.get("participants") or [])]
+    assert any(c.startswith("🧪 EPC sanity: 1") for c in chips)
+    # checker failure → original answer survives, chip says unavailable
+    monkeypatch.setattr(claude_bridge, "epc_sanity",
+                        lambda answer, model=None: {"error": "boom"})
+    r = client.post(f"/api/tabs/{tid}/chat",
+                    json={"question": "build", "answer_format": "tech-effect"}).json()
+    assert any("solution inside" in m["text"] for m in r["messages"])
+    chips = [p["title"] for m in r["messages"] for p in (m.get("participants") or [])]
+    assert any("unavailable" in c for c in chips)
+    # plain chat (no tech-effect format) never invokes the checker
+    monkeypatch.setattr(claude_bridge, "epc_sanity",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("called")))
+    r = client.post(f"/api/tabs/{tid}/chat", json={"question": "hi"}).json()
+    assert any("solution inside" in m["text"] for m in r["messages"])
+
+
 def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):
     """🖋 the ONE global formatting space: editable, persisted, and injected into
     EVERY answer path — chat prompts, the deep-compare reduce, and ⚖️ PSA runs."""
