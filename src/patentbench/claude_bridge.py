@@ -1343,6 +1343,40 @@ _DECOMPOSE_PROMPT = (
 
 _DECOMPOSE_RE = re.compile(r"^\s*\d+\s*\|\s*([1-5])\s*\|\s*(.+?)\s*$", re.MULTILINE)
 
+# Claim-STRUCTURE-aware variant: a full claim set is not one flat feature pool. Claim 1
+# defines the invention (its elements are MANDATORY); a dependent claim only ADDS features
+# on top of it (its elements are ADDITIONAL — absence must not gate a candidate). Decomposing
+# the whole set as mandatory made every dependent nicety a knock-out criterion.
+_DECOMPOSE_CLAIMS_PROMPT = (
+    "Split the PATENT CLAIMS below into their constituent ELEMENTS — the individual "
+    "technical features that a prior-art document could disclose, or fail to disclose, "
+    "INDEPENDENTLY of the others. This is the decomposition a novelty / inventive-step "
+    "analysis works from.\n\n"
+    "RULES:\n"
+    "• One element per distinct technical feature, in the claims' OWN order.\n"
+    "• Use the claims' OWN wording, condensed to a single line. Never invent a feature, "
+    "never generalise beyond what a claim says, never narrow it.\n"
+    "• Split ONLY where separate disclosure is genuinely possible. Do NOT split a single "
+    "indivisible feature into fragments that no document would disclose apart (e.g. keep "
+    "'X electrically connected to Y' together if the connection IS the feature).\n"
+    "• Conversely, do NOT merge two features a document could plausibly disclose "
+    "separately — a merged element makes a real 2-document combination invisible.\n"
+    "• Keep the preamble/category (what the thing IS) as claim 1's element 1.\n"
+    "• CLAIM STRUCTURE: tag every element with the number of the claim it comes from. "
+    "A DEPENDENT claim contributes ONLY the features it ADDS over the claim it refers "
+    "to — never repeat an element already listed for an earlier claim. A further "
+    "INDEPENDENT claim (e.g. a method claim mirroring claim 1) usually restates claim 1 "
+    "in another category — list only its genuinely NEW features. If the text has no "
+    "claim numbering, treat all of it as claim 1.\n"
+    "• weight 1-5 = how decisive that element is for the invention: 5 = the characterising "
+    "heart of it, 1 = routine/contextual.\n\n"
+    "OUTPUT — one element per line and NOTHING else (no preamble, no commentary):\n"
+    "<claim number> | <n> | <weight 1-5> | <the element, one line>\n\n"
+    "PATENT CLAIMS:\n\n{text}")
+
+_DECOMPOSE_CLAIMS_RE = re.compile(
+    r"^\s*(\d+)\s*\|\s*\d+\s*\|\s*([1-5])\s*\|\s*(.+?)\s*$", re.MULTILINE)
+
 
 def parse_decomposition(text: str) -> list[dict]:
     """'<n> | <weight> | <element>' lines → weighted M features, ready for the editor."""
@@ -1354,17 +1388,36 @@ def parse_decomposition(text: str) -> list[dict]:
     return out
 
 
-def decompose_claim(invention_text: str, model: str | None = None) -> dict:
+def parse_claims_decomposition(text: str) -> list[dict]:
+    """'<claim> | <n> | <weight> | <element>' lines → claim-1 elements as M (mandatory),
+    dependent/other-claim elements as A (additional, fair-reading SL 5)."""
+    out = []
+    for m in _DECOMPOSE_CLAIMS_RE.finditer(text or ""):
+        name = m.group(3).strip()
+        if name and not name.startswith("<"):        # skip an echoed format template
+            kind = "M" if int(m.group(1)) == 1 else "A"
+            out.append({"name": name[:4000], "weight": int(m.group(2)),
+                        "kind": kind, "sl": 5, "claim": int(m.group(1))})
+    return out
+
+
+def decompose_claim(invention_text: str, model: str | None = None,
+                    claims: bool = False) -> dict:
     """🔬 PROPOSE a split of the claimed invention into separable elements. Proposes only —
     the caller shows them for review; nothing is scored against them until accepted.
+    claims=True = the text is a FULL CLAIM SET: claim 1 → mandatory elements, dependent
+    claims → additional (A) elements, so a dependent feature never gates a candidate.
     Returns {elements: [{name, weight, kind, sl}], model} | {error}."""
     if not (invention_text or "").strip():
         return {"error": "nothing to decompose"}
-    res = _run_claude(_DECOMPOSE_PROMPT.format(text=invention_text[:MAX_BENCHMARK_CHARS]),
+    prompt = _DECOMPOSE_CLAIMS_PROMPT if claims else _DECOMPOSE_PROMPT
+    res = _run_claude(prompt.format(text=invention_text[:MAX_BENCHMARK_CHARS]),
                       model or DIGEST_MODEL, timeout=DIGEST_TIMEOUT)
     if "error" in res:
         return res
-    els = parse_decomposition(res["answer"])
+    els = parse_claims_decomposition(res["answer"]) if claims else []
+    if not els:        # non-claims mode, or the model ignored the claim-number column
+        els = parse_decomposition(res["answer"])
     if not els:
         return {"error": "the model returned no parsable elements — try a stronger model"}
     return {"elements": els, "model": res.get("model")}

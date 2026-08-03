@@ -606,7 +606,8 @@ async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false,
   const source = forceSource || (split ? 'additional' : (mand.length ? 'features' : 'benchmark'));
   const what = source === 'additional'
              ? `${addF.length} additional feature(s) (your ${mand.length} mandatory elements are already split and stay as they are)`
-             : mand.length ? `${mand.length} mandatory feature(s)` : 'the benchmark\'s claims';
+             : mand.length ? `${mand.length} mandatory feature(s)`
+             : 'the benchmark\'s claims (claim 1 → mandatory elements, dependent claims → ➕ additional)';
   if (!skipConfirm && !confirm(`🔬 Decompose ${what} into separable elements?\n\n`
       + `One cheap call. The proposed elements open in the editor for you to review, edit `
       + `and re-weight — NOTHING is saved or scored until you click save.\n\n`
@@ -663,7 +664,9 @@ function renderDecomposeProposal(els, res, thenScan) {
   let m = 0, a = 0;
   for (const e of els) {
     const isA = (e.kind || 'M') === 'A';
-    const label = isA ? `A${++a} ·SL${e.sl || 5}` : `M${++m}`;
+    // e.claim = which claim the element came from (claim-aware decomposition of a claim set)
+    const label = (isA ? `A${++a} ·SL${e.sl || 5}` : `M${++m}`)
+                + (e.claim > 1 ? ` ·cl.${e.claim}` : '');
     const r = document.createElement('div');
     r.className = 'combi-row';
     r.innerHTML = `<span class="chip${isA ? ' feat-a' : ''}">${label} ·${'★'.repeat(e.weight)}</span> ${esc(e.name)}`;

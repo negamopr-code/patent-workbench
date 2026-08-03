@@ -799,10 +799,12 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
     add_feats: list[dict] = []
     keep: list[dict] = []          # features passed through untouched (not re-split)
     text_kind = "M"                # kind to tag the text-derived elements with
+    claims_mode = False            # claim-structure-aware: claim 1 → M, dependent claims → A
     if body.source == "text":
         text = (body.text or "").strip()
         if len(text) < 20:
             raise HTTPException(400, "paste the claim text to decompose")
+        claims_mode = True
     elif body.source == "additional":
         # Split ONLY the additional features; mandatory elements are already granular and
         # re-cutting them would discard wording the user reviewed and accepted.
@@ -831,17 +833,18 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
         if not text:
             raise HTTPException(400, "the benchmark document has no claims/text to decompose")
         text_kind = "W"
-    else:                                     # the benchmark document's own claims → mandatory
+    else:                       # the benchmark document's own claims: claim 1 → M, deps → A
         if not bm:
             raise HTTPException(400, "set a benchmark first")
         text = (bm.get("claims") or bm.get("text") or "").strip()
         if not text:
             raise HTTPException(400, "the benchmark has no claims/text to decompose")
+        claims_mode = True
     model = _read_model(body.model)
     elements: list[dict] = list(keep)
     models: list[str] = []
     if text.strip():
-        res = claude_bridge.decompose_claim(text, model=model)
+        res = claude_bridge.decompose_claim(text, model=model, claims=claims_mode)
         if "error" in res:
             raise HTTPException(400, f"decomposition failed: {res['error']}")
         # W elements carry a generous default stretch (bonus reading), like additional ones.

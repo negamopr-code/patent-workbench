@@ -3262,7 +3262,7 @@ def test_decompose_splits_the_additional_feature_too(client, monkeypatch):
     and its elements inherit ITS stretch level."""
     from patentbench import claude_bridge as cb
     calls = []
-    def fake_dec(text, model=None):
+    def fake_dec(text, model=None, claims=False):
         calls.append(text[:20])
         if text.startswith("LOCKOUT"):
             return {"elements": [{"name": "wave-by-wave limiting", "weight": 4, "kind": "M", "sl": 5},
@@ -3286,7 +3286,7 @@ def test_decompose_splits_the_additional_feature_too(client, monkeypatch):
 def test_decompose_keeps_an_additional_feature_whose_split_failed(client, monkeypatch):
     """A failed A split must leave that feature WHOLE, never drop it silently."""
     from patentbench import claude_bridge as cb
-    def fake_dec(text, model=None):
+    def fake_dec(text, model=None, claims=False):
         if text.startswith("LOCKOUT"):
             return {"error": "session limit"}
         return {"elements": [{"name": "packs", "weight": 5, "kind": "M", "sl": 5}], "model": "m"}
@@ -3605,6 +3605,43 @@ def test_decompose_proposes_without_storing_anything(client, monkeypatch):
     # the benchmark still holds the ORIGINAL single feature — nothing was stored
     bm = client.get(f"/api/tabs/{tid}/state").json()["benchmark"]
     assert [f["name"] for f in bm["features"]] == ["one monolithic claim block"]
+
+
+def test_parse_claims_decomposition_claim1_is_M_dependents_are_A():
+    """Decomposing a CLAIM SET is claim-structure-aware: claim 1's elements are mandatory,
+    a dependent claim's elements are ADDITIONAL — their absence must never gate a candidate."""
+    from patentbench import claude_bridge as cb
+    out = cb.parse_claims_decomposition(
+        "1 | 1 | 5 | a plurality of battery packs\n"
+        "1 | 2 | 4 | a battery bus\n"
+        "noise line that is not an element\n"
+        "2 | 3 | 2 | wave-by-wave current limiting\n"
+        "5 | 4 | 1 | a display unit\n")
+    assert [(e["name"], e["kind"], e["claim"]) for e in out] == [
+        ("a plurality of battery packs", "M", 1),
+        ("a battery bus", "M", 1),
+        ("wave-by-wave current limiting", "A", 2),
+        ("a display unit", "A", 5)]
+    assert [e["weight"] for e in out] == [5, 4, 2, 1]
+    assert all(e["sl"] == 5 for e in out)
+
+
+def test_decompose_benchmark_claims_tags_dependent_elements_A(client, monkeypatch):
+    """The default decompose of a benchmark's claim set must NOT flatten everything to
+    mandatory — dependent-claim features come back as A (additional)."""
+    from patentbench import claude_bridge as cb
+    monkeypatch.setattr(cb, "_run_claude", lambda *a, **k: {
+        "answer": ("1 | 1 | 5 | a plurality of battery packs\n"
+                   "1 | 2 | 4 | a battery bus\n"
+                   "3 | 3 | 2 | a lockout mechanism\n"),
+        "model": "m"})
+    tab = client.post("/api/tabs", json={"name": "DecCl"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "EP1111111A1"})
+    r = client.post(f"/api/tabs/{tid}/benchmark/decompose", json={"source": "benchmark"}).json()
+    assert r["mandatory"] == 2 and r["additional"] == 1
+    a_els = [e for e in r["elements"] if e["kind"] == "A"]
+    assert [e["name"] for e in a_els] == ["a lockout mechanism"]
 
 
 def test_decompose_from_benchmark_claims(client, monkeypatch):
