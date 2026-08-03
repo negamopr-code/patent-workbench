@@ -57,7 +57,7 @@ def test_skills_exposes_answer_formats(client):
     r = client.get("/api/skills").json()
     keys = [f["key"] for f in r["answer_formats"]]
     assert {"", "one-sentence", "claim-map", "claim-map-pragmatic",
-            "feature-map"} <= set(keys)                    # default + presets
+            "feature-map", "tech-effect"} <= set(keys)     # default + presets
     assert all("label" in f for f in r["answer_formats"])
 
 
@@ -153,6 +153,32 @@ def test_answer_format_edit_roundtrip(client, tmp_path, monkeypatch):
         "q", answer_format="feature-map")
     # the default style and unknown keys are not editable
     assert client.get("/api/answer-format/bogus").status_code == 404
+
+
+def test_tet_roundtrip_and_injection(client, tmp_path, monkeypatch):
+    """📄 TET: the pasted example is stored globally and the tech-effect answer
+    format carries the LIVE template into the prompt (wrapper + example)."""
+    monkeypatch.setattr(claude_bridge, "FMT_OVERRIDE_DIR", str(tmp_path / "fmt"))
+    r = client.get("/api/tet").json()
+    assert r["overridden"] is False
+    assert "TECHNICAL EFFECT TEMPLATE" in r["text"]        # built-in skeleton
+    # the format injects wrapper + skeleton and replaces the default style line
+    p = claude_bridge.build_prompt("q", answer_format="tech-effect")
+    assert "TECHNICAL EFFECT ARGUMENTATION" in p
+    assert "distinguishing technical feature" in p
+    assert "ANSWER STYLE" not in p
+    # a pasted example replaces the skeleton on the very next prompt
+    r = client.put("/api/tet", json={"text": "MY WORKED TET EXAMPLE"}).json()
+    assert r["overridden"] is True
+    p = claude_bridge.build_prompt("q", answer_format="tech-effect")
+    assert "MY WORKED TET EXAMPLE" in p
+    assert "distinguishing technical feature" not in p     # skeleton gone
+    assert "TECHNICAL EFFECT ARGUMENTATION" in p           # wrapper stays
+    # empty text resets back to the skeleton
+    r = client.put("/api/tet", json={"text": " "}).json()
+    assert r["overridden"] is False
+    assert "distinguishing technical feature" in claude_bridge.build_prompt(
+        "q", answer_format="tech-effect")
 
 
 def test_house_style_roundtrip_and_injection(client, tmp_path, monkeypatch):

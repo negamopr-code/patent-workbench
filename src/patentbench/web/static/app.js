@@ -2438,9 +2438,69 @@ function setBusy(busy, label) {
   } else if (th) th.remove();
 }
 
+/* 📐 Technical effect argumentation: before sending, ask WHO plays WHICH role —
+   assessed towards what (benchmark by default) and which candidate is D1 / D2.
+   Resolves to a text block appended to the question (a candidate named there is
+   auto-focused with its FULL text server-side), '' = no roles, null = cancel. */
+function tetPickRoles() {
+  const fetched = (lastDocs || []).filter(d => d.status === 'fetched' && d.number);
+  const picked = fetched.filter(d => docSelection.has(d.id));
+  const ordered = [...picked, ...fetched.filter(d => !docSelection.has(d.id))];
+  const fill = (sel, blankLabel, preset) => {
+    sel.innerHTML = '';
+    const blank = document.createElement('option');
+    blank.value = ''; blank.textContent = blankLabel;
+    sel.appendChild(blank);
+    for (const d of ordered) {
+      const o = document.createElement('option');
+      o.value = d.number;
+      o.textContent = d.number + (docSelection.has(d.id) ? ' ☑' : '');
+      sel.appendChild(o);
+    }
+    if (preset) sel.value = preset;
+  };
+  const bmName = currentBm
+    ? (currentBm.number || currentBm.title || 'the uploaded benchmark') : null;
+  const target = $('tet-target');
+  target.innerHTML = '';
+  if (bmName) {
+    const o = document.createElement('option');
+    o.value = `the BENCHMARK document (${bmName})`;
+    o.textContent = `🎯 Benchmark (${bmName})`;
+    target.appendChild(o);
+  }
+  for (const d of ordered) {
+    const o = document.createElement('option');
+    o.value = d.number;
+    o.textContent = d.number + (docSelection.has(d.id) ? ' ☑' : '');
+    target.appendChild(o);
+  }
+  fill($('tet-d1'), '— pick D1 —', picked[0] && picked[0].number);
+  fill($('tet-d2'), '— none —', picked[1] && picked[1].number);
+  return new Promise(resolve => {
+    const done = v => { $('tet-modal').classList.add('hidden'); resolve(v); };
+    $('tet-go').onclick = () => {
+      const lines = [];
+      if ($('tet-target').value) lines.push(`- assessed towards: ${$('tet-target').value}`);
+      if ($('tet-d1').value) lines.push(`- D1 (closest prior art): ${$('tet-d1').value}`);
+      if ($('tet-d2').value) lines.push(`- D2 (combination partner): ${$('tet-d2').value}`);
+      done(lines.length
+        ? 'ASSESSMENT ROLES for the technical effect argumentation:\n' + lines.join('\n')
+        : '');
+    };
+    $('tet-cancel').onclick = () => done(null);
+    $('tet-modal').classList.remove('hidden');
+  });
+}
+
 async function sendChat(notebookOnly) {
-  const q = $('q').value.trim();
+  let q = $('q').value.trim();
   if (!q || !activeTab) return;
+  if (!notebookOnly && $('answer-format').value === 'tech-effect') {
+    const roles = await tetPickRoles();
+    if (roles === null) return;              // cancelled — question stays in the box
+    if (roles) q += '\n\n' + roles;
+  }
   appendMsg({ role: 'q', text: q });
   $('q').value = '';
   qGrow();
@@ -2555,6 +2615,13 @@ $('house-style-btn').onclick = async () => {
   const r = await api('/api/house-style');
   if (r.error) { alert(r.error); return; }
   openTextEditor('/api/house-style', '🖋 House style — applied to EVERY answer, all tabs', r);
+};
+
+$('tet-btn').onclick = async () => {
+  const r = await api('/api/tet');
+  if (r.error) { alert(r.error); return; }
+  openTextEditor('/api/tet',
+    '📄 TET — paste your example technical effect argumentation (adapted to the chosen documents)', r);
 };
 
 $('psa-method-edit').onclick = async () => {

@@ -321,6 +321,23 @@ _FMT_ONE_SENTENCE = (
     "important sentence and stop. Never invent a locator."
 )
 
+# 📄 Wrapper instruction for the "Technical effect argumentation" preset. The
+# actual worked example lives in the TET space below (📄 TET button); at prompt
+# time format_instruction() appends the CURRENT template after this wrapper.
+_FMT_TECH_EFFECT = (
+    "ANSWER STRUCTURE: TECHNICAL EFFECT ARGUMENTATION. Build the argumentation "
+    "by ADAPTING the TECHNICAL EFFECT TEMPLATE below to the documents of this "
+    "conversation. Keep the template's structure, sequence, tone and level of "
+    "detail; replace its facts with the actual disclosures of the documents at "
+    "hand. Use the assessment roles stated in the question: which document the "
+    "argumentation is assessed towards, and which document serves as D1 and "
+    "(when given) as D2. If the question states no roles, take the benchmark "
+    "as the assessed invention and the focused candidates as D1/D2, and say so "
+    "in your first line. Every sentence that states a disclosure carries the "
+    "document reference and the exact citation in place: paragraph [00NN] or "
+    "claim number, plus the figure (Fig. N) whenever one exists."
+)
+
 # Ordered; first entry ("") is the default. `instruction=None` → fall back to
 # the concise/Full style line. Exposed (key+label only) via /api/skills.
 ANSWER_FORMATS = [
@@ -334,6 +351,8 @@ ANSWER_FORMATS = [
      "instruction": _FMT_CLAIM_MAP_PRAGMATIC},
     {"key": "feature-map", "label": "Paste a claim → interlinear feature map",
      "instruction": _FMT_FEATURE_MAP},
+    {"key": "tech-effect", "label": "Technical effect argumentation",
+     "instruction": _FMT_TECH_EFFECT},
 ]
 _FORMAT_BY_KEY = {f["key"]: f for f in ANSWER_FORMATS}
 
@@ -391,6 +410,43 @@ def house_style() -> str:
         return HOUSE_STYLE_DEFAULT
 
 
+# 📄 TET — TECHNICAL EFFECT TEMPLATE. One global space (📄 TET button, next to
+# 🖋 style) where the user pastes a worked EXAMPLE of how a technical effect
+# argumentation should read. The 📐 "Technical effect argumentation" answer
+# format adapts that example to the chosen documents and the benchmark. The
+# default below is only a skeleton so the format works before an example is
+# pasted; a pasted example replaces it wholesale.
+TET_DEFAULT = """\
+TECHNICAL EFFECT TEMPLATE (skeleton — paste your own worked example over this \
+text via the 📄 TET button; the answer mimics whatever stands here).
+
+1. D1 (number) discloses ... (Fig. N; [00NN] or claim N), but does not \
+disclose ... .
+2. The distinguishing technical feature is therefore ... .
+3. This feature provides the technical effect of ... , because ... (benchmark \
+[00NN] or claim N).
+4. The objective technical problem is how to ... .
+5. D2 (number) discloses ... (Fig. N; [00NN] or claim N), which addresses \
+this problem by ... .
+6. The claimed solution keeps the effect of ... over the combination of D1 \
+and D2, because ... .
+"""
+
+TET_FILE = "tet.txt"
+
+
+def tet_template() -> str:
+    """The ACTIVE technical effect template: the user's pasted example, else
+    the built-in skeleton."""
+    try:
+        with open(os.path.join(FMT_OVERRIDE_DIR, TET_FILE),
+                  encoding="utf-8") as fh:
+            text = fh.read().strip()
+        return text or TET_DEFAULT
+    except OSError:
+        return TET_DEFAULT
+
+
 # ⚖️ Default OUTPUT FORMAT for problem-solution runs — the user's dictated
 # 6-step chain (2026-07-22). Used when NO format document is uploaded; an
 # uploaded/edited /data/psa/format.txt replaces it wholesale.
@@ -441,11 +497,18 @@ def format_override(key: str) -> str | None:
 
 def format_instruction(key: str) -> str | None:
     """The ACTIVE instruction for a format key: the user's override if one is
-    saved, else the built-in default (None for the default answer style)."""
+    saved, else the built-in default (None for the default answer style). The
+    tech-effect format additionally carries the LIVE 📄 TET template, so a
+    freshly pasted example takes effect on the very next answer."""
     f = _FORMAT_BY_KEY.get(key or "")
     if not f:
         return None
-    return format_override(key) or f.get("instruction")
+    instr = format_override(key) or f.get("instruction")
+    if key == "tech-effect" and instr:
+        instr += ("\n\nTECHNICAL EFFECT TEMPLATE (the user's example; mimic its "
+                  "structure, tone and level of detail, adapt its content to "
+                  "the documents at hand):\n\n" + tet_template())
+    return instr
 
 
 def _style_instruction(full: bool) -> str:

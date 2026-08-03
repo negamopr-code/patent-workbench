@@ -194,6 +194,37 @@ def house_style_put(body: schemas.AnswerFormatEdit):
     return house_style_get()
 
 
+# ---------- 📄 TET: the global technical effect template ----------
+
+@app.get("/api/tet")
+def tet_get():
+    """The ACTIVE technical effect template — the user's pasted example that the
+    📐 'Technical effect argumentation' format adapts to the chosen documents."""
+    override_path = os.path.join(claude_bridge.FMT_OVERRIDE_DIR,
+                                 claude_bridge.TET_FILE)
+    return {"text": claude_bridge.tet_template(),
+            "default": claude_bridge.TET_DEFAULT,
+            "overridden": os.path.exists(override_path)}
+
+
+@app.put("/api/tet")
+def tet_put(body: schemas.AnswerFormatEdit):
+    """Save the pasted example (data volume, shared by ALL tabs). Empty text —
+    or text identical to the built-in skeleton — resets to the skeleton."""
+    text = body.text.strip()
+    path = os.path.join(claude_bridge.FMT_OVERRIDE_DIR, claude_bridge.TET_FILE)
+    if not text or text == claude_bridge.TET_DEFAULT.strip():
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    else:
+        os.makedirs(claude_bridge.FMT_OVERRIDE_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    return tet_get()
+
+
 # ---------- tabs ----------
 
 @app.get("/api/tabs")

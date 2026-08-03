@@ -174,6 +174,7 @@
           <label class="model-pick answer-pick" title="How Claude should shape the answer. Default = concise (or 📝 Full). Other presets impose a structure, e.g. claims grouped by focus → what the reference discloses, with [paragraph]/claim/figure citations.">📐 <select id="answer-format"></select></label>
           <button id="answer-format-edit" class="btn small" title="✎ View/edit the selected format's instruction text in place — the edited version is stored permanently, shared by ALL tabs, and replaces the built-in guidelines (no document upload needed). Pick a preset other than Default first.">✎</button>
           <button id="house-style-btn" class="btn small" title="🖋 HOUSE STYLE — the ONE global formatting space, applied to EVERY answer (chat, deep-compare rankings, ⚖️ problem-solution runs) in ALL tabs: one sentence per line with references and figures, plain words (no arrows, no em-dashes, no jargon), affirmative reading (state what IS disclosed, never emphasize a stretch), additional features always grouped and binned. View/edit it here; stored permanently.">🖋 style</button>
+          <button id="tet-btn" class="btn small" title="📄 TET — TECHNICAL EFFECT TEMPLATE: paste an example of how a technical effect argumentation should be written. The 📐 preset «Technical effect argumentation» adapts your example to the chosen documents and the benchmark (roles asked on send: assessed towards what, which document is D1/D2). Stored permanently, shared by ALL tabs.">📄 TET</button>
         </div>
         <button id="best-match" class="btn small" title="🏆 Deep-read THIS tab's candidates in batches of 50 (most-promising first) vs the benchmark — document AND features together — then assess the 2-document combination over everything read so far. Stops after each batch; re-launch for the next 50. Does NOT pull from other tabs.">🏆 Best match</button>
         <button id="cross-tab" class="btn small" title="🌐 Pull in candidates from OTHER tabs that cover ≥1 of this benchmark's features (digest pre-check), so they join this tab's ranking. Opt-in — Best match no longer does this automatically.">🌐 Cross-tab pull</button>
@@ -281,6 +282,27 @@
       <button id="consolidate-only" class="btn" title="Copy the documents into ONE NotebookLM notebook and STOP — no shortlist, no debate, no NLM query. You then click 📓 NLM shortlist / ⚖️ Debate yourself when ready.">📥 Put in NLM only (no query)</button>
       <button id="consolidate-go" class="btn primary">Consolidate &amp; pick best</button>
       <button id="consolidate-cancel" class="btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- 📐 Technical effect argumentation: assessment-roles popup (shown on send) -->
+<div id="tet-modal" class="modal hidden">
+  <div class="modal-box">
+    <h3>📐 Technical effect argumentation</h3>
+    <p class="muted">Pick the roles for this argumentation. They are appended to your question, so the answer (and follow-ups) can see them; a candidate named as D1/D2 is loaded with its full text. ☑ marks candidates you have selected in the list.</p>
+    <label class="block">Assessed towards:
+      <select id="tet-target"></select>
+    </label>
+    <label class="block">D1 (closest prior art):
+      <select id="tet-d1"></select>
+    </label>
+    <label class="block">D2 (combination partner):
+      <select id="tet-d2"></select>
+    </label>
+    <div class="row right">
+      <button id="tet-cancel" class="btn">Cancel</button>
+      <button id="tet-go" class="btn primary">Build argumentation</button>
     </div>
   </div>
 </div>
