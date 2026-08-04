@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 
@@ -1241,15 +1242,27 @@ def _run_claude(prompt: str, model: str, extra_args: list[str] | None = None,
     ok, why = available()
     if not ok:
         return {"error": why}
+    # start_new_session puts the CLI and everything it spawns into their own process
+    # group so a timeout can kill the WHOLE tree. subprocess.run(timeout=) kills only
+    # the direct child, then blocks forever draining stdout if a surviving grandchild
+    # inherited the pipe — a wedged read held a tab's lock 13+ min past DIGEST_TIMEOUT
+    # and made ⏸ pause unreachable (bit 2026-08-04).
+    proc = subprocess.Popen([CLAUDE_BIN, "-p", "--model", model, *(extra_args or [])],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, cwd=cwd,
+                            start_new_session=True)
     try:
-        proc = subprocess.run([CLAUDE_BIN, "-p", "--model", model, *(extra_args or [])],
-                              input=prompt, capture_output=True, text=True,
-                              timeout=timeout or CHAT_TIMEOUT, cwd=cwd)
+        out, err = proc.communicate(prompt, timeout=timeout or CHAT_TIMEOUT)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)   # pgid == pid (start_new_session)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.communicate()                        # group is dead → pipes closed, no hang
         return {"error": "claude chat timed out"}
     if proc.returncode != 0:
-        return {"error": (proc.stderr or proc.stdout).strip()[:400] or "claude failed"}
-    answer = proc.stdout.strip()
+        return {"error": (err or out).strip()[:400] or "claude failed"}
+    answer = out.strip()
     if not answer:
         return {"error": "empty answer from claude"}
     return {"answer": answer, "model": model}

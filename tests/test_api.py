@@ -4742,3 +4742,21 @@ def test_benchmark_scanned_pdf_falls_back_to_vision_ocr(client, monkeypatch):
     full = client.get(f"/api/tabs/{tab['id']}/benchmark/full").json()
     assert "amended claim 1 wording" in full["text"]
     assert st.get("text_model")        # vision was involved → the model is recorded
+
+
+def test_run_claude_timeout_kills_whole_process_group(tmp_path, monkeypatch):
+    """A timed-out CLI must not wedge the worker thread even when it left a
+    grandchild holding stdout: subprocess.run()'s builtin timeout kills only the
+    direct child and then blocks forever draining the pipe (bit 2026-08-04 — a
+    hung read held a tab's read lock 13+ min past DIGEST_TIMEOUT, so ⏸ pause
+    never engaged). _run_claude now SIGKILLs the whole process group."""
+    import time as _time
+    fake = tmp_path / "claude"
+    fake.write_text("#!/bin/sh\nsleep 300 &\nsleep 300\n")   # grandchild inherits stdout
+    fake.chmod(0o755)
+    monkeypatch.setattr(claude_bridge, "CLAUDE_BIN", str(fake))
+    monkeypatch.setattr(claude_bridge, "available", lambda: (True, ""))
+    t0 = _time.monotonic()
+    res = claude_bridge._run_claude("hi", "claude-sonnet-4-6", timeout=1)
+    assert _time.monotonic() - t0 < 10          # returns promptly, no pipe-drain hang
+    assert res == {"error": "claude chat timed out"}
