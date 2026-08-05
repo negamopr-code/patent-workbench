@@ -6113,6 +6113,20 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
         scope = f"all {len(all_docs)}"
         head = (f"[Re-rank — compiling the stored full-text assessments of "
                 f"{len(corpus)} candidate(s), no re-reading]")
+    # ⚠️ no-features guard (tab-11 double-spend lesson: a 108-doc read ran twice
+    # because it started BEFORE the feature list was accepted → verdicts holistic-only,
+    # feature_scores NULL, 🧮 Recalc structurally impossible). Warn loudly at start —
+    # the reads still run (holistic mode is legitimate), but the cost trade-off is
+    # stated BEFORE the tokens are spent, not discovered after.
+    features_missing = bool(to_read) and not (bm.get("features") or [])
+    if features_missing:
+        db.append_message(
+            tab_id, "s",
+            f"⚠️ The benchmark has NO accepted feature list — the {len(to_read)} read(s) "
+            "starting now will be HOLISTIC-ONLY: no per-feature ✓/~/✗ verdicts, so the "
+            "⚖ weighted ranking, 🧩 Combi and 🧮 Recalc cannot use them, and adding "
+            "features later means RE-READING everything. If you want feature scoring, "
+            "⏸ stop now, run 🔬 Decompose (accept the features), then ▶️ Continue.")
     db.append_message(tab_id, "q", f"{head}\n{question}")
     lock = _claude_read_lock_path(tab_id)
     try:
@@ -6130,7 +6144,8 @@ def deep_compare(tab_id: int, body: schemas.DeepCompareRequest):
                      args=(tab_id, target_ids, model, read_model, list(body.skills), question, scope),
                      daemon=True).start()
     return {"started": True, "running": True, "batch_size": len(target_ids),
-            "remaining_after": remaining_after, **_claude_read_counts(tab_id)}
+            "remaining_after": remaining_after, "features_missing": features_missing,
+            **_claude_read_counts(tab_id)}
 
 
 @app.get("/api/tabs/{tab_id}/deep-compare/status")

@@ -164,7 +164,10 @@ def create_notebook(title: str) -> dict:
     err = (data.get("error") if isinstance(data, dict) else "") or ""
     if not err:
         err = (proc.stderr or proc.stdout).strip()[:400]
-    if "INVALID_ARGUMENT" in err or "limit" in err.lower() or "quota" in err.lower():
+    # the cap error's shape has drifted: code 3 INVALID_ARGUMENT (2026-06), then
+    # code 8 RESOURCE_EXHAUSTED (seen live 2026-08-05) — treat either as the cap
+    if ("INVALID_ARGUMENT" in err or "RESOURCE_EXHAUSTED" in err
+            or "limit" in err.lower() or "quota" in err.lower()):
         n = _notebook_count()
         return {"limit": True,
                 "error": ("NotebookLM refused to create the notebook"

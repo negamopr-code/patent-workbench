@@ -3092,9 +3092,18 @@ async function runDeepCompare(idsArg, skipScored, readModelOverride) {
     scope = todo ? `the ${todo} candidate(s) not yet read by ${short(readModel)} (most promising first)`
                  : `all ${have} already-read candidate(s) — RE-RANK from stored assessments, no re-reading`;
   }
+  // ⚠️ no-features guard (tab-11 double-spend): reads made before the feature list is
+  // accepted are holistic-only and must be REPEATED for feature ranking — say so BEFORE
+  // the tokens are spent.
+  const noFeatures = !rerankOnly && !((currentBm && currentBm.features) || []).length;
+  const featWarn = noFeatures
+    ? '⚠️ NO FEATURE LIST ACCEPTED on the benchmark: these reads will be holistic-only '
+      + '(no per-feature ✓/~/✗, no ⚖ weighted ranking / 🧩 Combi / 🧮 Recalc from them) — '
+      + 'adding features later means RE-READING everything. Consider 🔬 Decompose first.\n\n'
+    : '';
   const ask = rerankOnly
     ? `Re-rank ${scope}.\n\n💬 compiles the ranking with: ${short(answerModel)}\n\nNo candidates are re-read. Start?`
-    : `Assess ${scope} in FULL against the benchmark, most-promising first`
+    : featWarn + `Assess ${scope} in FULL against the benchmark, most-promising first`
         + (skipScored ? ', skipping the ones already read' : '') + '.\n\n'
         + `📖 reads/matches each candidate with: ${short(readModel)}\n`
         + `💬 compiles the ranking with: ${short(answerModel)}\n\n`

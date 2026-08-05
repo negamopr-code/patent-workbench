@@ -247,6 +247,19 @@ def test_quota_error_detection_unit():
     assert nlm_bridge._err_result("connection refused").get("quota") is None
 
 
+def test_create_notebook_cap_detected_for_resource_exhausted(monkeypatch):
+    # Google's ~100-notebook cap error drifted from code 3 INVALID_ARGUMENT to
+    # code 8 RESOURCE_EXHAUSTED (live 2026-08-05) — both must yield the actionable
+    # "delete some notebooks" message, not a raw error.
+    import subprocess
+    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "_run", lambda cmd, timeout: subprocess.CompletedProcess(
+        cmd, 1, stdout="", stderr="API error (code 8): RESOURCE_EXHAUSTED"))
+    monkeypatch.setattr(nlm_bridge, "_notebook_count", lambda: 100)
+    r = nlm_bridge.create_notebook("X")
+    assert r.get("limit") is True and "100" in r["error"] and "Delete" in r["error"]
+
+
 def test_wait_sources_ready_known_ready_skips_probes(monkeypatch):
     probed = []
     monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
