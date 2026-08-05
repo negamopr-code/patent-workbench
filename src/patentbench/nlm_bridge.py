@@ -23,6 +23,8 @@ import subprocess
 import threading
 import time
 
+import re
+
 NLM_BIN = os.environ.get("NLM_BIN", "nlm")
 MIN_GAP = float(os.environ.get("NLM_MIN_GAP", "1.5"))        # seconds between calls
 LIST_TIMEOUT = float(os.environ.get("NLM_LIST_TIMEOUT", "60"))
@@ -278,19 +280,22 @@ def source_content(source_id: str) -> dict:
 
 
 def wait_sources_ready(notebook_id: str, timeout: float = 240.0, poll: float = 8.0,
+                       known_ready: set[str] | None = None,
                        _sleep=time.sleep, _now=time.monotonic) -> dict:
     """Block until EVERY source in a notebook is ingested (i.e. queryable), or until
     `timeout` seconds elapse. NotebookLM accepts `source add` instantly but then needs
     time to PROCESS the text; querying before that finishes yields the truncated
     'the full text isn't explicitly present' answers and wastes the query. source_content()
     returns text only once a source is processed and costs NO Gemini chat quota, so we use
-    it as the readiness probe (each source is probed once, then remembered). Returns
+    it as the readiness probe (each source is probed once, then remembered).
+    `known_ready` seeds the confirmed set — sources that stayed in the notebook
+    from a previous round (benchmark, survivors) don't need re-probing. Returns
     {ready, processed, total}."""
     ok, why = available()
     if not ok:
         return {"ready": False, "processed": 0, "total": 0, "error": why}
     deadline = _now() + timeout
-    ready_ids: set[str] = set()
+    ready_ids: set[str] = set(known_ready or ())
     total = 0
     while True:
         srcs = list_sources(notebook_id, force=True).get("sources") or []
@@ -305,9 +310,29 @@ def wait_sources_ready(notebook_id: str, timeout: float = 240.0, poll: float = 8
         _sleep(poll)
 
 
+# Q&A-endpoint quota exhaustion (account-scoped, resets 6-12h — verified in the
+# patent-wiki-analyzer project 2026-05-21): every `notebook query` fails while
+# source add/delete/list KEEP WORKING, so a paused job may still stage sources.
+_QUOTA_RE = re.compile(r"RESOURCE_EXHAUSTED|rate.?limit|quota|\b429\b", re.IGNORECASE)
+
+
+def is_quota_error(res: dict) -> bool:
+    """True when a bridge result means the Gemini Q&A quota is exhausted — either
+    the explicit marker in the error text, or the empty-answer symptom (the CLI
+    returns success with no answer once the quota is gone)."""
+    return bool(res.get("quota") or res.get("quota_suspect"))
+
+
+def _err_result(err: str) -> dict:
+    out = {"error": err}
+    if _QUOTA_RE.search(err or ""):
+        out["quota"] = True
+    return out
+
+
 def query(notebook_id: str, question: str, source_ids: list[str] | None = None) -> dict:
     """Ask one notebook (optionally restricted to EXACT source files inside it).
-    Returns {answer, sources_used} or {error}."""
+    Returns {answer, sources_used} or {error, quota?, quota_suspect?}."""
     ok, why = available()
     if not ok:
         return {"error": why}
@@ -320,7 +345,7 @@ def query(notebook_id: str, question: str, source_ids: list[str] | None = None) 
     except subprocess.TimeoutExpired:
         return {"error": "NotebookLM query timed out"}
     if proc.returncode != 0:
-        return {"error": (proc.stderr or proc.stdout).strip()[:400] or "nlm query failed"}
+        return _err_result((proc.stderr or proc.stdout).strip()[:400] or "nlm query failed")
     try:
         data = _json_after(proc.stdout, "{")
     except Exception as exc:
@@ -328,9 +353,10 @@ def query(notebook_id: str, question: str, source_ids: list[str] | None = None) 
     # CLI ≤0.6.x wraps the payload in {"value": {...}}; newer versions return it top-level.
     val = data.get("value", data) if isinstance(data, dict) else {}
     if isinstance(val, dict) and val.get("status") == "error":
-        return {"error": str(val.get("error") or "nlm query failed")[:400]}
+        return _err_result(str(val.get("error") or "nlm query failed")[:400])
     answer = (val.get("answer") or "").strip() if isinstance(val, dict) else ""
     if not answer:
-        return {"error": "empty answer from NotebookLM (quota exhausted?)"}
+        return {"error": "empty answer from NotebookLM (quota exhausted?)",
+                "quota_suspect": True}
     return {"answer": answer,
             "sources_used": val.get("sources_used") or val.get("sources") or []}

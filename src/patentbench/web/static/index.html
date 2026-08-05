@@ -115,6 +115,9 @@
       <button id="nlm-shortlist" class="btn small" title="STAGE 1 (free, broad): ONE NotebookLM question (per notebook, not per candidate) — which candidates disclose the benchmark's FULL feature combination, PLUS the ranked best + second-best with a per-feature YES/PARTIAL/NO map. Auto-checks the ones it names so you can verify just those. The cheap alternative to 📓 NLM-rate (which queries every candidate).">📓 NLM shortlist</button>
       <span class="funnel-arrow">→</span>
       <button id="verify-shortlist" class="btn small" title="STAGE 2 (precise, narrow): Opus 5 deep-reads ONLY the checked shortlist against the benchmark. Small set, so opus is affordable. Pausable — switch the model mid-run.">🤖 Verify shortlist (opus)</button>
+      <button id="nlm-screen" class="btn small" title="🔬 MEGA-SCREEN (free, for HUGE pools — hundreds to 1500+): rotates ALL fetched candidates through ONE dedicated NotebookLM notebook in rounds of ~39 + the benchmark + up to 10 carry-forward survivors; one free ranking question per round; survivors compete every round so all rounds stay comparable; ends by writing the global top ~40 into the shortlist (📓 rank + auto-checked) for 🤖 Verify. ZERO Claude tokens. Runs on the server for hours; survives restarts; NLM quota pauses auto-resume hourly.">🔬 NLM mega-screen</button>
+      <button id="screen-resume" class="btn small hidden" title="Resume an interrupted / quota-paused mega-screen exactly where it left off (staging is idempotent — nothing is re-screened).">▶️ Resume screen</button>
+      <button id="screen-stop" class="btn small hidden" title="Stop rotating and finalize NOW: the graduates found so far get the one rich ranking query and land in the shortlist.">🏁 Stop &amp; finalize</button>
       <span id="funnel-status" class="muted"></span>
     </div>
 

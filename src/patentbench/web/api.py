@@ -3355,6 +3355,533 @@ def _benchmark_feature_spec_for_nlm(bm: dict, limit: int = NLM_SHORTLIST_QUERY_C
     return _benchmark_summary_for_nlm(bm, limit=limit)
 
 
+# ---------- 🔬 NLM mega-screen: free rotation tournament over a huge pool ----------
+# Evaluate 500-1500+ candidates with ZERO Claude tokens: rotate the pool through ONE
+# dedicated screening notebook (free tier = 50 sources) in rounds of
+# [1 benchmark + ≤survivor_cap carry-forward survivors + batch of fresh docs], ask ONE
+# holistic ranking question per round (the affordable quota mode — no --source-ids),
+# and let survivors compete against every new batch (the moving yardstick that makes
+# 39 separate rounds globally comparable). Every doc ever NAMED in a round's answer
+# lands in a graduates ledger; a finalize round refills the notebook with the ledger's
+# best and ONE rich shortlist query writes the global ranking into the existing
+# shortlisted/nlm_rank columns. The screening notebook is NOT the tab's mirror — we
+# never touch documents.nlm_source_notebook (that column drives tab_notebook_ids()
+# fan-out and would dangle after rotation deletes).
+# Lessons baked in: losers are deleted only AFTER an answer passed the structural
+# guard and state was persisted (the DE202022102539 silent-drop); the round question
+# carries only the ≤6k feature spec (INVALID_ARGUMENT ~5-7k ceiling); quota
+# exhaustion (Q&A-scoped, resets 6-12h, source add/delete keep working) auto-pauses
+# the job and a watchdog probes hourly, mirroring the ⏳ token-limit watchdog.
+
+SCREEN_TTL = float(os.environ.get("PB_SCREEN_TTL", "1200"))       # secs before job looks dead
+SCREEN_QUOTA_PROBE_EVERY = float(os.environ.get("PB_SCREEN_QUOTA_PROBE", str(60 * 60)))
+SCREEN_QUOTA_GIVE_UP = 24 * 3600          # stop auto-probing after a day of exhaustion
+_screen_watchdogs: dict[int, threading.Thread] = {}
+_screen_watchdogs_mu = threading.Lock()
+
+NLM_SCREEN_PROMPT = (
+    "Across ALL the candidate source documents provided (ignore the 🎯 BENCHMARK "
+    "source itself), rank the TOP {top} candidates that best disclose the TARGET "
+    "FEATURE COMBINATION below — best first. Treat surface-form synonyms and implicit "
+    "realisations (a document that physically does the step without the literal word) "
+    "as disclosure. Reply in this order:\n"
+    "TOP: a numbered list of the {top} best candidates, each by its publication number "
+    "(e.g. EP4340163A1, CN117241689) with one short line on what it covers.\n"
+    "NEAR-MISSES: any other candidate that discloses MOST of the elements, by "
+    "publication number.\n"
+    "Only name documents actually among the sources; do not invent publication numbers."
+    "\n\n=== TARGET FEATURE COMBINATION ===\n{benchmark}"
+)
+
+
+def _screen_answer_complete(answer: str) -> bool:
+    """The round answer must reach its ranked decision — a truncated 'thinking'
+    preamble carries neither marker and must never cost the batch (its unnamed
+    docs would be silently 'rejected')."""
+    a = (answer or "").upper()
+    return "TOP" in a or "NEAR-MISS" in a
+
+
+def _screen_state_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".nlm_screen_{tab_id}.json")
+
+
+def _screen_pause_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".nlm_screen_{tab_id}.pause")
+
+
+def _screen_lock_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".nlm_screen_{tab_id}.lock")
+
+
+def _screen_read(tab_id: int) -> dict | None:
+    try:
+        with open(_screen_state_path(tab_id)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _screen_set(tab_id: int, **kw) -> dict:
+    st = _screen_read(tab_id) or {}
+    st.update(kw)
+    with open(_screen_state_path(tab_id), "w") as f:
+        json.dump(st, f)
+    return st
+
+
+def _screen_running(tab_id: int) -> bool:
+    try:
+        return (time.time() - os.path.getmtime(_screen_lock_path(tab_id))) < SCREEN_TTL
+    except OSError:
+        return False
+
+
+def _screen_status(tab_id: int) -> dict:
+    st = _screen_read(tab_id)
+    if not st:
+        return {"present": False, "phase": "idle", "running": False, "resumable": False}
+    running = _screen_running(tab_id)
+    quota = st.get("quota") or {}
+    if st.get("step") == "done":
+        phase = "done"
+    elif quota.get("paused"):
+        phase = "quota_paused"
+    elif st.get("error"):
+        phase = "error"
+    elif os.path.exists(_screen_pause_path(tab_id)) and not running:
+        phase = "paused"
+    elif running:
+        phase = "running"
+    else:
+        phase = "interrupted"
+    return {"present": True, "phase": phase, "running": phase == "running",
+            "resumable": phase in ("error", "interrupted", "paused", "quota_paused"),
+            "round": st.get("round", 0), "screened": st.get("cursor", 0),
+            "total": len(st.get("queue") or []),
+            "survivors": len(st.get("survivors") or []),
+            "graduates": len(st.get("ledger") or {}),
+            "status_text": st.get("status_text", ""), "error": st.get("error"),
+            "quota_resume_at": quota.get("resume_at"),
+            "notebook_id": st.get("notebook_id"),
+            "notebook_title": st.get("notebook_title")}
+
+
+def _screen_heartbeat(tab_id: int) -> None:
+    try:
+        os.utime(_screen_lock_path(tab_id), None)
+    except OSError:
+        pass
+
+
+def _screen_parse_ranked(answer: str, key_map: dict[str, int]) -> tuple[list[int], list[str]]:
+    """Publication numbers in mention order (NLM's best-first ranking), matched
+    kind-code-insensitively against this round's roster∪survivors. Numbers outside
+    that set (hallucinations, ghosts of deleted sources) are reported, never ranked."""
+    ordered, seen, unmatched = [], set(), []
+    for n in patents.extract_candidates(answer or ""):
+        did = key_map.get(_shortlist_key(n))
+        if did is not None and did not in seen:
+            seen.add(did)
+            ordered.append(did)
+        elif did is None and n not in unmatched:
+            unmatched.append(n)
+    return ordered, unmatched
+
+
+def _screen_notebook(tab_id: int, st: dict) -> tuple[str, str]:
+    """The dedicated screening notebook (find by exact title, else create). Kept
+    OUT of the tab's notebook config / mirror columns on purpose."""
+    nb, title = st.get("notebook_id"), st.get("notebook_title")
+    want = f"🔁 Screen — {_tab_name(tab_id)}"[:100]
+    if nb:
+        if any(n["id"] == nb for n in (nlm_bridge.list_notebooks(force=True).get("notebooks") or [])):
+            return nb, title or want
+        db.append_message(tab_id, "s", "🔬 The screening notebook disappeared — recreating it; "
+                          "survivors will be re-staged from the ledger.")
+    for n in (nlm_bridge.list_notebooks(force=True).get("notebooks") or []):
+        if n.get("title") == want:
+            _screen_set(tab_id, notebook_id=n["id"], notebook_title=want)
+            return n["id"], want
+    created = nlm_bridge.create_notebook(want)
+    if not created.get("id"):
+        raise RuntimeError(created.get("error") or "screening notebook create failed")
+    _screen_set(tab_id, notebook_id=created["id"], notebook_title=created["title"])
+    return created["id"], created["title"]
+
+
+def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
+                  docs_by_id: dict[int, dict]) -> tuple[str, str | None, dict[str, int], list[int]]:
+    """Make the notebook hold EXACTLY benchmark + `want_ids` (idempotent: deletes
+    stale candidate sources, adds missing ones, re-adds once, marks ghosts
+    add_failed). Returns (nb, bm_sid, key_map of what's really in, failed_ids)."""
+    nb, _ = _screen_notebook(tab_id, st)
+    want_keys = {_shortlist_key(docs_by_id[i]["number"]): i for i in want_ids
+                 if docs_by_id.get(i)}
+
+    def index() -> tuple[dict[str, str], str | None]:
+        return _notebook_source_index(nb)
+
+    num_map, bm_sid = index()
+    # 1. delete candidate sources that are neither benchmark nor wanted (previous
+    #    round's losers — safe HERE because the previous answer was accepted and
+    #    persisted before this round began; a crash between rounds re-runs this).
+    stale = [sid for num, sid in num_map.items() if _shortlist_key(num) not in want_keys]
+    if stale:
+        _screen_set(tab_id, status_text=f"🗑 rotating out {len(stale)} source(s)…")
+        nlm_bridge.delete_source(stale, nb)
+        num_map, bm_sid = index()
+    if not bm_sid:
+        bm = db.get_benchmark(tab_id)
+        label = (bm.get("number") or bm.get("title") or "benchmark")
+        res = nlm_bridge.add_source_text(nb, f"🎯 BENCHMARK — {label}", _benchmark_fulltext(bm))
+        if not res.get("ok"):
+            raise RuntimeError(f"benchmark add failed: {res.get('error')}")
+    # 2. add the missing wanted docs (skip what's already there — crash-safe re-entry)
+    present = {_shortlist_key(n) for n in num_map}
+    missing = [i for k, i in want_keys.items() if k not in present]
+    added = 0
+    for did in missing:
+        d = docs_by_id[did]
+        _screen_set(tab_id, status_text=f"📤 staging round {st.get('round', 0) + 1}: "
+                                        f"{added}/{len(missing)} added…")
+        _screen_heartbeat(tab_id)
+        nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
+                                   _doc_source_text(d))
+        added += 1
+    # 3. wait for ingestion (probe costs no chat quota); carried-over sources are
+    #    already confirmed — only the fresh adds need probing.
+    _screen_set(tab_id, status_text="⏳ waiting for NotebookLM to ingest the batch…")
+    known = set(num_map.values()) | ({bm_sid} if bm_sid else set())
+    nlm_bridge.wait_sources_ready(nb, timeout=PIPELINE_INGEST_TIMEOUT, known_ready=known)
+    # 4. verify: re-add once, then mark unindexable docs add_failed (ghost-source lesson)
+    num_map, bm_sid = index()
+    have = {_shortlist_key(n) for n in num_map}
+    failed = []
+    for k, did in want_keys.items():
+        if k not in have:
+            d = docs_by_id[did]
+            nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
+                                       _doc_source_text(d))
+    if any(k not in have for k in want_keys):
+        nlm_bridge.wait_sources_ready(nb, timeout=60, known_ready=set(num_map.values()))
+        num_map, bm_sid = index()
+        have = {_shortlist_key(n) for n in num_map}
+        failed = [did for k, did in want_keys.items() if k not in have]
+        if failed:
+            db.mark_screened(tab_id, failed, "add_failed")
+    key_map = {_shortlist_key(n): want_keys.get(_shortlist_key(n)) for n in num_map
+               if _shortlist_key(n) in want_keys}
+    return nb, bm_sid, key_map, failed
+
+
+def _screen_query(tab_id: int, nb: str, question: str) -> dict:
+    """One guarded round query — NO cache (rotation changes the source-set signature
+    every round, so the cache could never hit and would only store garbage)."""
+    res = nlm_bridge.query(nb, question)
+    if "answer" in res and not _screen_answer_complete(res["answer"]):
+        res = nlm_bridge.query(nb, question)              # one retry on truncation
+        if "answer" in res and not _screen_answer_complete(res["answer"]):
+            return {"incomplete": True, "answer": res["answer"]}
+    return res
+
+
+def _run_nlm_screen(tab_id: int) -> None:
+    lock = _screen_lock_path(tab_id)
+    try:
+        st = _screen_read(tab_id)
+        if not st or st.get("step") == "done":
+            return
+        bm = db.get_benchmark(tab_id)
+        spec = _benchmark_feature_spec_for_nlm(bm)
+        params = st.get("params") or {}
+        s_cap = int(params.get("survivor_cap", 10))
+        batch = int(params.get("batch_size", 39))
+        question = NLM_SCREEN_PROMPT.format(top=s_cap,
+                                            benchmark=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
+        docs_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
+                      if d["status"] == "fetched"}
+        while st.get("step") == "round":
+            if os.path.exists(_screen_pause_path(tab_id)):
+                _screen_set(tab_id, status_text="⏸ paused")
+                return
+            if st.get("stop"):
+                break                                     # finalize from the ledger so far
+            queue, cursor = st.get("queue") or [], int(st.get("cursor", 0))
+            if cursor >= len(queue):
+                break
+            roster = [i for i in queue[cursor:cursor + batch] if i in docs_by_id]
+            survivors = [i for i in st.get("survivors") or [] if i in docs_by_id]
+            st = _screen_set(tab_id, roster=roster,
+                             status_text=f"round {st.get('round', 0) + 1}: staging…")
+            nb, bm_sid, key_map, failed = _screen_stage(
+                tab_id, st, survivors + roster, docs_by_id)
+            _screen_set(tab_id, status_text=f"📓 round {st.get('round', 0) + 1}: asking NotebookLM…")
+            _screen_heartbeat(tab_id)
+            res = _screen_query(tab_id, nb, question)
+            if nlm_bridge.is_quota_error(res):
+                _screen_quota_pause(tab_id, res.get("error") or "quota exhausted")
+                return
+            if res.get("incomplete"):
+                _screen_set(tab_id, error="round answer truncated twice — sources kept, "
+                                          "▶️ Resume retries this round",
+                            status_text="⚠️ truncated answer")
+                db.append_message(tab_id, "s",
+                    f"🔬 Mega-screen round {st.get('round', 0) + 1}: NotebookLM returned a "
+                    "truncated/structureless answer twice — nothing was rejected or deleted. "
+                    "▶️ Resume retries the same round.")
+                return
+            if "error" in res:
+                _screen_set(tab_id, error=res["error"][:300], status_text="⚠️ query failed")
+                db.append_message(tab_id, "s",
+                    f"🔬 Mega-screen round {st.get('round', 0) + 1} query failed: "
+                    f"{res['error'][:200]} — ▶️ Resume retries this round.")
+                return
+            # answer accepted → rank, ledger, bookkeeping, THEN advance the cursor.
+            ordered, unmatched = _screen_parse_ranked(res["answer"], key_map)
+            new_survivors = ordered[:s_cap]
+            ledger = st.get("ledger") or {}
+            rnd = int(st.get("round", 0)) + 1
+            for rank, did in enumerate(ordered, 1):
+                e = ledger.get(str(did))
+                if not e or rank < e[0]:
+                    ledger[str(did)] = [rank, rnd]
+                else:
+                    ledger[str(did)] = [e[0], rnd]
+            named = set(ordered)
+            db.mark_screened(tab_id, list(named), "graduate")
+            db.mark_screened(tab_id, [i for i in roster
+                                      if i not in named and i not in set(failed)], "rejected")
+            st = _screen_set(tab_id, survivors=new_survivors, ledger=ledger,
+                             cursor=cursor + len(queue[cursor:cursor + batch]), round=rnd,
+                             unmatched=(st.get("unmatched") or []) + unmatched, error=None,
+                             status_text=f"round {rnd} done — {len(ledger)} graduate(s) so far")
+            _screen_heartbeat(tab_id)
+        _screen_finalize(tab_id, _screen_set(tab_id, step="finalize"), docs_by_id)
+    except Exception as exc:                              # keep the state file → resumable
+        _screen_set(tab_id, error=str(exc)[:300], status_text=f"interrupted: {str(exc)[:120]}")
+        db.append_message(tab_id, "s",
+                          f"🔬 Mega-screen interrupted: {str(exc)[:200]} — ▶️ Resume to continue.")
+    finally:
+        try:
+            os.unlink(lock)
+        except OSError:
+            pass
+
+
+def _screen_finalize(tab_id: int, st: dict, docs_by_id: dict[int, dict]) -> None:
+    """Refill the notebook with the ledger's best (best-ever rank; later round wins
+    ties — it faced stronger carry-forward competition) and run ONE rich shortlist
+    query for the global ranking → the existing shortlisted/nlm_rank columns."""
+    params = st.get("params") or {}
+    target = int(params.get("target", 40))
+    ledger = st.get("ledger") or {}
+    ranked = sorted(((int(k), v) for k, v in ledger.items() if int(k) in docs_by_id),
+                    key=lambda kv: (kv[1][0], -kv[1][1]))
+    finalists = [k for k, _ in ranked[:min(target, 49)]]
+    if not finalists:
+        _screen_set(tab_id, step="done", status_text="✅ done — nothing graduated", error=None)
+        db.append_message(tab_id, "s",
+            "🔬 Mega-screen finished: NotebookLM named NO candidate in any round — "
+            "nothing to shortlist. Check the benchmark features, or verify a sample "
+            "with 🏆 deep-compare.")
+        return
+    _screen_set(tab_id, status_text=f"🏁 finalize: staging top {len(finalists)}…")
+    nb, bm_sid, key_map, _failed = _screen_stage(tab_id, st, finalists, docs_by_id)
+    bm = db.get_benchmark(tab_id)
+    spec = _benchmark_feature_spec_for_nlm(bm)
+    question = NLM_SHORTLIST_PROMPT.format(benchmark=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
+    _screen_set(tab_id, status_text="🏁 finalize: asking for the global ranking…")
+    res = nlm_bridge.query(nb, question)
+    if nlm_bridge.is_quota_error(res):
+        _screen_quota_pause(tab_id, res.get("error") or "quota exhausted")
+        return
+    if "answer" in res and not _shortlist_answer_complete(res["answer"]):
+        res = nlm_bridge.query(nb, question)
+    if "error" in res or not _shortlist_answer_complete(res.get("answer", "")):
+        _screen_set(tab_id, error=(res.get("error") or "finalize answer truncated")[:300],
+                    status_text="⚠️ finalize failed — ▶️ Resume retries")
+        db.append_message(tab_id, "s", "🔬 Mega-screen finalize failed "
+                          f"({(res.get('error') or 'truncated answer')[:160]}) — ▶️ Resume retries it.")
+        return
+    ordered, unmatched = _screen_parse_ranked(res["answer"], key_map)
+    final_ids = ordered + [i for i in finalists if i not in set(ordered)]
+    db.set_shortlisted(tab_id, final_ids)
+    st = _screen_read(tab_id) or {}
+    total, rounds = len(st.get("queue") or []), st.get("round", 0)
+    participants = [{"kind": "benchmark", "title": _benchmark_label(bm)},
+                    {"kind": "notebook", "title": st.get("notebook_title") or nb}]
+    db.append_message(tab_id, "q",
+                      f"[🔬 NLM mega-screen finalize — global ranking of the top "
+                      f"{len(finalists)} graduate(s) from {rounds} round(s) over {total} candidate(s)]")
+    db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
+                      model="notebooklm", participants=participants)
+    stray = (st.get("unmatched") or []) + unmatched
+    db.append_message(tab_id, "s",
+        f"🔬 Mega-screen DONE: {total} candidate(s) screened in {rounds} round(s), "
+        f"{len(st.get('ledger') or {})} graduated, top {len(final_ids)} written to the "
+        f"shortlist (📓 rank + ☑ auto-checked) — now run 🏆 Verify shortlist for the "
+        "precise Claude read. All of this cost ZERO Claude tokens."
+        + (f"\n\n({len(set(stray))} number(s) NLM named are not in the pool: "
+           f"{', '.join(sorted(set(stray))[:15])}…)" if stray else ""))
+    _screen_set(tab_id, step="done", status_text="✅ done", error=None)
+
+
+# --- quota watchdog (mirrors the ⏳ token-limit watchdog for Claude reads) ---
+
+def _screen_quota_pause(tab_id: int, err: str) -> None:
+    resume_at = time.time() + SCREEN_QUOTA_PROBE_EVERY
+    _screen_set(tab_id, quota={"paused": True, "resume_at": resume_at,
+                               "paused_at": time.time(), "err": (err or "")[:300]},
+                status_text="😴 NLM quota exhausted — auto-resume armed")
+    db.append_message(tab_id, "s",
+        "😴 NotebookLM's Q&A quota is exhausted (typically resets in 6-12h; source "
+        "staging still works). The mega-screen is PAUSED and will probe hourly and "
+        f"auto-resume — nothing to click. ({(err or '')[:160]})")
+    _spawn_screen_watchdog(tab_id)
+
+
+def _spawn_screen_watchdog(tab_id: int) -> None:
+    with _screen_watchdogs_mu:
+        t = _screen_watchdogs.get(tab_id)
+        if t and t.is_alive():
+            return
+        t = threading.Thread(target=_screen_watchdog_loop, args=(tab_id,), daemon=True)
+        _screen_watchdogs[tab_id] = t
+        t.start()
+
+
+def _screen_watchdog_loop(tab_id: int) -> None:
+    while True:
+        st = _screen_read(tab_id)
+        quota = (st or {}).get("quota") or {}
+        if not st or not quota.get("paused") or st.get("step") == "done":
+            return                                        # resumed manually / finished / gone
+        if time.time() - (quota.get("paused_at") or 0) > SCREEN_QUOTA_GIVE_UP:
+            _screen_set(tab_id, quota=None,
+                        error="NLM quota still exhausted after 24h of probing",
+                        status_text="⚠️ gave up probing — ▶️ Resume manually")
+            db.append_message(tab_id, "s",
+                "🔬 Mega-screen: the NotebookLM quota was still exhausted after ~24h of "
+                "hourly probes — giving up on auto-resume. ▶️ Resume it manually later.")
+            return
+        wait_s = (quota.get("resume_at") or 0) - time.time()
+        if wait_s > 0:
+            time.sleep(min(wait_s, 300))                  # re-read every ≤5min (manual resume shifts state)
+            continue
+        if _screen_running(tab_id):
+            time.sleep(300)
+            continue
+        nb = st.get("notebook_id")
+        probe = nlm_bridge.query(nb, "Reply with exactly: OK") if nb else {"error": "no notebook"}
+        if nlm_bridge.is_quota_error(probe) or "error" in probe:
+            _screen_set(tab_id, quota={**quota, "resume_at": time.time() + SCREEN_QUOTA_PROBE_EVERY})
+            continue
+        _screen_set(tab_id, quota=None, error=None, status_text="▶️ quota back — resuming…")
+        db.append_message(tab_id, "s", "😴→▶️ Mega-screen: the NotebookLM quota is back — "
+                                       "resuming the rotation where it left off.")
+        _screen_launch(tab_id)
+        return
+
+
+def _screen_launch(tab_id: int) -> bool:
+    """Start the job thread under the exclusive lock. False = already running."""
+    lock = _screen_lock_path(tab_id)
+    if _screen_running(tab_id):
+        return False
+    try:
+        os.unlink(lock)                                   # clear a STALE lock (mtime past TTL)
+    except OSError:
+        pass
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+    except FileExistsError:
+        return False
+    try:
+        os.unlink(_screen_pause_path(tab_id))
+    except OSError:
+        pass
+    threading.Thread(target=_run_nlm_screen, args=(tab_id,), daemon=True).start()
+    return True
+
+
+@app.post("/api/tabs/{tab_id}/nlm-screen")
+def nlm_screen_start(tab_id: int, body: schemas.NlmScreenRequest):
+    """Start (or ▶️ Resume) the 🔬 NLM mega-screen rotation job."""
+    _tab_or_404(tab_id)
+    ok, why = nlm_bridge.available()
+    if not ok:
+        raise HTTPException(400, f"NotebookLM unavailable: {why}")
+    stt = _screen_status(tab_id)
+    if stt["running"]:
+        return {"started": False, **stt}
+    if body.resume:
+        st = _screen_read(tab_id)
+        if not st or st.get("step") not in ("round", "finalize"):
+            raise HTTPException(400, "no interrupted mega-screen to resume")
+        _screen_set(tab_id, error=None, quota=None, stop=False, status_text="▶️ resuming…")
+        started = _screen_launch(tab_id)
+        return {"started": started, "resumed": True, **_screen_status(tab_id)}
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("status") != "ready":
+        raise HTTPException(400, "benchmark is not ready — set it first")
+    cands = [d for d in db.list_documents(tab_id) if d["status"] == "fetched"]
+    if body.doc_ids:
+        want = set(body.doc_ids)
+        cands = [d for d in cands if d["id"] in want]
+    if not body.include_screened:
+        cands = [d for d in cands if not d.get("nlm_screened_at")]
+    if not cands:
+        raise HTTPException(400, "no fetched candidates to screen"
+                            + ("" if body.include_screened
+                               else " (all already screened — tick ↻ include screened)"))
+    _screen_set(tab_id, step="round", queue=[d["id"] for d in cands], cursor=0, round=0,
+                roster=[], survivors=[], ledger={}, unmatched=[],
+                params={"batch_size": body.batch_size, "survivor_cap": body.survivor_cap,
+                        "target": body.target},
+                started_at=db._now(), quota=None, stop=False, error=None,
+                status_text="queued…")
+    rounds = -(-len(cands) // body.batch_size)
+    db.append_message(tab_id, "s",
+        f"🔬 NLM mega-screen STARTED over {len(cands)} candidate(s): ~{rounds} round(s) of "
+        f"{body.batch_size} through one rotating notebook, {body.survivor_cap} survivors "
+        f"carry forward each round, finalize writes the top ~{body.target} to the shortlist. "
+        "Free (zero Claude tokens); survives restarts; NLM quota pauses auto-resume.")
+    started = _screen_launch(tab_id)
+    return {"started": started, "rounds_estimate": rounds, **_screen_status(tab_id)}
+
+
+@app.get("/api/tabs/{tab_id}/nlm-screen/status")
+def nlm_screen_status(tab_id: int):
+    """File+DB derived — correct from any gunicorn worker."""
+    _tab_or_404(tab_id)
+    return _screen_status(tab_id)
+
+
+@app.post("/api/tabs/{tab_id}/nlm-screen/pause")
+def nlm_screen_pause(tab_id: int):
+    """Halt at the next round boundary (sources stay; ▶️ Resume continues)."""
+    _tab_or_404(tab_id)
+    with open(_screen_pause_path(tab_id), "w"):
+        pass
+    return {"pausing": True, **_screen_status(tab_id)}
+
+
+@app.post("/api/tabs/{tab_id}/nlm-screen/stop")
+def nlm_screen_stop(tab_id: int):
+    """Stop rotating and finalize NOW from the graduates ledger accumulated so far."""
+    _tab_or_404(tab_id)
+    st = _screen_read(tab_id)
+    if not st or st.get("step") == "done":
+        raise HTTPException(400, "no mega-screen in progress")
+    _screen_set(tab_id, stop=True)
+    if not _screen_running(tab_id):                       # not running → finalize directly
+        _screen_set(tab_id, step="finalize", error=None, quota=None)
+        _screen_launch(tab_id)
+    return {"stopping": True, **_screen_status(tab_id)}
+
+
 RECONCILE_MAX_DOCS = 30      # cap the disagreement set so the single call stays cheap
 
 
@@ -5165,9 +5692,14 @@ def _stored_assessment(d: dict) -> str:
 
 def _promise(d: dict) -> float:
     """Rank key: read the MOST PROMISING first (avg of any Claude/NLM score we have),
-    so a limited token budget is spent on the best candidates before it runs out."""
+    so a limited token budget is spent on the best candidates before it runs out.
+    With no score at all, a doc the 🔬 mega-screen explicitly REJECTED ranks below a
+    never-screened unknown (a graduate keeps the unknowns' rank — its real rank comes
+    from nlm_rank once the finalize writes the shortlist)."""
     vals = [v for v in (d.get("score"), d.get("nlm_score")) if v is not None]
-    return sum(vals) / len(vals) if vals else -1.0
+    if vals:
+        return sum(vals) / len(vals)
+    return -2.0 if d.get("nlm_screen_state") == "rejected" else -1.0
 
 
 # ---------- ⏳ token-limit watchdog: auto-resume the read when the window resets ----------
@@ -5661,3 +6193,10 @@ for _p in glob.glob(os.path.join(os.path.dirname(db.DB_PATH) or ".",
     _m = re.search(r"\.claude_read_(\d+)\.resume\.json$", _p)
     if _m:
         _spawn_limit_watchdog(int(_m.group(1)))
+
+# Same for a 🔬 mega-screen that was quota-paused when the container stopped —
+# its state file survives; the watchdog resumes the wait instead of dropping it.
+for _p in glob.glob(os.path.join(os.path.dirname(db.DB_PATH) or ".", ".nlm_screen_*.json")):
+    _m = re.search(r"\.nlm_screen_(\d+)\.json$", _p)
+    if _m and ((_screen_read(int(_m.group(1))) or {}).get("quota") or {}).get("paused"):
+        _spawn_screen_watchdog(int(_m.group(1)))

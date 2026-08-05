@@ -229,6 +229,11 @@ def _conn():
             con.execute("ALTER TABLE documents ADD COLUMN figures_n INTEGER")
         if "origin_tab_id" not in dcols:   # cross-tab import: which tab this copy came from
             con.execute("ALTER TABLE documents ADD COLUMN origin_tab_id INTEGER")
+        if "nlm_screened_at" not in dcols:  # 🔬 NLM mega-screen: when this doc was last
+            con.execute("ALTER TABLE documents ADD COLUMN nlm_screened_at INTEGER")
+            # rotated through the screening notebook, and what came of it —
+            # 'graduate' (named in a round's ranking) | 'rejected' | 'add_failed'
+            con.execute("ALTER TABLE documents ADD COLUMN nlm_screen_state TEXT")
         bmcols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "nlm_source_notebook" not in bmcols:   # benchmark mirrored into which notebook
             con.execute("ALTER TABLE benchmark ADD COLUMN nlm_source_notebook TEXT")
@@ -339,6 +344,7 @@ def list_documents(tab_id: int, full: bool = False) -> list[dict]:
             "digest_model, text_model, figures_n, "
             "nlm_score, nlm_score_note, nlm_scored_at, "
             "nlm_source_notebook, shortlisted, nlm_rank, additional_scores, "
+            "nlm_screened_at, nlm_screen_state, "
             "length(abstract) AS abstract_len, length(claims) AS claims_len, "
             "length(description) AS description_len, length(digest) AS digest_len, "
             "length(verdict) AS verdict_len")
@@ -379,6 +385,18 @@ def set_shortlisted(tab_id: int, doc_ids: list[int]) -> None:
         for rank, did in enumerate(doc_ids, 1):     # best-first → rank 1, 2, 3…
             c.execute("UPDATE documents SET shortlisted=1, nlm_rank=? WHERE tab_id=? AND id=?",
                       (rank, tab_id, did))
+
+
+def mark_screened(tab_id: int, doc_ids: list[int], state: str) -> None:
+    """🔬 NLM mega-screen bookkeeping: stamp docs as screened this round with their
+    outcome ('graduate' | 'rejected' | 'add_failed'). Bulk, one round at a time."""
+    if not doc_ids:
+        return
+    now = _now()
+    with _conn() as c:
+        c.executemany("UPDATE documents SET nlm_screened_at=?, nlm_screen_state=? "
+                      "WHERE tab_id=? AND id=?",
+                      [(now, state, tab_id, did) for did in doc_ids])
 
 
 def clear_nlm_refs(tab_id: int, notebook_id: str) -> int:

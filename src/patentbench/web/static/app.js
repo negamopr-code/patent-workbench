@@ -248,6 +248,7 @@ async function selectTab(id) {
   pollRate();                     // resume showing progress if an NLM rating job is in flight
   pollRead();                     // resume showing progress if a Claude deep-read is in flight
   attachPipeline();               // re-attach / offer ▶️ Resume if a pipeline job is in flight
+  attachScreen();                 // same for a 🔬 NLM mega-screen rotation
   rehydrateCombi(id);             // restore the 🔎 investigation panel from stored coverage
 }
 
@@ -1939,6 +1940,21 @@ function renderDocs(allDocs) {
         nbm.title = 'Not a source in any NotebookLM notebook — the 📓 NLM shortlist cannot see this candidate. Use 📓➕ to add it.';
       }
       row1.appendChild(nbm);
+      // 🔬 mega-screen coverage chip: was this candidate rotated through the free
+      // NLM screening tournament, and what came of it?
+      if (d.nlm_screened_at) {
+        const sc = document.createElement('span');
+        const stt = d.nlm_screen_state;
+        sc.className = 'chip ' + (stt === 'graduate' ? 'nlm-in' : 'nlm-out');
+        sc.textContent = stt === 'graduate' ? '🔬 graduate'
+          : (stt === 'add_failed' ? '🔬 add failed' : '🔬 screened');
+        sc.title = stt === 'graduate'
+          ? 'NLM mega-screen: named in a round\'s ranking (graduates ledger) — its final place is the 📓 rank once finalize runs.'
+          : (stt === 'add_failed'
+            ? 'NLM mega-screen: NotebookLM accepted but never indexed this source (ghost) — it was NOT assessed; re-screen it later.'
+            : 'NLM mega-screen: rotated through the screening notebook and not named — deprioritized for deep reads.');
+        row1.appendChild(sc);
+      }
       // Figures-read badge: figures are OPT-IN (vision cost), so a text-only read is
       // normal — but the deficiency must be visible at a glance, with the fix one
       // click away (run a detailed check including drawings on THIS document).
@@ -3382,6 +3398,77 @@ async function launchConsolidate(consolidateOnly) {
 }
 $('consolidate-go').onclick = () => launchConsolidate(false);
 $('consolidate-only').onclick = () => launchConsolidate(true);
+
+/* ---------- 🔬 NLM mega-screen: free rotation tournament over a huge pool ---------- */
+let screenPoll = null;
+$('nlm-screen').onclick = async () => {
+  if (!activeTab) return;
+  const fetched = lastDocs.filter(d => d.status === 'fetched');
+  if (!fetched.length) { alert('No fetched candidates yet.'); return; }
+  const todo = fetched.filter(d => !d.nlm_screened_at).length;
+  const rounds = Math.ceil(todo / 39);
+  if (!todo) {
+    alert(`All ${fetched.length} fetched candidate(s) are already screened. `
+      + 'The graduates are in the shortlist (📓 rank); re-run is only useful after the benchmark changes.');
+    return;
+  }
+  if (!confirm(`🔬 Mega-screen ${todo} candidate(s) with NotebookLM for FREE?\n\n`
+    + `~${rounds} round(s) of ~39 docs rotate through ONE screening notebook; 10 survivors `
+    + 'carry forward each round; at the end the global top ~40 land in the shortlist for '
+    + '🤖 Verify.\n\nHonest estimate: ~7-13 min per round '
+    + `(≈ ${Math.round(rounds * 10 / 60 * 10) / 10}h active for this pool) plus possible NLM `
+    + 'quota pauses of 6-12h (it auto-resumes). Runs on the server — close the tab freely. '
+    + 'Zero Claude tokens.')) return;
+  const res = await api(`/api/tabs/${activeTab}/nlm-screen`, { method: 'POST', body: JSON.stringify({}) });
+  if (res.error) { $('funnel-status').textContent = `Error: ${res.error}`; return; }
+  reloadChat();
+  pollScreen();
+};
+$('screen-resume').onclick = async () => {
+  const res = await api(`/api/tabs/${activeTab}/nlm-screen`, {
+    method: 'POST', body: JSON.stringify({ resume: true }) });
+  if (res.error) { $('funnel-status').textContent = `Resume failed: ${res.error}`; return; }
+  pollScreen();
+};
+$('screen-stop').onclick = async () => {
+  if (!confirm('Stop rotating and finalize NOW from the graduates found so far?')) return;
+  await api(`/api/tabs/${activeTab}/nlm-screen/stop`, { method: 'POST', body: '{}' });
+  pollScreen();
+};
+async function pollScreen() {
+  clearTimeout(screenPoll);
+  if (!activeTab) return;
+  const tabAt = activeTab;
+  const s = await api(`/api/tabs/${activeTab}/nlm-screen/status`);
+  if (activeTab !== tabAt || !s.present) return;
+  const fs = $('funnel-status'), rb = $('screen-resume'), sb = $('screen-stop');
+  const prog = `round ${s.round || 0} — ${s.screened || 0}/${s.total || 0} screened, `
+    + `${s.graduates || 0} graduate(s)`;
+  if (s.phase === 'running') {
+    fs.textContent = `🔬 ${s.status_text || 'working…'} (${prog})`;
+    rb.classList.add('hidden'); sb.classList.remove('hidden');
+    screenPoll = setTimeout(pollScreen, 5000);
+  } else if (s.phase === 'quota_paused') {
+    const at = s.quota_resume_at ? new Date(s.quota_resume_at * 1000)
+      .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'soon';
+    fs.textContent = `😴 NLM quota exhausted — auto-probe ~${at}, resumes alone (${prog})`;
+    rb.classList.remove('hidden'); sb.classList.remove('hidden');
+    screenPoll = setTimeout(pollScreen, 30000);
+  } else if (s.phase === 'done') {
+    fs.textContent = `✅ Mega-screen done — ${prog}; shortlist written, now 🤖 Verify shortlist`;
+    rb.classList.add('hidden'); sb.classList.add('hidden');
+    reloadChat(); refreshDocs();
+  } else if (s.phase === 'paused' || s.phase === 'interrupted' || s.phase === 'error') {
+    fs.textContent = `⚠️ Mega-screen ${s.phase}${s.error ? ' — ' + s.error : ''} (${prog})`;
+    rb.classList.remove('hidden');
+    sb.classList.toggle('hidden', !(s.graduates > 0));
+  }
+}
+// re-attach on tab load — a screen may be running/paused from a previous visit
+async function attachScreen() {
+  const s = await api(`/api/tabs/${activeTab}/nlm-screen/status`);
+  if (s.present && s.phase !== 'idle' && s.phase !== 'done') pollScreen();
+}
 
 /* ---------- consolidate→shortlist→debate background job (crash-resilient) ---------- */
 let pipelinePoll = null;

@@ -27,8 +27,13 @@ DATA_DIR="$(dirname "${PB_DB:-/data/workbench.db}")"
 rm -f "$DATA_DIR"/.claude_read_*.lock \
       "$DATA_DIR"/.claude_read_*.pause \
       "$DATA_DIR"/.nlm_rate_*.lock \
+      "$DATA_DIR"/.nlm_screen_*.lock \
+      "$DATA_DIR"/.nlm_screen_*.pause \
       "$DATA_DIR"/psa/pending.json \
       "$DATA_DIR"/psa/*-pending.json 2>/dev/null || true
+# NOTE: .nlm_screen_*.json (the mega-screen's resume state) is deliberately KEPT —
+# like .claude_read_*.resume.json and .pipeline_*.json it survives restarts so the
+# job shows as interrupted/quota-paused and can auto-resume or be ▶️ Resumed.
 echo "entrypoint: cleared stale background-job locks in $DATA_DIR"
 
 exec gunicorn patentbench.web.api:app -k uvicorn.workers.UvicornWorker \

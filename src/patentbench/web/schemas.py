@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TabCreate(BaseModel):
@@ -182,6 +182,31 @@ class PipelineRequest(BaseModel):
     include_benchmark: bool = True
     consolidate_only: bool = False         # stop after copying the 49 in — no shortlist, no NLM query
     resume: bool = False
+
+
+class NlmScreenRequest(BaseModel):
+    """🔬 NLM mega-screen: evaluate an arbitrarily large candidate pool for FREE by
+    rotating batches through ONE dedicated screening notebook (free tier = 50 sources).
+    Each round: benchmark + carry-forward survivors + a fresh batch → one holistic
+    ranking question; survivors compete every round (cross-batch calibration), every
+    doc ever named lands in a graduates ledger; finalize refills the notebook with the
+    ledger's best and writes the global shortlist (shortlisted + nlm_rank). Resumable;
+    quota exhaustion auto-pauses and auto-resumes. NLM = recall pre-filter — ranking
+    authority stays with the 🏆 Claude verification of the finalists."""
+    resume: bool = False
+    doc_ids: list[int] | None = None       # None = every fetched candidate
+    include_screened: bool = False         # False = skip docs already screened earlier
+    batch_size: int = Field(default=39, ge=5, le=48)
+    survivor_cap: int = Field(default=10, ge=1, le=20)
+    target: int = Field(default=40, ge=5, le=49)   # finalize shortlist size
+
+    @model_validator(mode="after")
+    def _fits_notebook(self):
+        # 1 benchmark + survivors + fresh batch must fit the 50-source notebook cap
+        if 1 + self.survivor_cap + self.batch_size > 50:
+            raise ValueError("1 benchmark + survivor_cap + batch_size must be ≤ 50 "
+                             f"(got {1 + self.survivor_cap + self.batch_size})")
+        return self
 
 
 class CrossTabScanRequest(BaseModel):
