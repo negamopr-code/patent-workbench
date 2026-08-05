@@ -1819,19 +1819,28 @@ function renderDocs(allDocs) {
                       && batch[batch.length - 1].added_at - byAdd[i].added_at <= GAP; i++) {
         batch.push(byAdd[i]);
       }
-      if (batch.length < byAdd.length) {
+      // Only the newcomers that still NEED reading: 🏆 Deep-analyse selected re-reads
+      // whatever is checked, so ticking an already-read doc here would re-spend tokens
+      // on it. As reads land, this count shrinks; at 0 the button disappears.
+      const batchLeft = batch.filter(d => !readAtLevel(d));
+      if (batch.length < byAdd.length && batchLeft.length) {
         const when = new Date(byAdd[0].added_at * 1000)
           .toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         const pickNew = document.createElement('button');
         pickNew.className = 'btn small';
-        pickNew.textContent = `☑ select ${batch.length} just added`;
+        pickNew.textContent = `☑ select ${batchLeft.length} just added`;
         pickNew.title =
-          `Tick the ${batch.length} fetched candidate(s) of the LATEST add-batch `
+          `Tick the ${batchLeft.length} fetched candidate(s) of the LATEST add-batch `
           + `(added around ${when}; docs added within 30 min of each other count as one `
-          + 'batch), ADDING them to the selection — then 🏆 Deep-analyse selected reads '
+          + 'batch) that are NOT yet read by the chosen 📖 model or stronger'
+          + (batchLeft.length < batch.length
+             ? ` — ${batch.length - batchLeft.length} of the batch already read, left unticked `
+               + 'so 🏆 Deep-analyse selected never re-spends tokens on them'
+             : '')
+          + '. ADDS them to the selection — then 🏆 Deep-analyse selected reads '
           + 'the newcomers first, before the older backlog.';
         pickNew.onclick = () => {
-          for (const d of batch) docSelection.add(d.id);
+          for (const d of batchLeft) docSelection.add(d.id);
           // Same reason as ☑ not-rated above: an active filter would prune hidden picks.
           docsFilter = 'all';
           renderDocs(allDocs);
