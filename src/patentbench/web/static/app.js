@@ -3444,6 +3444,11 @@ $('screen-stop').onclick = async () => {
   await api(`/api/tabs/${activeTab}/nlm-screen/stop`, { method: 'POST', body: '{}' });
   pollScreen();
 };
+$('screen-pause').onclick = async () => {
+  await api(`/api/tabs/${activeTab}/nlm-screen/pause`, { method: 'POST', body: '{}' });
+  $('funnel-status').textContent = '⏸ pausing — the round in flight finishes first (sources stay; ▶️ Resume continues where it left off)…';
+  pollScreen();
+};
 async function pollScreen() {
   clearTimeout(screenPoll);
   if (!activeTab) return;
@@ -3451,8 +3456,10 @@ async function pollScreen() {
   const s = await api(`/api/tabs/${activeTab}/nlm-screen/status`);
   if (activeTab !== tabAt || !s.present) return;
   const fs = $('funnel-status'), rb = $('screen-resume'), sb = $('screen-stop');
+  const pb = $('screen-pause');
   const prog = `round ${s.round || 0} — ${s.screened || 0}/${s.total || 0} screened, `
     + `${s.graduates || 0} graduate(s)`;
+  if (pb) pb.classList.toggle('hidden', s.phase !== 'running');
   if (s.phase === 'running') {
     fs.textContent = `🔬 ${s.status_text || 'working…'} (${prog})`;
     rb.classList.add('hidden'); sb.classList.remove('hidden');
