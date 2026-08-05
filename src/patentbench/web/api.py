@@ -1,6 +1,7 @@
 """Patent Workbench FastAPI app — tabs, documents, chat, NotebookLM, lessons."""
 from __future__ import annotations
 
+import glob
 import hashlib
 import itertools
 import json
@@ -12,6 +13,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from datetime import datetime, timedelta, timezone
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -5168,6 +5170,127 @@ def _promise(d: dict) -> float:
     return sum(vals) / len(vals) if vals else -1.0
 
 
+# ---------- ⏳ token-limit watchdog: auto-resume the read when the window resets ----------
+# The subscription window can exhaust MID-read ("You've hit your session limit ·
+# resets 8:30pm (UTC)"): every further call fails until the reset, so the batch
+# used to grind to the end earning nothing and the user had to notice and click
+# ▶️ Continue hours later. Now the read stops at the first full worker-window of
+# limit errors, the request is persisted next to the DB (survives a container
+# restart), and a watchdog thread wakes at the announced reset time (fallback:
+# periodic probe), verifies the window is open with one tiny call, and relaunches
+# the SAME deep-compare in Continue mode — already-read candidates are skipped;
+# if everything was read and only the ranking failed, it re-ranks with zero
+# re-reading. Manual ▶️ Continue before the reset stays possible and harmless.
+_LIMIT_ERR = re.compile(r"(session|usage|5-hour|weekly)\s+limit", re.IGNORECASE)
+_LIMIT_RESET = re.compile(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)\s*\(UTC\)", re.IGNORECASE)
+_LIMIT_MARGIN = 180             # relaunch this many seconds after the announced reset
+_LIMIT_PROBE_EVERY = 15 * 60    # re-probe cadence when no reset time is announced
+_limit_watchdogs: dict[int, threading.Thread] = {}
+_limit_watchdogs_mu = threading.Lock()
+
+
+def _limit_resume_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".",
+                        f".claude_read_{tab_id}.resume.json")
+
+
+def _parse_limit_reset(err: str) -> float | None:
+    """'… resets 8:30pm (UTC)' → epoch of the NEXT such UTC wall-clock time."""
+    m = _LIMIT_RESET.search(err or "")
+    if not m:
+        return None
+    h = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "pm" else 0)
+    at = datetime.now(timezone.utc).replace(hour=h, minute=int(m.group(2) or 0),
+                                            second=0, microsecond=0)
+    if at <= datetime.now(timezone.utc):
+        at += timedelta(days=1)
+    return at.timestamp()
+
+
+def _arm_limit_watchdog(tab_id: int, *, doc_ids: list[int], model: str, read_model: str,
+                        skills: list[str], question: str, err: str) -> None:
+    reset_ep = _parse_limit_reset(err)
+    resume_at = (reset_ep + _LIMIT_MARGIN) if reset_ep else (time.time() + _LIMIT_PROBE_EVERY)
+    state = {"tab_id": tab_id, "doc_ids": doc_ids, "model": model,
+             "read_model": read_model, "skills": list(skills or []),
+             "question": question, "resume_at": resume_at, "armed_at": db._now(),
+             "err": (err or "")[:300]}
+    with open(_limit_resume_path(tab_id), "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    when = (datetime.fromtimestamp(resume_at, timezone.utc).strftime("%H:%M UTC")
+            if reset_ep else f"~{_LIMIT_PROBE_EVERY // 60} min (no reset time announced; will probe)")
+    db.append_message(
+        tab_id, "s",
+        f"⏳ Token-limit watchdog ARMED — will auto-resume this deep-read/ranking in "
+        f"Continue mode around {when}. Already-read candidates are never re-read; "
+        "nothing to click. Survives a container restart. A manual ▶️ Continue before "
+        "then is fine — once the work completes, the watchdog stands down.")
+    _spawn_limit_watchdog(tab_id)
+
+
+def _disarm_limit_watchdog(tab_id: int) -> None:
+    try:
+        os.unlink(_limit_resume_path(tab_id))
+    except OSError:
+        pass
+
+
+def _spawn_limit_watchdog(tab_id: int) -> None:
+    with _limit_watchdogs_mu:
+        t = _limit_watchdogs.get(tab_id)
+        if t and t.is_alive():
+            return
+        t = threading.Thread(target=_limit_watchdog_loop, args=(tab_id,), daemon=True)
+        _limit_watchdogs[tab_id] = t
+        t.start()
+
+
+def _limit_watchdog_loop(tab_id: int) -> None:
+    path = _limit_resume_path(tab_id)
+    while True:
+        try:
+            with open(path, encoding="utf-8") as f:
+                state = json.load(f)
+        except OSError:
+            return                              # disarmed (completed or user deleted)
+        except ValueError:
+            os.unlink(path)
+            return
+        wait_s = state.get("resume_at", 0) - time.time()
+        if wait_s > 0:
+            time.sleep(min(wait_s, 300))        # re-read the file every ≤5 min (re-arms shift it)
+            continue
+        if _claude_read_running(tab_id):        # a manual run is in flight — let it finish
+            time.sleep(300)
+            continue
+        # the window should be open — verify with one tiny call before relaunching
+        probe = claude_bridge._run_claude("Reply with exactly: OK",
+                                          claude_bridge.DIGEST_MODEL, timeout=180)
+        if "error" in probe:
+            nxt = _parse_limit_reset(probe["error"])
+            state["resume_at"] = ((nxt + _LIMIT_MARGIN) if nxt
+                                  else time.time() + _LIMIT_PROBE_EVERY)
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(state, f)
+            except OSError:
+                return
+            continue
+        _disarm_limit_watchdog(tab_id)          # relaunching now; a new limit hit re-arms
+        db.append_message(tab_id, "s",
+                          "⏳→▶️ Watchdog: token window is open again — resuming the "
+                          "deep-read/ranking (Continue mode, already-read skipped).")
+        body = schemas.DeepCompareRequest(
+            model=state.get("model"), skills=state.get("skills") or [],
+            question=state.get("question"), doc_ids=state.get("doc_ids") or None,
+            reading_model=state.get("read_model"), skip_scored=True)
+        try:
+            deep_compare(tab_id, body)
+        except HTTPException as e:
+            db.append_message(tab_id, "s", f"⏳ Watchdog could not resume: {e.detail}")
+        return
+
+
 def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: str,
                      skills: list[str], question: str, scope_label: str) -> None:
     lock = _claude_read_lock_path(tab_id)
@@ -5210,7 +5333,7 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
         # through all candidates earning nothing and the UI sat on "assessing 0/N"
         # (bit 2026-07-28: 577 × 401 after a container-recreate rotated the token).
         _auth_err = re.compile(r"401|OAuth|revoked|authenticat", re.IGNORECASE)
-        verdicts, paused, auth_dead = [], False, False
+        verdicts, paused, auth_dead, limit_dead = [], False, False, False
         with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
             pending, nxt = {}, iter(docs)
             for _ in range(DIGEST_WORKERS):           # prime the window
@@ -5227,6 +5350,19 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                         and len(verdicts) >= DIGEST_WORKERS
                         and all(_auth_err.search(v["verdict"] or "") for v in verdicts)):
                     auth_dead = True                  # nothing will succeed — stop the batch
+                    for fut in pending:
+                        verdicts.append(fut.result())
+                    pending.clear()
+                    break
+                # LIMIT CIRCUIT BREAKER — the subscription window exhausted mid-run:
+                # once a full worker-window of consecutive results are all limit
+                # errors, the rest of the batch cannot fare better until the window
+                # resets. Stop burning time; the watchdog below auto-resumes.
+                tail = verdicts[-DIGEST_WORKERS:]
+                if (len(tail) >= DIGEST_WORKERS
+                        and all((not v["ok"]) and _LIMIT_ERR.search(v["verdict"] or "")
+                                for v in tail)):
+                    limit_dead = True                 # nothing succeeds until the reset
                     for fut in pending:
                         verdicts.append(fut.result())
                     pending.clear()
@@ -5254,6 +5390,18 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
             return
         read = sum(1 for v in verdicts if v["ok"])
         failed = len(verdicts) - read
+        if limit_dead:
+            last_err = next((v["verdict"] for v in reversed(verdicts)
+                             if not v["ok"] and _LIMIT_ERR.search(v["verdict"] or "")), "")
+            db.append_message(
+                tab_id, "s",
+                f"⛔ Token window EXHAUSTED — assessed {read}/{len(docs)} this run "
+                f"({read_model}); {len(docs) - read} left unread (their reads were NOT "
+                f"wasted attempts — nothing was overwritten). Error: {last_err[:200]}")
+            _arm_limit_watchdog(tab_id, doc_ids=doc_ids, model=model,
+                                read_model=read_model, skills=skills,
+                                question=question, err=last_err)
+            return                                    # the watchdog finishes the job
         if paused:
             remaining = len(docs) - len(verdicts)
             db.append_message(
@@ -5346,7 +5494,14 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                                         model=model, history=history, rank_rule=rank_rule)
         if "error" in res:
             db.append_message(tab_id, "s", f"Claude error compiling the ranking: {res['error']}")
+            if _LIMIT_ERR.search(res["error"] or ""):
+                # reads are stored; only the ranking is missing → the watchdog's
+                # Continue relaunch will re-rank from stored assessments (0 re-reads)
+                _arm_limit_watchdog(tab_id, doc_ids=doc_ids, model=model,
+                                    read_model=read_model, skills=skills,
+                                    question=question, err=res["error"])
         else:
+            _disarm_limit_watchdog(tab_id)     # ranking delivered — armed job (if any) is done
             db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
                               model=model, participants=participants)
             for les in res.get("lessons", []):
@@ -5497,3 +5652,12 @@ class _RevalidatingStatic(StaticFiles):
 
 _static = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/", _RevalidatingStatic(directory=_static, html=True), name="static")
+
+# Re-arm any ⏳ token-limit watchdog that was pending when the container stopped —
+# the state files live next to the DB, so a rebuild/restart resumes the wait
+# instead of silently dropping the promised auto-continue.
+for _p in glob.glob(os.path.join(os.path.dirname(db.DB_PATH) or ".",
+                                 ".claude_read_*.resume.json")):
+    _m = re.search(r"\.claude_read_(\d+)\.resume\.json$", _p)
+    if _m:
+        _spawn_limit_watchdog(int(_m.group(1)))

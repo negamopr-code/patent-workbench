@@ -4760,3 +4760,88 @@ def test_run_claude_timeout_kills_whole_process_group(tmp_path, monkeypatch):
     res = claude_bridge._run_claude("hi", "claude-sonnet-4-6", timeout=1)
     assert _time.monotonic() - t0 < 10          # returns promptly, no pipe-drain hang
     assert res == {"error": "claude chat timed out"}
+
+
+# ---------- ⏳ token-limit watchdog ----------
+
+def test_parse_limit_reset_times():
+    import time as _t
+    for s in ["You've hit your session limit · resets 8:30pm (UTC)",
+              "You've hit your session limit · resets 12am (UTC)"]:
+        ep = api._parse_limit_reset(s)
+        assert ep is not None and _t.time() < ep <= _t.time() + 24 * 3600 + 60
+    assert api._parse_limit_reset("some other error") is None
+
+
+def test_deep_read_limit_breaker_arms_watchdog(client, monkeypatch):
+    """Session-limit mid-read → stop after one worker-window of pure limit errors
+    (instead of grinding through all N), persist the request next to the DB and
+    arm the auto-resume watchdog. No ranking attempt on a dead window."""
+    tab = client.post("/api/tabs", json={"name": "Lim"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    nums = " ".join(f"CN11486{i:04d}" for i in range(40))
+    client.post(f"/api/tabs/{tid}/documents", json={"text": nums})
+    calls, spawned, reduced = [], [], []
+    monkeypatch.setattr(api, "_spawn_limit_watchdog", lambda t: spawned.append(t))
+    monkeypatch.setattr(
+        claude_bridge, "deep_map",
+        lambda bm, d, model=None, features=None: calls.append(d["number"]) or
+        {"error": "You've hit your session limit · resets 11:30pm (UTC)"})
+    monkeypatch.setattr(claude_bridge, "deep_reduce",
+                        lambda *a, **k: reduced.append(1) or {"answer": "x"})
+    client.post(f"/api/tabs/{tid}/deep-compare", json={})
+    _wait_read(client, tid)
+    assert len(calls) < 40                     # breaker fired, batch not ground through
+    assert not reduced                         # no ranking attempt on a dead window
+    import json as _json, os as _os
+    p = api._limit_resume_path(tid)
+    assert _os.path.exists(p) and spawned == [tid]
+    state = _json.load(open(p))
+    assert state["tab_id"] == tid and state["read_model"]
+    import time as _t
+    assert state["resume_at"] > _t.time()      # parsed 11:30pm (UTC) → the future
+    msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
+    assert any("EXHAUSTED" in m for m in msgs)
+    assert any("watchdog ARMED" in m for m in msgs)
+
+
+def test_ranking_limit_error_arms_watchdog(client, monkeypatch):
+    """Reads succeed but the final ranking hits the limit (the classic evening
+    failure) → watchdog armed; its Continue relaunch re-ranks from stored
+    assessments with zero re-reading."""
+    tab = client.post("/api/tabs", json={"name": "LimRank"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114853847B"})
+    monkeypatch.setattr(api, "_spawn_limit_watchdog", lambda t: None)
+    monkeypatch.setattr(claude_bridge, "deep_reduce",
+                        lambda *a, **k: {"error": "You've hit your session limit · resets 3pm (UTC)"})
+    client.post(f"/api/tabs/{tid}/deep-compare", json={})
+    _wait_read(client, tid)
+    import os as _os
+    assert _os.path.exists(api._limit_resume_path(tid))
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    assert all(d["score"] is not None for d in docs)   # the reads themselves were kept
+
+
+def test_limit_watchdog_resumes_when_window_opens(client, monkeypatch):
+    """State file with a due resume_at + successful probe → the watchdog disarms,
+    relaunches deep-compare in Continue mode, and the job completes."""
+    tab = client.post("/api/tabs", json={"name": "LimResume"}).json()
+    tid = tab["id"]
+    client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
+    client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114853847B"})
+    import json as _json, os as _os, time as _t
+    with open(api._limit_resume_path(tid), "w") as f:
+        _json.dump({"tab_id": tid, "doc_ids": None, "model": None, "read_model": None,
+                    "skills": [], "question": None, "resume_at": _t.time() - 1}, f)
+    monkeypatch.setattr(claude_bridge, "_run_claude",
+                        lambda *a, **k: {"answer": "OK"})          # probe: window open
+    api._limit_watchdog_loop(tid)              # run synchronously (prod: daemon thread)
+    _wait_read(client, tid)
+    assert not _os.path.exists(api._limit_resume_path(tid))        # disarmed
+    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    assert all(d["score"] is not None for d in docs)               # the read ran
+    msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
+    assert any("window is open again" in m for m in msgs)
