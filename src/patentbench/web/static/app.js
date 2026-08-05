@@ -3410,6 +3410,7 @@ $('consolidate-only').onclick = () => launchConsolidate(true);
 
 /* ---------- 🔬 NLM mega-screen: free rotation tournament over a huge pool ---------- */
 let screenPoll = null;
+let screenLastProg = '';   // refresh the doc list only when a round actually lands
 $('nlm-screen').onclick = async () => {
   if (!activeTab) return;
   const fetched = lastDocs.filter(d => d.status === 'fetched');
@@ -3460,6 +3461,9 @@ async function pollScreen() {
   const prog = `round ${s.round || 0} — ${s.screened || 0}/${s.total || 0} screened, `
     + `${s.graduates || 0} graduate(s)`;
   if (pb) pb.classList.toggle('hidden', s.phase !== 'running');
+  // a finished round wrote 🔬 graduate/screened chips to the DB — pull them into the
+  // list in real time instead of only at the very end
+  if (prog !== screenLastProg) { screenLastProg = prog; refreshDocs(); }
   if (s.phase === 'running') {
     fs.textContent = `🔬 ${s.status_text || 'working…'} (${prog})`;
     rb.classList.add('hidden'); sb.classList.remove('hidden');
