@@ -29,6 +29,7 @@ rm -f "$DATA_DIR"/.claude_read_*.lock \
       "$DATA_DIR"/.nlm_rate_*.lock \
       "$DATA_DIR"/.nlm_screen_*.lock \
       "$DATA_DIR"/.nlm_screen_*.pause \
+      "$DATA_DIR"/.auto_refetch.lock \
       "$DATA_DIR"/psa/pending.json \
       "$DATA_DIR"/psa/*-pending.json 2>/dev/null || true
 # NOTE: .nlm_screen_*.json (the mega-screen's resume state) is deliberately KEPT —

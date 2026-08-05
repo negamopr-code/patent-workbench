@@ -1647,6 +1647,78 @@ def document_delete(tab_id: int, doc_id: int):
     return {"ok": True}
 
 
+# ---------- 🔁 stuck-pending recovery ----------
+# _process_documents runs as FastAPI BackgroundTasks / a request-scoped thread — a
+# container restart kills it silently and its docs sit ⏳ pending forever (bit live:
+# 656 tab-11 docs after a rebuild; the workaround was a hand-rolled drain script).
+# Now: a bulk per-tab endpoint + a boot-time sweep re-queue them. Reuse-held
+# pendings (a fetched copy exists in another tab → the UI must ASK reuse-vs-refetch)
+# are pending BY DESIGN and are never auto-fetched.
+AUTO_REFETCH = os.environ.get("PB_AUTO_REFETCH", "1") not in ("0", "", "false", "no")
+STALE_PENDING_S = float(os.environ.get("PB_STALE_PENDING_MIN", "15")) * 60
+
+
+def _pending_stale_docs(tab_id: int) -> list[dict]:
+    """A tab's status='pending' docs older than the staleness window, excluding
+    reuse-held ones."""
+    now = db._now()
+    out = []
+    for d in db.list_documents(tab_id):
+        if d["status"] != "pending":
+            continue
+        if now - (d.get("added_at") or 0) < STALE_PENDING_S:
+            continue                     # a live add may still be working on it
+        if db.find_reusable_by_number(d["number"], exclude_tab_id=tab_id):
+            continue                     # held back for the reuse question, not lost
+        out.append(d)
+    return out
+
+
+@app.post("/api/tabs/{tab_id}/documents/refetch-pending")
+def documents_refetch_pending(tab_id: int):
+    """Bulk re-queue every stuck-pending document of this tab (fetch is a token-free
+    scrape; figures/digest follow the deploy defaults, i.e. off)."""
+    _tab_or_404(tab_id)
+    docs = _pending_stale_docs(tab_id)
+    if not docs:
+        return {"requeued": 0, "numbers": []}
+    ids = [d["id"] for d in docs]
+    for i in ids:
+        db.update_document(i, error=None)
+    threading.Thread(target=_process_documents, args=(ids,), daemon=True).start()
+    db.append_message(tab_id, "s",
+                      f"🔁 Re-queued {len(ids)} stuck pending fetch(es) — they were "
+                      "orphaned by a restart. Fetching now (token-free).")
+    return {"requeued": len(ids), "numbers": [d["number"] for d in docs][:50]}
+
+
+def _auto_refetch_sweep() -> None:
+    """Boot-time sweep: after the container settles, re-queue every tab's stuck
+    pendings. O_EXCL lock so only ONE gunicorn worker sweeps."""
+    time.sleep(float(os.environ.get("PB_AUTO_REFETCH_DELAY", "60")))
+    lock = os.path.join(os.path.dirname(db.DB_PATH) or ".", ".auto_refetch.lock")
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+    except (FileExistsError, OSError):
+        return
+    try:
+        for t in db.list_tabs():
+            docs = _pending_stale_docs(t["id"])
+            if not docs:
+                continue
+            ids = [d["id"] for d in docs]
+            for i in ids:
+                db.update_document(i, error=None)
+            db.append_message(t["id"], "s",
+                              f"🔁 Auto-resume after restart: {len(ids)} pending "
+                              "fetch(es) had been orphaned — re-queued (token-free "
+                              "fetch; reuse-held documents untouched).")
+            _process_documents(ids)      # serial per tab — the fetcher throttles itself
+    except Exception:
+        pass                             # a failed sweep must never take the app down
+
+
 # ---------- upload (photos / PDF / txt → candidate numbers) ----------
 
 UPLOAD_FILE_WORKERS = int(os.environ.get("PB_UPLOAD_WORKERS", "3"))
@@ -6215,3 +6287,7 @@ for _p in glob.glob(os.path.join(os.path.dirname(db.DB_PATH) or ".", ".nlm_scree
     _m = re.search(r"\.nlm_screen_(\d+)\.json$", _p)
     if _m and ((_screen_read(int(_m.group(1))) or {}).get("quota") or {}).get("paused"):
         _spawn_screen_watchdog(int(_m.group(1)))
+
+# 🔁 boot sweep for fetches orphaned by the restart (status='pending' with no worker)
+if AUTO_REFETCH:
+    threading.Thread(target=_auto_refetch_sweep, daemon=True).start()
