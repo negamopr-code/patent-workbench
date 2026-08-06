@@ -72,6 +72,11 @@ class NotebookCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+class TabNlmProfile(BaseModel):
+    """Pin a tab to an NLM auth profile (Google account). None/empty/'default' = default."""
+    profile: str | None = Field(default=None, max_length=64)
+
+
 class NotebookAddSelected(BaseModel):
     """Push a CHOSEN subset of the tab's documents into a CHOSEN notebook (vs
     /notebook/sync which mirrors everything fetched into the connected one).

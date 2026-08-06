@@ -552,6 +552,7 @@ def tab_state(tab_id: int):
             "documents": docs,
             "messages": db.list_messages(tab_id),
             "notebook": db.get_notebook_config(tab_id),
+            "nlm_profile": _tab_profile(tab_id),
             "combi_motivations": db.get_combi_motivations(tab_id)}
 
 
@@ -1192,7 +1193,8 @@ def _add_doc_to_notebook(doc_id: int, notebook_id: str | None = None) -> dict:
     if doc.get("nlm_source_notebook") == nb:
         return {"skip": "already added"}
     title = f"{doc['number']} — {(doc.get('title') or '')[:120]}"
-    res = nlm_bridge.add_source_text(nb, title, _doc_source_text(doc))
+    res = nlm_bridge.add_source_text(nb, title, _doc_source_text(doc),
+                                     profile=_tab_profile(doc["tab_id"]))
     if res.get("ok"):
         db.update_document(doc_id, nlm_source_notebook=nb)
     return res
@@ -1215,7 +1217,8 @@ def _add_benchmark_to_notebook(tab_id: int, notebook_id: str | None = None) -> d
     label = (bm.get("number") or bm.get("title")
              or f"{len(bm.get('files') or [])} file(s)")
     title = f"🎯 BENCHMARK — {label}"
-    res = nlm_bridge.add_source_text(nb, title, _benchmark_fulltext(bm))
+    res = nlm_bridge.add_source_text(nb, title, _benchmark_fulltext(bm),
+                                     profile=_tab_profile(tab_id))
     if res.get("ok"):
         db.update_benchmark(tab_id, nlm_source_notebook=nb)
     return res
@@ -1237,6 +1240,16 @@ def _tab_name(tab_id: int) -> str:
     return f"tab {tab_id}"
 
 
+def _tab_profile(tab_id: int) -> str | None:
+    """The tab's pinned NLM account (auth profile); None = default account. Every
+    tab-scoped nlm_bridge call goes through this so a tab's whole NLM life —
+    notebooks, sources, queries, screens — stays inside ONE Google account."""
+    try:
+        return db.get_tab_nlm_profile(tab_id)
+    except Exception:
+        return None
+
+
 def _rollover_title(title: str | None) -> str:
     """Next notebook in a series: 'X' -> 'X (2)', 'X (2)' -> 'X (3)'."""
     title = title or "Patent candidates"
@@ -1247,7 +1260,7 @@ def _rollover_title(title: str | None) -> str:
 
 
 def _create_and_connect(tab_id: int, title: str) -> dict | None:
-    res = nlm_bridge.create_notebook(title)
+    res = nlm_bridge.create_notebook(title, profile=_tab_profile(tab_id))
     if not res.get("id"):
         return None
     db.set_notebook_config(tab_id, res["id"], res["title"], [], auto_add=True)
@@ -1810,21 +1823,79 @@ async def upload(tab_id: int, files: list[UploadFile] = File(...),
 # ---------- NotebookLM ----------
 
 @app.get("/api/notebooks")
-def notebooks(force: bool = False):
-    return nlm_bridge.list_notebooks(force=force)
+def notebooks(force: bool = False, profile: str | None = None):
+    """Notebooks of ONE account: the default one, or `?profile=` (the UI passes the
+    active tab's pinned account so the picker lists the right notebooks)."""
+    return nlm_bridge.list_notebooks(force=force, profile=profile)
 
 
 @app.get("/api/sources")
-def sources(notebook_id: str, force: bool = False):
-    return nlm_bridge.list_sources(notebook_id, force=force)
+def sources(notebook_id: str, force: bool = False, profile: str | None = None):
+    return nlm_bridge.list_sources(notebook_id, force=force, profile=profile)
+
+
+@app.get("/api/nlm/profiles")
+def nlm_profiles():
+    """Auth profiles (Google accounts) available to bind tabs to: [{name, authed}].
+    Seed a new one with scripts/reseed-nlm-profile.sh <name> from the dev container."""
+    return {"profiles": nlm_bridge.list_profiles(), "default": nlm_bridge.DEFAULT_PROFILE}
+
+
+def _tab_nlm_in_use(tab_id: int) -> str | None:
+    """Why the tab's NLM account can no longer be changed (None = still free).
+    STICKY rule: once any NLM artifact exists under the current account, switching
+    would orphan it (notebooks are not portable between Google accounts)."""
+    cfg = db.get_notebook_config(tab_id)
+    if cfg and cfg.get("notebook_id"):
+        return "a notebook is connected to this tab"
+    if _screen_read(tab_id):
+        return "a mega-screen (state) exists for this tab"
+    for d in db.list_documents(tab_id):
+        if d.get("nlm_source_notebook"):
+            return "documents are already mirrored into a notebook"
+    bm = db.get_benchmark(tab_id)
+    if bm and bm.get("nlm_source_notebook"):
+        return "the benchmark is already mirrored into a notebook"
+    return None
+
+
+@app.get("/api/tabs/{tab_id}/nlm-profile")
+def tab_nlm_profile_get(tab_id: int):
+    _tab_or_404(tab_id)
+    locked_why = _tab_nlm_in_use(tab_id)
+    return {"profile": _tab_profile(tab_id), "locked": bool(locked_why),
+            "locked_why": locked_why}
+
+
+@app.put("/api/tabs/{tab_id}/nlm-profile")
+def tab_nlm_profile_set(tab_id: int, body: schemas.TabNlmProfile):
+    """Pin the tab to an NLM account (auth profile). Allowed only while the tab has
+    no NLM artifacts — once chosen and used, it stays (notebooks don't move between
+    accounts). Clearing back to default follows the same rule."""
+    _tab_or_404(tab_id)
+    prof = (body.profile or "").strip() or None
+    if prof == nlm_bridge.DEFAULT_PROFILE:
+        prof = None
+    if prof == _tab_profile(tab_id):
+        return {"ok": True, "profile": prof}
+    locked_why = _tab_nlm_in_use(tab_id)
+    if locked_why:
+        raise HTTPException(409, f"this tab's NLM account is locked — {locked_why}. "
+                            "Disconnect/remove the NLM artifacts first (or use a new tab).")
+    if prof and not any(p["name"] == prof and p["authed"]
+                        for p in nlm_bridge.list_profiles()):
+        raise HTTPException(400, f"profile '{prof}' is not seeded/authenticated — run "
+                            "scripts/reseed-nlm-profile.sh " + prof + " first")
+    db.set_tab_nlm_profile(tab_id, prof)
+    return {"ok": True, "profile": prof}
 
 
 @app.delete("/api/notebooks/{notebook_id}")
-def notebook_delete_account(notebook_id: str):
+def notebook_delete_account(notebook_id: str, profile: str | None = None):
     """Delete a notebook permanently from the NotebookLM account (frees a slot toward
     the ~100-notebook cap). Any tab connected to it is disconnected so it doesn't try
     to query a notebook that no longer exists."""
-    res = nlm_bridge.delete_notebook(notebook_id)
+    res = nlm_bridge.delete_notebook(notebook_id, profile=profile)
     if "error" in res:
         raise HTTPException(400, res["error"])
     db.nlm_cache_clear(notebook_id)                   # drop its now-orphan cached answers
@@ -1893,7 +1964,8 @@ def notebook_import(tab_id: int, bg: BackgroundTasks):
     if not cfg or not cfg.get("notebook_id"):
         raise HTTPException(400, "no notebook connected to this tab")
     nb_id = cfg["notebook_id"]
-    listing = nlm_bridge.list_sources(nb_id, force=True)
+    prof = _tab_profile(tab_id)
+    listing = nlm_bridge.list_sources(nb_id, force=True, profile=prof)
     if listing.get("error"):
         raise HTTPException(400, f"could not list notebook sources: {listing['error']}")
     sources = listing.get("sources") or []
@@ -1914,7 +1986,7 @@ def notebook_import(tab_id: int, bg: BackgroundTasks):
             patent_src.setdefault(n, sid)
             continue
         # non-patent source → import its raw content as a text-only document
-        content = nlm_bridge.source_content(sid)
+        content = nlm_bridge.source_content(sid, profile=prof)
         if content.get("error"):
             text_errors.append(f"{title or sid}: {content['error']}")
             continue
@@ -1953,7 +2025,7 @@ def notebook_create(tab_id: int, body: schemas.NotebookCreate):
     """Create a fresh notebook (e.g. when the current one is full) and connect
     the tab to it, keeping auto-add on."""
     _tab_or_404(tab_id)
-    res = nlm_bridge.create_notebook(body.title)
+    res = nlm_bridge.create_notebook(body.title, profile=_tab_profile(tab_id))
     if "error" in res:
         raise HTTPException(400, res["error"])
     db.set_notebook_config(tab_id, res["id"], res["title"], [], auto_add=True)
@@ -2009,7 +2081,8 @@ def notebook_add_selected(tab_id: int, body: schemas.NotebookAddSelected):
         if d and d["status"] == "fetched" and d.get("nlm_source_notebook") != nb:
             remaining += 1
     titles = {n["id"]: n["title"]
-              for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+              for n in (nlm_bridge.list_notebooks(profile=_tab_profile(tab_id))
+                        .get("notebooks") or [])}
     return {"added": added, "remaining": remaining, "full": full, "errors": errors[:5],
             "notebook_id": nb, "notebook_title": titles.get(nb, nb)}
 
@@ -2030,17 +2103,19 @@ def notebook_resync(tab_id: int, body: schemas.NotebookResync):
     but untracked, and DUPLICATES (one candidate in >1 notebook) so they can be deleted
     to free the 50-source cap. Read-only against NLM (no AI quota)."""
     _tab_or_404(tab_id)
-    ok, why = nlm_bridge.available()
+    prof = _tab_profile(tab_id)
+    ok, why = nlm_bridge.available(prof)
     if not ok:
         raise HTTPException(400, f"NotebookLM unavailable: {why}")
     if body.scan_all:
-        nb_ids = [n["id"] for n in (nlm_bridge.list_notebooks().get("notebooks") or [])]
+        nb_ids = [n["id"] for n in (nlm_bridge.list_notebooks(profile=prof)
+                                    .get("notebooks") or [])]
     elif body.notebook_ids:
         nb_ids = list(dict.fromkeys(body.notebook_ids))
     else:
         nb_ids = db.tab_notebook_ids(tab_id)
     account = {n["id"]: n["title"]
-               for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+               for n in (nlm_bridge.list_notebooks(profile=prof).get("notebooks") or [])}
     titles = dict(account)
     cands = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
     by_key = {}
@@ -2050,7 +2125,7 @@ def notebook_resync(tab_id: int, body: schemas.NotebookResync):
     locations: dict[str, list[dict]] = {}
     scan_errors, scanned_ok = [], set()
     for nb in nb_ids:
-        res = nlm_bridge.list_sources(nb, force=True)
+        res = nlm_bridge.list_sources(nb, force=True, profile=prof)
         if res.get("error"):
             scan_errors.append(f"{titles.get(nb, nb)}: {str(res['error'])[:80]}")
             continue
@@ -2105,9 +2180,9 @@ def notebook_resync(tab_id: int, body: schemas.NotebookResync):
             "dup_copies": dup_copies, "errors": scan_errors}
 
 
-def _notebook_free(nb_id: str) -> int:
+def _notebook_free(nb_id: str, profile: str | None = None) -> int:
     """Free source slots in a notebook right now (SOURCE_LIMIT − live source count)."""
-    res = nlm_bridge.list_sources(nb_id, force=True)
+    res = nlm_bridge.list_sources(nb_id, force=True, profile=profile)
     if res.get("error"):
         return 0
     return max(0, nlm_bridge.SOURCE_LIMIT - len(res.get("sources") or []))
@@ -2121,7 +2196,8 @@ def notebook_distribute(tab_id: int, body: schemas.NotebookDistribute):
     ~100-notebook account cap). Default targets = the tab's own notebooks with space
     (most-free first); pass notebook_ids for a manual ordered split."""
     _tab_or_404(tab_id)
-    ok, why = nlm_bridge.available()
+    prof = _tab_profile(tab_id)
+    ok, why = nlm_bridge.available(prof)
     if not ok:
         raise HTTPException(400, f"NotebookLM unavailable: {why}")
     cands = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
@@ -2132,13 +2208,13 @@ def notebook_distribute(tab_id: int, body: schemas.NotebookDistribute):
         docs = [d for d in cands if not d.get("nlm_source_notebook")]   # the not-in-NLM set
     docs.sort(key=lambda d: (_promise(d), d["id"]), reverse=True)        # best first if space runs out
     titles = {n["id"]: n["title"]
-              for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+              for n in (nlm_bridge.list_notebooks(profile=prof).get("notebooks") or [])}
     if body.notebook_ids:
         nb_ids = [n for n in dict.fromkeys(body.notebook_ids) if n in titles]
     else:                                          # tab's notebooks that have room, most-free first
         nb_ids = sorted((n for n in db.tab_notebook_ids(tab_id)),
-                        key=_notebook_free, reverse=True)
-        nb_ids = [n for n in nb_ids if _notebook_free(n) > 0]
+                        key=lambda n: _notebook_free(n, prof), reverse=True)
+        nb_ids = [n for n in nb_ids if _notebook_free(n, prof) > 0]
     if not nb_ids:
         raise HTTPException(400, "no notebook with free space — 🗑 delete duplicate sources "
                             "(♻️ Resync finds them) or delete a notebook, then retry")
@@ -2178,7 +2254,8 @@ def notebook_source_delete(tab_id: int, body: schemas.NotebookSourceDelete):
     """Permanently delete chosen sources from a notebook (dedup / free space), then
     clear the app's tracking for any candidate whose tracked source was deleted."""
     _tab_or_404(tab_id)
-    res = nlm_bridge.delete_source(body.source_ids, notebook_id=body.notebook_id)
+    res = nlm_bridge.delete_source(body.source_ids, notebook_id=body.notebook_id,
+                                   profile=_tab_profile(tab_id))
     if res.get("error"):
         raise HTTPException(400, res["error"])
     deleted = set(body.source_ids)
@@ -2198,7 +2275,7 @@ def notebook_consolidate(tab_id: int, body: schemas.NotebookConsolidate):
     single NotebookLM query can compare them all — consolidating a focused set into one
     notebook lets 🏆 best-match pick a single global winner. Reports how many didn't fit."""
     _tab_or_404(tab_id)
-    ok, why = nlm_bridge.available()
+    ok, why = nlm_bridge.available(_tab_profile(tab_id))
     if not ok:
         raise HTTPException(400, f"NotebookLM unavailable: {why}")
     fetched = [d for d in db.list_documents(tab_id, full=True) if d["status"] == "fetched"]
@@ -2209,7 +2286,7 @@ def notebook_consolidate(tab_id: int, body: schemas.NotebookConsolidate):
         docs = fetched
     if not docs:
         raise HTTPException(400, "no fetched candidates to consolidate")
-    created = nlm_bridge.create_notebook(body.title)
+    created = nlm_bridge.create_notebook(body.title, profile=_tab_profile(tab_id))
     if "error" in created or not created.get("id"):
         raise HTTPException(400, created.get("error") or "create failed")
     nb = created["id"]
@@ -2321,12 +2398,12 @@ def _run_pipeline(tab_id: int) -> None:
                 cleaned = 0
                 for old in db.tab_notebook_ids(tab_id):
                     _pipeline_set(tab_id, status_text="🗑 freeing slots: removing rollover notebooks…")
-                    if nlm_bridge.delete_notebook(old).get("ok"):
+                    if nlm_bridge.delete_notebook(old, profile=_tab_profile(tab_id)).get("ok"):
                         cleaned += 1
                     db.clear_nlm_refs(tab_id, old)
                     db.nlm_cache_clear(old)
                 _pipeline_set(tab_id, status_text="🧺 creating notebook & copying finalists…")
-                created = nlm_bridge.create_notebook(st["title"])
+                created = nlm_bridge.create_notebook(st["title"], profile=_tab_profile(tab_id))
                 if not created.get("id"):
                     raise RuntimeError(created.get("error") or "notebook create failed")
                 nb = created["id"]
@@ -2359,7 +2436,8 @@ def _run_pipeline(tab_id: int) -> None:
             # costs no chat quota.
             nb = st.get("notebook_id")
             _pipeline_set(tab_id, status_text="⏳ waiting for NotebookLM to ingest the sources…")
-            rd = nlm_bridge.wait_sources_ready(nb, timeout=PIPELINE_INGEST_TIMEOUT)
+            rd = nlm_bridge.wait_sources_ready(nb, timeout=PIPELINE_INGEST_TIMEOUT,
+                                               profile=_tab_profile(tab_id))
             if not rd.get("ready"):
                 db.append_message(tab_id, "s",
                     f"⚠️ NotebookLM was still ingesting ({rd.get('processed', 0)}/{rd.get('total', 0)} "
@@ -2403,7 +2481,7 @@ def _run_pipeline(tab_id: int) -> None:
 def pipeline_start(tab_id: int, body: schemas.PipelineRequest):
     """Start (or ▶️ Resume) the consolidate→shortlist→debate background job."""
     _tab_or_404(tab_id)
-    ok, why = nlm_bridge.available()
+    ok, why = nlm_bridge.available(_tab_profile(tab_id))
     if not ok:
         raise HTTPException(400, f"NotebookLM unavailable: {why}")
     stt = _pipeline_status(tab_id)
@@ -2444,18 +2522,19 @@ def pipeline_status_ep(tab_id: int):
     return _pipeline_status(tab_id)
 
 
-def _notebook_signature(notebook_id: str) -> str:
+def _notebook_signature(notebook_id: str, profile: str | None = None) -> str:
     """A short fingerprint of a notebook's current source SET — so a cached answer is
     reused only while the sources are unchanged, and auto-misses once a source is
     added/removed (the answer would otherwise be stale)."""
-    srcs = nlm_bridge.list_sources(notebook_id).get("sources") or []
+    srcs = nlm_bridge.list_sources(notebook_id, profile=profile).get("sources") or []
     ids = ",".join(sorted(s["id"] for s in srcs))
     return hashlib.sha256(ids.encode()).hexdigest()[:16]
 
 
 def _nlm_query_cached(notebook_id: str, question: str,
                       source_ids: list[str] | None = None, force: bool = False,
-                      accept=None, retries: int = 0) -> dict:
+                      accept=None, retries: int = 0,
+                      profile: str | None = None) -> dict:
     """nlm_bridge.query with a PERSISTENT answer cache keyed on
     (notebook, source-restriction, question, source-set signature). Identical queries
     return the stored answer for free — no NotebookLM call, no quota — and survive
@@ -2467,7 +2546,7 @@ def _nlm_query_cached(notebook_id: str, question: str,
     is NOT cached (so it can't poison future runs), is retried up to `retries` times with a
     forced fresh query, and — if still rejected — is returned tagged {incomplete: True} so
     the caller can warn instead of silently scraping a non-answer."""
-    sig = _notebook_signature(notebook_id)
+    sig = _notebook_signature(notebook_id, profile)
     raw = "|".join([notebook_id, ",".join(source_ids or []), sig, question])
     key = hashlib.sha256(raw.encode()).hexdigest()
     if not force:
@@ -2476,7 +2555,8 @@ def _nlm_query_cached(notebook_id: str, question: str,
             return {"answer": hit, "cached": True}
     res = {}
     for attempt in range(retries + 1):
-        res = nlm_bridge.query(notebook_id, question, source_ids=source_ids)
+        res = nlm_bridge.query(notebook_id, question, source_ids=source_ids,
+                               profile=profile)
         ans = res.get("answer")
         if not ans:
             return res
@@ -2498,12 +2578,14 @@ def _query_tab_series(tab_id: int, question: str, accept=None, retries: int = 0)
     sources. NLM serialises calls internally, so these run back-to-back."""
     cfg = db.get_notebook_config(tab_id) or {}
     connected = cfg.get("notebook_id")
+    prof = _tab_profile(tab_id)
     titles = {n["id"]: n["title"]
-              for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+              for n in (nlm_bridge.list_notebooks(profile=prof).get("notebooks") or [])}
     out: list[dict] = []
     for nb in db.tab_notebook_ids(tab_id):
         sids = (cfg.get("selected_source_ids") or None) if nb == connected else None
-        res = _nlm_query_cached(nb, question, source_ids=sids, accept=accept, retries=retries)
+        res = _nlm_query_cached(nb, question, source_ids=sids, accept=accept,
+                                retries=retries, profile=prof)
         entry = {"notebook_id": nb, "title": titles.get(nb, nb)}
         entry["error" if "error" in res else "answer"] = res.get("error") or res["answer"]
         if res.get("incomplete"):
@@ -3134,14 +3216,14 @@ def _benchmark_summary_for_nlm(bm: dict, limit: int = 4000) -> str:
     return "\n\n".join(p for p in parts if p)[:limit]
 
 
-def _notebook_source_index(nb: str) -> tuple[dict[str, str], str | None]:
+def _notebook_source_index(nb: str, profile: str | None = None) -> tuple[dict[str, str], str | None]:
     """({patent-number -> source_id}, benchmark_source_id|None) for a notebook,
     read from its source titles ('CN1234 — …' / '🎯 BENCHMARK — …'). Knowing the
     benchmark's source id lets the rating query stay TINY — we ground NotebookLM on
     the benchmark source instead of pasting the whole benchmark into every question."""
     m: dict[str, str] = {}
     bm_sid = None
-    for s in (nlm_bridge.list_sources(nb, force=True).get("sources") or []):
+    for s in (nlm_bridge.list_sources(nb, force=True, profile=profile).get("sources") or []):
         title = s.get("title") or ""
         if title.startswith("🎯 BENCHMARK"):
             bm_sid = s["id"]
@@ -3167,8 +3249,9 @@ def _run_nlm_rating(tab_id: int, force: bool, ids: list[int] | None) -> None:
             docs = [d for d in docs if d["id"] in idset]
         if not force:
             docs = [d for d in docs if d.get("nlm_score") is None]
+        prof = _tab_profile(tab_id)
         notebooks = {d["nlm_source_notebook"] for d in docs}
-        indexes = {nb: _notebook_source_index(nb) for nb in notebooks}
+        indexes = {nb: _notebook_source_index(nb, prof) for nb in notebooks}
         rated = 0
         for d in docs:
             nb = d["nlm_source_notebook"]
@@ -3184,7 +3267,7 @@ def _run_nlm_rating(tab_id: int, force: bool, ids: list[int] | None) -> None:
                 if not cand_sid:
                     q = f"(Find the source for patent {d['number']}.) " + q
                 sids = [cand_sid] if cand_sid else None
-            res = nlm_bridge.query(nb, q, source_ids=sids)
+            res = nlm_bridge.query(nb, q, source_ids=sids, profile=prof)
             parsed = claude_bridge.parse_verdict(res.get("answer", "")) if "answer" in res else {"score": None}
             if parsed.get("score") is not None:
                 db.update_document(d["id"], nlm_score=parsed["score"],
@@ -3220,7 +3303,7 @@ def nlm_rate(tab_id: int, body: schemas.NlmRateRequest):
     in), to compare against Claude's deep-compare score. With doc_ids, only that
     selection is rated; otherwise every fetched candidate."""
     _tab_or_404(tab_id)
-    ok, why = nlm_bridge.available()
+    ok, why = nlm_bridge.available(_tab_profile(tab_id))
     if not ok:
         raise HTTPException(400, f"NotebookLM unavailable: {why}")
     if _nlm_rate_running(tab_id):
@@ -3296,7 +3379,8 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
     against this tab's candidates, and return that shortlist so the user can then run
     the expensive 🤖 opus verification on just those few (stage 2)."""
     _tab_or_404(tab_id)
-    ok, why = nlm_bridge.available()
+    prof = _tab_profile(tab_id)
+    ok, why = nlm_bridge.available(prof)
     if not ok:
         raise HTTPException(400, f"NotebookLM unavailable: {why}")
     bm = db.get_benchmark(tab_id)
@@ -3311,9 +3395,10 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
     if body.notebook_id:
         # one consolidated notebook → a single global best/second-best across all of them
         titles = {n["id"]: n["title"]
-                  for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
+                  for n in (nlm_bridge.list_notebooks(profile=prof).get("notebooks") or [])}
         qres = _nlm_query_cached(body.notebook_id, question, source_ids=None,
-                                 accept=_shortlist_answer_complete, retries=1)
+                                 accept=_shortlist_answer_complete, retries=1,
+                                 profile=prof)
         e = {"notebook_id": body.notebook_id,
              "title": titles.get(body.notebook_id, body.notebook_id)}
         e["error" if "error" in qres else "answer"] = qres.get("error") or qres["answer"]
@@ -3565,17 +3650,19 @@ def _screen_notebook(tab_id: int, st: dict) -> tuple[str, str]:
     """The dedicated screening notebook (find by exact title, else create). Kept
     OUT of the tab's notebook config / mirror columns on purpose."""
     nb, title = st.get("notebook_id"), st.get("notebook_title")
+    prof = _tab_profile(tab_id)
     want = f"🔁 Screen — {_tab_name(tab_id)}"[:100]
     if nb:
-        if any(n["id"] == nb for n in (nlm_bridge.list_notebooks(force=True).get("notebooks") or [])):
+        if any(n["id"] == nb for n in (nlm_bridge.list_notebooks(force=True, profile=prof)
+                                       .get("notebooks") or [])):
             return nb, title or want
         db.append_message(tab_id, "s", "🔬 The screening notebook disappeared — recreating it; "
                           "survivors will be re-staged from the ledger.")
-    for n in (nlm_bridge.list_notebooks(force=True).get("notebooks") or []):
+    for n in (nlm_bridge.list_notebooks(force=True, profile=prof).get("notebooks") or []):
         if n.get("title") == want:
             _screen_set(tab_id, notebook_id=n["id"], notebook_title=want)
             return n["id"], want
-    created = nlm_bridge.create_notebook(want)
+    created = nlm_bridge.create_notebook(want, profile=prof)
     if not created.get("id"):
         raise RuntimeError(created.get("error") or "screening notebook create failed")
     _screen_set(tab_id, notebook_id=created["id"], notebook_title=created["title"])
@@ -3588,11 +3675,12 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
     stale candidate sources, adds missing ones, re-adds once, marks ghosts
     add_failed). Returns (nb, bm_sid, key_map of what's really in, failed_ids)."""
     nb, _ = _screen_notebook(tab_id, st)
+    prof = _tab_profile(tab_id)
     want_keys = {_shortlist_key(docs_by_id[i]["number"]): i for i in want_ids
                  if docs_by_id.get(i)}
 
     def index() -> tuple[dict[str, str], str | None]:
-        return _notebook_source_index(nb)
+        return _notebook_source_index(nb, prof)
 
     num_map, bm_sid = index()
     # 1. delete candidate sources that are neither benchmark nor wanted (previous
@@ -3601,12 +3689,13 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
     stale = [sid for num, sid in num_map.items() if _shortlist_key(num) not in want_keys]
     if stale:
         _screen_set(tab_id, status_text=f"🗑 rotating out {len(stale)} source(s)…")
-        nlm_bridge.delete_source(stale, nb)
+        nlm_bridge.delete_source(stale, nb, profile=prof)
         num_map, bm_sid = index()
     if not bm_sid:
         bm = db.get_benchmark(tab_id)
         label = (bm.get("number") or bm.get("title") or "benchmark")
-        res = nlm_bridge.add_source_text(nb, f"🎯 BENCHMARK — {label}", _benchmark_fulltext(bm))
+        res = nlm_bridge.add_source_text(nb, f"🎯 BENCHMARK — {label}", _benchmark_fulltext(bm),
+                                         profile=prof)
         if not res.get("ok"):
             raise RuntimeError(f"benchmark add failed: {res.get('error')}")
     # 2. add the missing wanted docs (skip what's already there — crash-safe re-entry)
@@ -3619,13 +3708,14 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
                                         f"{added}/{len(missing)} added…")
         _screen_heartbeat(tab_id)
         nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
-                                   _doc_source_text(d))
+                                   _doc_source_text(d), profile=prof)
         added += 1
     # 3. wait for ingestion (probe costs no chat quota); carried-over sources are
     #    already confirmed — only the fresh adds need probing.
     _screen_set(tab_id, status_text="⏳ waiting for NotebookLM to ingest the batch…")
     known = set(num_map.values()) | ({bm_sid} if bm_sid else set())
-    nlm_bridge.wait_sources_ready(nb, timeout=PIPELINE_INGEST_TIMEOUT, known_ready=known)
+    nlm_bridge.wait_sources_ready(nb, timeout=PIPELINE_INGEST_TIMEOUT, known_ready=known,
+                                  profile=prof)
     # 4. verify: re-add once, then mark unindexable docs add_failed (ghost-source lesson)
     num_map, bm_sid = index()
     have = {_shortlist_key(n) for n in num_map}
@@ -3634,9 +3724,10 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
         if k not in have:
             d = docs_by_id[did]
             nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
-                                       _doc_source_text(d))
+                                       _doc_source_text(d), profile=prof)
     if any(k not in have for k in want_keys):
-        nlm_bridge.wait_sources_ready(nb, timeout=60, known_ready=set(num_map.values()))
+        nlm_bridge.wait_sources_ready(nb, timeout=60, known_ready=set(num_map.values()),
+                                      profile=prof)
         num_map, bm_sid = index()
         have = {_shortlist_key(n) for n in num_map}
         failed = [did for k, did in want_keys.items() if k not in have]
@@ -3650,9 +3741,10 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
 def _screen_query(tab_id: int, nb: str, question: str) -> dict:
     """One guarded round query — NO cache (rotation changes the source-set signature
     every round, so the cache could never hit and would only store garbage)."""
-    res = nlm_bridge.query(nb, question)
+    prof = _tab_profile(tab_id)
+    res = nlm_bridge.query(nb, question, profile=prof)
     if "answer" in res and not _screen_answer_complete(res["answer"]):
-        res = nlm_bridge.query(nb, question)              # one retry on truncation
+        res = nlm_bridge.query(nb, question, profile=prof)  # one retry on truncation
         if "answer" in res and not _screen_answer_complete(res["answer"]):
             return {"incomplete": True, "answer": res["answer"]}
     return res
@@ -3764,12 +3856,12 @@ def _screen_finalize(tab_id: int, st: dict, docs_by_id: dict[int, dict]) -> None
     spec = _benchmark_feature_spec_for_nlm(bm)
     question = NLM_SHORTLIST_PROMPT.format(benchmark=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
     _screen_set(tab_id, status_text="🏁 finalize: asking for the global ranking…")
-    res = nlm_bridge.query(nb, question)
+    res = nlm_bridge.query(nb, question, profile=_tab_profile(tab_id))
     if nlm_bridge.is_quota_error(res):
         _screen_quota_pause(tab_id, res.get("error") or "quota exhausted")
         return
     if "answer" in res and not _shortlist_answer_complete(res["answer"]):
-        res = nlm_bridge.query(nb, question)
+        res = nlm_bridge.query(nb, question, profile=_tab_profile(tab_id))
     if "error" in res or not _shortlist_answer_complete(res.get("answer", "")):
         _screen_set(tab_id, error=(res.get("error") or "finalize answer truncated")[:300],
                     status_text="⚠️ finalize failed — ▶️ Resume retries")
@@ -3845,7 +3937,8 @@ def _screen_watchdog_loop(tab_id: int) -> None:
             time.sleep(300)
             continue
         nb = st.get("notebook_id")
-        probe = nlm_bridge.query(nb, "Reply with exactly: OK") if nb else {"error": "no notebook"}
+        probe = (nlm_bridge.query(nb, "Reply with exactly: OK", profile=_tab_profile(tab_id))
+                 if nb else {"error": "no notebook"})
         if nlm_bridge.is_quota_error(probe) or "error" in probe:
             _screen_set(tab_id, quota={**quota, "resume_at": time.time() + SCREEN_QUOTA_PROBE_EVERY})
             continue
@@ -3882,7 +3975,7 @@ def _screen_launch(tab_id: int) -> bool:
 def nlm_screen_start(tab_id: int, body: schemas.NlmScreenRequest):
     """Start (or ▶️ Resume) the 🔬 NLM mega-screen rotation job."""
     _tab_or_404(tab_id)
-    ok, why = nlm_bridge.available()
+    ok, why = nlm_bridge.available(_tab_profile(tab_id))
     if not ok:
         raise HTTPException(400, f"NotebookLM unavailable: {why}")
     stt = _screen_status(tab_id)
@@ -5562,7 +5655,7 @@ def nlm_challenge(tab_id: int, body: schemas.NlmChallengeRequest):
     a disputed list. No full-text re-read, one prompt per side — neither overwhelms NLM nor
     burns tokens. Complements 🔍 'Why the gap?' (Claude over stored NOTES only)."""
     _tab_or_404(tab_id)
-    ok, why = nlm_bridge.available()
+    ok, why = nlm_bridge.available(_tab_profile(tab_id))
     if not ok:
         raise HTTPException(400, f"NotebookLM unavailable: {why}")
     bm = db.get_benchmark(tab_id)
@@ -5615,8 +5708,10 @@ def nlm_challenge(tab_id: int, body: schemas.NlmChallengeRequest):
     question = NLM_DEBATE_PROMPT.format(finalists=nums, spec=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
     if cfg.get("notebook_id"):
         titles = {n["id"]: n["title"]
-                  for n in (nlm_bridge.list_notebooks().get("notebooks") or [])}
-        qres = _nlm_query_cached(cfg["notebook_id"], question, source_ids=None, force=bool(not_in_nb))
+                  for n in (nlm_bridge.list_notebooks(profile=_tab_profile(tab_id))
+                            .get("notebooks") or [])}
+        qres = _nlm_query_cached(cfg["notebook_id"], question, source_ids=None,
+                                 force=bool(not_in_nb), profile=_tab_profile(tab_id))
         series = [{"notebook_id": cfg["notebook_id"],
                    "title": titles.get(cfg["notebook_id"], cfg["notebook_id"]),
                    **({"error": qres["error"]} if "error" in qres else {"answer": qres["answer"]})}]

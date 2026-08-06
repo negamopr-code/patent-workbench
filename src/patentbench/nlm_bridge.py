@@ -33,11 +33,44 @@ LIST_TTL = float(os.environ.get("NLM_LIST_TTL", "300"))      # notebook-list cac
 
 _lock = threading.Lock()
 _last_call = 0.0
-_list_cache: tuple[float, list[dict]] | None = None
+_list_cache: dict[str, tuple[float, list[dict]]] = {}      # profile → (ts, notebooks)
 _sources_cache: dict[str, tuple[float, list[dict]]] = {}   # notebook_id → (ts, sources)
 
+# Per-tab accounts: a tab may pin a named auth profile (a separate Google login
+# with its OWN quota pool and ~100-notebook cap). profile=None everywhere means
+# the CLI's default profile — the pre-multi-account behavior, byte-for-byte.
+DEFAULT_PROFILE = "default"
 
-def available() -> tuple[bool, str]:
+
+def _prof(profile: str | None) -> str:
+    return profile or DEFAULT_PROFILE
+
+
+def _with_profile(cmd: list[str], profile: str | None) -> list[str]:
+    """Append --profile only for explicitly-pinned non-default profiles, so
+    default-account tabs keep the exact CLI invocation that is proven live."""
+    if profile and profile != DEFAULT_PROFILE:
+        return cmd + ["--profile", profile]
+    return cmd
+
+
+def list_profiles() -> list[dict]:
+    """Auth profiles present in the mounted profile dir: [{name, authed}].
+    `authed` = cookies.json exists (liveness is only known at call time)."""
+    root = os.path.join(os.path.expanduser("~/.notebooklm-mcp-cli"), "profiles")
+    out = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return []
+    for n in names:
+        if os.path.isdir(os.path.join(root, n)):
+            out.append({"name": n,
+                        "authed": os.path.isfile(os.path.join(root, n, "cookies.json"))})
+    return out
+
+
+def available(profile: str | None = None) -> tuple[bool, str]:
     """Is the nlm CLI reachable AND authenticated in this deployment? Returns
     (ok, reason-if-not). The profile check exists because a wiped/root-owned
     profile dir otherwise surfaces only as a raw PermissionError traceback in
@@ -48,7 +81,7 @@ def available() -> tuple[bool, str]:
                        "scripts/serve.sh — the image bakes notebooklm-mcp-cli and "
                        "needs the nlm-profile mount.")
     prof_dir = os.path.expanduser("~/.notebooklm-mcp-cli")
-    cookies = os.path.join(prof_dir, "profiles", "default", "cookies.json")
+    cookies = os.path.join(prof_dir, "profiles", _prof(profile), "cookies.json")
     if not os.path.isfile(cookies):
         return False, ("NLM auth profile missing (" + cookies + "). Run "
                        "scripts/reseed-nlm-profile.sh from the claude dev "
@@ -86,16 +119,16 @@ def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
             _last_call = time.monotonic()
 
 
-def list_notebooks(force: bool = False) -> dict:
+def list_notebooks(force: bool = False, profile: str | None = None) -> dict:
     """All notebooks in the account: {notebooks: [{id,title,sources}], error?}. Cached."""
-    global _list_cache
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"notebooks": [], "error": why}
-    if not force and _list_cache and time.monotonic() - _list_cache[0] < LIST_TTL:
-        return {"notebooks": _list_cache[1]}
+    hit = _list_cache.get(_prof(profile))
+    if not force and hit and time.monotonic() - hit[0] < LIST_TTL:
+        return {"notebooks": hit[1]}
     try:
-        proc = _run([NLM_BIN, "notebook", "list"], LIST_TIMEOUT)
+        proc = _run(_with_profile([NLM_BIN, "notebook", "list"], profile), LIST_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"notebooks": [], "error": "nlm notebook list: timeout"}
     if proc.returncode != 0:
@@ -108,20 +141,21 @@ def list_notebooks(force: bool = False) -> dict:
     nbs = [{"id": n["id"], "title": n.get("title") or n["id"],
             "sources": n.get("source_count")}
            for n in data if isinstance(n, dict) and n.get("id")]
-    _list_cache = (time.monotonic(), nbs)
+    _list_cache[_prof(profile)] = (time.monotonic(), nbs)
     return {"notebooks": nbs}
 
 
-def list_sources(notebook_id: str, force: bool = False) -> dict:
+def list_sources(notebook_id: str, force: bool = False, profile: str | None = None) -> dict:
     """Files/sources inside one notebook: {sources: [{id,title}], error?}. Cached per notebook."""
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"sources": [], "error": why}
     hit = _sources_cache.get(notebook_id)
     if not force and hit and time.monotonic() - hit[0] < LIST_TTL:
         return {"sources": hit[1]}
     try:
-        proc = _run([NLM_BIN, "source", "list", notebook_id, "--json"], LIST_TIMEOUT)
+        proc = _run(_with_profile([NLM_BIN, "source", "list", notebook_id, "--json"], profile),
+                    LIST_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"sources": [], "error": "nlm source list: timeout"}
     if proc.returncode != 0:
@@ -143,23 +177,24 @@ def list_sources(notebook_id: str, force: bool = False) -> dict:
 SOURCE_LIMIT = int(os.environ.get("NLM_SOURCE_LIMIT", "50"))
 
 
-def _notebook_count() -> int:
+def _notebook_count(profile: str | None = None) -> int:
     """Best-effort count of notebooks in the account (-1 if it can't be read)."""
     try:
-        return len(list_notebooks(force=True).get("notebooks") or [])
+        return len(list_notebooks(force=True, profile=profile).get("notebooks") or [])
     except Exception:
         return -1
 
 
-def create_notebook(title: str) -> dict:
+def create_notebook(title: str, profile: str | None = None) -> dict:
     """Create a notebook: {id, title} | {error, limit?}. NotebookLM caps an account at
     ~100 notebooks; over that, create fails with a cryptic 'API error (code 3):
     INVALID_ARGUMENT' — we translate that into an actionable message (delete some)."""
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"error": why}
     try:
-        proc = _run([NLM_BIN, "notebook", "create", title, "--json"], LIST_TIMEOUT)
+        proc = _run(_with_profile([NLM_BIN, "notebook", "create", title, "--json"], profile),
+                    LIST_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"error": "nlm notebook create: timeout"}
     # the CLI may signal failure via returncode OR a {"status":"error"} JSON payload
@@ -172,8 +207,7 @@ def create_notebook(title: str) -> dict:
         data = {}
     nb_id = data.get("id") or data.get("notebook_id") if isinstance(data, dict) else None
     if nb_id:
-        global _list_cache
-        _list_cache = None                  # the notebook list changed
+        _list_cache.pop(_prof(profile), None)   # the notebook list changed
         return {"id": nb_id, "title": data.get("title") or title}
     err = (data.get("error") if isinstance(data, dict) else "") or ""
     if not err:
@@ -182,7 +216,7 @@ def create_notebook(title: str) -> dict:
     # code 8 RESOURCE_EXHAUSTED (seen live 2026-08-05) — treat either as the cap
     if ("INVALID_ARGUMENT" in err or "RESOURCE_EXHAUSTED" in err
             or "limit" in err.lower() or "quota" in err.lower()):
-        n = _notebook_count()
+        n = _notebook_count(profile)
         return {"limit": True,
                 "error": ("NotebookLM refused to create the notebook"
                           + (f" — your account has {n} notebooks" if n >= 0 else "")
@@ -191,13 +225,14 @@ def create_notebook(title: str) -> dict:
     return {"error": err or "nlm notebook create failed"}
 
 
-def delete_notebook(notebook_id: str) -> dict:
+def delete_notebook(notebook_id: str, profile: str | None = None) -> dict:
     """Delete a notebook permanently: {ok} | {error}. Frees a slot toward the ~100 cap."""
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"error": why}
     try:
-        proc = _run([NLM_BIN, "notebook", "delete", notebook_id, "-y"], LIST_TIMEOUT)
+        proc = _run(_with_profile([NLM_BIN, "notebook", "delete", notebook_id, "-y"], profile),
+                    LIST_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"error": "nlm notebook delete: timeout"}
     if proc.returncode != 0:
@@ -209,8 +244,7 @@ def delete_notebook(notebook_id: str) -> dict:
             return {"error": str(val.get("error") or "delete failed")[:400]}
     except Exception:
         pass
-    global _list_cache
-    _list_cache = None
+    _list_cache.pop(_prof(profile), None)
     _sources_cache.pop(notebook_id, None)
     return {"ok": True}
 
@@ -225,18 +259,19 @@ def _clip_bytes(text: str, limit: int = 120_000) -> str:
     return b[:limit].decode("utf-8", "ignore")
 
 
-def add_source_text(notebook_id: str, title: str, text: str) -> dict:
+def add_source_text(notebook_id: str, title: str, text: str,
+                    profile: str | None = None) -> dict:
     """Add a text source to a notebook: {ok} | {error, full?}. Text is clipped to
     a UTF-8 BYTE budget (kernel MAX_ARG_STRLEN caps a single argv entry at 128 KiB
     — byte-clipping, not char-clipping, is what keeps CJK sources from hanging)."""
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"error": why}
-    srcs = list_sources(notebook_id, force=True)
+    srcs = list_sources(notebook_id, force=True, profile=profile)
     if not srcs.get("error") and len(srcs.get("sources") or []) >= SOURCE_LIMIT:
         return {"error": f"notebook is full ({SOURCE_LIMIT} sources)", "full": True}
-    cmd = [NLM_BIN, "source", "add", notebook_id,
-           "--text", _clip_bytes(text), "--title", title[:200]]
+    cmd = _with_profile([NLM_BIN, "source", "add", notebook_id,
+                         "--text", _clip_bytes(text), "--title", title[:200]], profile)
     try:
         proc = _run(cmd, QUERY_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -248,17 +283,18 @@ def add_source_text(notebook_id: str, title: str, text: str) -> dict:
     return {"ok": True}
 
 
-def delete_source(source_ids: list[str], notebook_id: str | None = None) -> dict:
+def delete_source(source_ids: list[str], notebook_id: str | None = None,
+                  profile: str | None = None) -> dict:
     """Permanently delete one or more sources (dedup / free the 50-source cap):
     {ok, deleted} | {error}. notebook_id, when given, drops that notebook's source
     cache so a re-list reflects the deletion immediately."""
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"error": why}
     ids = [s for s in (source_ids or []) if s]
     if not ids:
         return {"ok": True, "deleted": 0}
-    cmd = [NLM_BIN, "source", "delete", *ids, "-y"]
+    cmd = _with_profile([NLM_BIN, "source", "delete", *ids, "-y"], profile)
     try:
         proc = _run(cmd, LIST_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -270,14 +306,15 @@ def delete_source(source_ids: list[str], notebook_id: str | None = None) -> dict
     return {"ok": True, "deleted": len(ids)}
 
 
-def source_content(source_id: str) -> dict:
+def source_content(source_id: str, profile: str | None = None) -> dict:
     """Raw text content of ONE source inside a notebook (no AI processing):
     {content} | {error}. Used to import a non-patent source into the workbench."""
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"error": why}
     try:
-        proc = _run([NLM_BIN, "source", "content", source_id, "--json"], QUERY_TIMEOUT)
+        proc = _run(_with_profile([NLM_BIN, "source", "content", source_id, "--json"], profile),
+                    QUERY_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"error": "nlm source content: timeout"}
     if proc.returncode != 0:
@@ -298,6 +335,7 @@ def source_content(source_id: str) -> dict:
 
 def wait_sources_ready(notebook_id: str, timeout: float = 240.0, poll: float = 8.0,
                        known_ready: set[str] | None = None,
+                       profile: str | None = None,
                        _sleep=time.sleep, _now=time.monotonic) -> dict:
     """Block until EVERY source in a notebook is ingested (i.e. queryable), or until
     `timeout` seconds elapse. NotebookLM accepts `source add` instantly but then needs
@@ -308,17 +346,17 @@ def wait_sources_ready(notebook_id: str, timeout: float = 240.0, poll: float = 8
     `known_ready` seeds the confirmed set — sources that stayed in the notebook
     from a previous round (benchmark, survivors) don't need re-probing. Returns
     {ready, processed, total}."""
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"ready": False, "processed": 0, "total": 0, "error": why}
     deadline = _now() + timeout
     ready_ids: set[str] = set(known_ready or ())
     total = 0
     while True:
-        srcs = list_sources(notebook_id, force=True).get("sources") or []
+        srcs = list_sources(notebook_id, force=True, profile=profile).get("sources") or []
         total = len(srcs)
         for s in srcs:                              # probe only the not-yet-confirmed ones
-            if s["id"] not in ready_ids and "content" in source_content(s["id"]):
+            if s["id"] not in ready_ids and "content" in source_content(s["id"], profile=profile):
                 ready_ids.add(s["id"])
         if total and len(ready_ids) >= total:
             return {"ready": True, "processed": len(ready_ids), "total": total}
@@ -347,14 +385,15 @@ def _err_result(err: str) -> dict:
     return out
 
 
-def query(notebook_id: str, question: str, source_ids: list[str] | None = None) -> dict:
+def query(notebook_id: str, question: str, source_ids: list[str] | None = None,
+          profile: str | None = None) -> dict:
     """Ask one notebook (optionally restricted to EXACT source files inside it).
     Returns {answer, sources_used} or {error, quota?, quota_suspect?}."""
-    ok, why = available()
+    ok, why = available(profile)
     if not ok:
         return {"error": why}
-    cmd = [NLM_BIN, "notebook", "query", notebook_id, question,
-           "--json", "--timeout", str(int(QUERY_TIMEOUT))]
+    cmd = _with_profile([NLM_BIN, "notebook", "query", notebook_id, question,
+                         "--json", "--timeout", str(int(QUERY_TIMEOUT))], profile)
     if source_ids:
         cmd += ["--source-ids", ",".join(source_ids)]
     try:

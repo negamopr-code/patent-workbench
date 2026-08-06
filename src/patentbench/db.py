@@ -246,6 +246,9 @@ def _conn():
         ncols = {r[1] for r in con.execute("PRAGMA table_info(tab_notebook_config)")}
         if "auto_add" not in ncols:
             con.execute("ALTER TABLE tab_notebook_config ADD COLUMN auto_add INTEGER NOT NULL DEFAULT 0")
+        tcols = {r[1] for r in con.execute("PRAGMA table_info(tabs)")}
+        if "nlm_profile" not in tcols:      # per-tab NLM account (auth profile); NULL = default
+            con.execute("ALTER TABLE tabs ADD COLUMN nlm_profile TEXT")
         yield con
         con.commit()
     finally:
@@ -288,6 +291,20 @@ def delete_tab(tab_id: int) -> bool:
 def tab_exists(tab_id: int) -> bool:
     with _conn() as c:
         return c.execute("SELECT 1 FROM tabs WHERE id=?", (tab_id,)).fetchone() is not None
+
+
+def get_tab_nlm_profile(tab_id: int) -> str | None:
+    """The tab's pinned NLM account (auth profile name); None = the default account."""
+    with _conn() as c:
+        r = c.execute("SELECT nlm_profile FROM tabs WHERE id=?", (tab_id,)).fetchone()
+        return r["nlm_profile"] if r else None
+
+
+def set_tab_nlm_profile(tab_id: int, profile: str | None) -> bool:
+    with _conn() as c:
+        cur = c.execute("UPDATE tabs SET nlm_profile=?, updated_at=? WHERE id=?",
+                        (profile, _now(), tab_id))
+        return cur.rowcount > 0
 
 
 # ---------- documents ----------

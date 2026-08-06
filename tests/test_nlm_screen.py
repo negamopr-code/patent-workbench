@@ -25,44 +25,44 @@ class FakeNlm:
         self._n = 0
 
     def install(self, monkeypatch):
-        monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-        monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {
+        monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+        monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False, **k: {
             "notebooks": [{"id": i, "title": t, "sources": len(self.notebooks[i])}
                           for i, t in self.titles.items()]})
         monkeypatch.setattr(nlm_bridge, "create_notebook", self._create)
-        monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {
+        monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {
             "sources": [{"id": s, "title": t}
                         for s, t in self.notebooks.get(nb, {}).items()]})
         monkeypatch.setattr(nlm_bridge, "add_source_text", self._add)
         monkeypatch.setattr(nlm_bridge, "delete_source", self._delete)
         monkeypatch.setattr(nlm_bridge, "wait_sources_ready",
-                            lambda nb, timeout=0, poll=0, known_ready=None:
+                            lambda nb, timeout=0, poll=0, known_ready=None, **k:
                             {"ready": True, "processed": 0, "total": 0})
-        monkeypatch.setattr(nlm_bridge, "source_content", lambda sid: {"content": "x"})
+        monkeypatch.setattr(nlm_bridge, "source_content", lambda sid, **k: {"content": "x"})
         monkeypatch.setattr(nlm_bridge, "query", self._query)
 
-    def _create(self, title):
+    def _create(self, title, **k):
         self._n += 1
         nb = f"nb-screen-{self._n}"
         self.notebooks[nb] = {}
         self.titles[nb] = title
         return {"id": nb, "title": title}
 
-    def _add(self, nb, title, text):
+    def _add(self, nb, title, text, **k):
         if any(num in title for num in self.drop_titles):
             return {"ok": True}                       # ghost: accepted, never indexed
         self._n += 1
         self.notebooks.setdefault(nb, {})[f"s{self._n}"] = title
         return {"ok": True}
 
-    def _delete(self, ids, nb=None):
+    def _delete(self, ids, nb=None, **k):
         self.deleted += list(ids)
         for srcs in self.notebooks.values():
             for sid in ids:
                 srcs.pop(sid, None)
         return {"ok": True, "deleted": len(ids)}
 
-    def _query(self, nb, q, source_ids=None):
+    def _query(self, nb, q, source_ids=None, **k):
         self.queries.append((nb, q))
         a = self.answers.pop(0) if self.answers else {"answer": "TOP: none"}
         return a(self, nb, q) if callable(a) else a
@@ -252,21 +252,21 @@ def test_create_notebook_cap_detected_for_resource_exhausted(monkeypatch):
     # code 8 RESOURCE_EXHAUSTED (live 2026-08-05) — both must yield the actionable
     # "delete some notebooks" message, not a raw error.
     import subprocess
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     monkeypatch.setattr(nlm_bridge, "_run", lambda cmd, timeout: subprocess.CompletedProcess(
         cmd, 1, stdout="", stderr="API error (code 8): RESOURCE_EXHAUSTED"))
-    monkeypatch.setattr(nlm_bridge, "_notebook_count", lambda: 100)
+    monkeypatch.setattr(nlm_bridge, "_notebook_count", lambda profile=None: 100)
     r = nlm_bridge.create_notebook("X")
     assert r.get("limit") is True and "100" in r["error"] and "Delete" in r["error"]
 
 
 def test_wait_sources_ready_known_ready_skips_probes(monkeypatch):
     probed = []
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {
         "sources": [{"id": "s1", "title": "a"}, {"id": "s2", "title": "b"}]})
     monkeypatch.setattr(nlm_bridge, "source_content",
-                        lambda sid: probed.append(sid) or {"content": "x"})
+                        lambda sid, **k: probed.append(sid) or {"content": "x"})
     r = nlm_bridge.wait_sources_ready("nb", timeout=5, poll=0.01, known_ready={"s1"})
     assert r["ready"] is True
     assert probed == ["s2"]                                 # s1 was pre-confirmed

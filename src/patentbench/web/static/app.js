@@ -52,13 +52,18 @@ let combiMotivations = {};      // persisted pair verdicts: 'loId-hiId' → {com
 let bestPartnerById = new Map();// docId → its best complementary partner pair (inline hint)
 let skillsMeta = { skills: [], models: [], default_model: '' };
 let nbState = { notebooks: [], chosen: null, sources: [], selected: new Set() };
+// The tab's pinned NLM account (auth profile). null = the default account. Every
+// notebook list/sources call carries it so the picker shows THAT account's notebooks.
+let tabNlmProfile = null;
+const profQS = (first = false) =>
+  tabNlmProfile ? `${first ? '?' : '&'}profile=${encodeURIComponent(tabNlmProfile)}` : '';
 // id → title for EVERY NotebookLM notebook, so a candidate's per-doc badge can name
 // the exact notebook it lives in (incl. rollover siblings, not just the connected one).
 // Loaded lazily (server-cached) and re-rendered into the docs when it arrives.
 let nbTitleById = {};
 async function loadNbTitles() {
   try {
-    const res = await api('/api/notebooks');
+    const res = await api('/api/notebooks' + profQS(true));
     if (res && res.notebooks) {
       nbTitleById = {};
       for (const n of res.notebooks) nbTitleById[n.id] = n.title;
@@ -238,6 +243,7 @@ async function selectTab(id) {
   if (activeTab !== id) return;   // a newer selectTab() won the race — don't clobber its render
   if (st.error) { alert(st.error); return; }
   combiMotivations = st.combi_motivations || {};
+  tabNlmProfile = st.nlm_profile || null;   // the tab's pinned NLM account
   combiResult = null;                       // recompute combos per tab on demand
   renderBenchmark(st.benchmark);
   renderDocs(st.documents || []);
@@ -4090,6 +4096,54 @@ function nextSeriesTitle(title) {
   return m ? title.replace(/ \(\d+\)$/, ` (${+m[1] + 1})`) : `${title} (2)`;
 }
 
+// 👤 Per-tab NLM account: shows which Google account (auth profile) this tab's
+// NotebookLM life lives in. While the tab has NO NLM artifacts the account can be
+// chosen from a dropdown; the FIRST notebook/screen/source locks it (sticky —
+// notebooks are not portable between accounts). Hidden entirely while only one
+// profile is seeded, so the default single-account setup stays uncluttered.
+async function renderNbAccountRow(profInfo) {
+  const row = $('nb-account-row');
+  if (!row) return;
+  row.classList.add('hidden');
+  row.innerHTML = '';
+  let reg = null;
+  try { reg = await api('/api/nlm/profiles'); } catch (_) { return; }
+  const profiles = (reg && reg.profiles) || [];
+  if (profiles.length < 2) return;                 // single account → nothing to choose
+  const cur = (profInfo && profInfo.profile) || reg.default || 'default';
+  row.classList.remove('hidden');
+  row.appendChild(document.createTextNode('👤 NLM account: '));
+  if (profInfo && profInfo.locked) {
+    const b = document.createElement('span');
+    b.className = 'strong';
+    b.textContent = `${cur} 🔒`;
+    b.title = `Locked — ${profInfo.locked_why}. A tab's NLM account is fixed once it `
+      + 'has notebooks/sources (they cannot move between Google accounts).';
+    row.appendChild(b);
+    return;
+  }
+  const sel = document.createElement('select');
+  for (const p of profiles) {
+    const o = document.createElement('option');
+    o.value = p.name;
+    o.textContent = p.name + (p.authed ? '' : ' (not authenticated)');
+    o.disabled = !p.authed;
+    if (p.name === cur) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.onchange = async () => {
+    const res = await api(`/api/tabs/${activeTab}/nlm-profile`, {
+      method: 'PUT', body: JSON.stringify({ profile: sel.value }) });
+    if (res.error) { alert(`Could not switch NLM account: ${res.error}`); }
+    tabNlmProfile = (res.profile != null) ? res.profile : null;
+    await loadNbModal(true);          // the account changed → different notebook list
+  };
+  row.appendChild(sel);
+  const hint = document.createElement('span');
+  hint.textContent = ' (fixed after the first notebook/screen is created here)';
+  row.appendChild(hint);
+}
+
 // (Re)load the notebook modal: the create box, the existing-notebook list, the
 // restrict-query sources, and the "documents to add" picker. force=true busts the
 // notebook-list cache so a just-created notebook (and fresh source counts) show up.
@@ -4100,12 +4154,14 @@ async function loadNbModal(force = false, selectId = null) {
   $('nb-list').textContent = 'Loading notebooks…';
   $('nb-sources-wrap').classList.add('hidden');
   $('nb-add-wrap').classList.add('hidden');
-  const [res, st] = await Promise.all([
-    api('/api/notebooks' + (force ? '?force=true' : '')),
+  const [res, st, profInfo] = await Promise.all([
+    api('/api/notebooks' + (force ? '?force=true' : '') + profQS(!force)),
     api(`/api/tabs/${activeTab}/state`),
+    api(`/api/tabs/${activeTab}/nlm-profile`).catch(() => null),
   ]);
   nbState = { notebooks: res.notebooks || [], chosen: null, sources: [], selected: new Set() };
   const current = st.notebook;
+  renderNbAccountRow(profInfo);             // 👤 which NLM account this tab is pinned to
   // auto-export defaults ON for a fresh connection (the notebook is meant to be a
   // Claude-quota-independent mirror of the tab's candidates); preserve the user's
   // choice when re-opening an already-configured notebook.
@@ -4143,7 +4199,7 @@ async function loadNbModal(force = false, selectId = null) {
       if (!confirm(`Delete notebook «${nb.title}» permanently from NotebookLM? Its sources are lost. `
         + 'This frees a slot so you can create / consolidate.')) return;
       del.disabled = true; del.textContent = '⏳';
-      const dr = await api(`/api/notebooks/${encodeURIComponent(nb.id)}`, { method: 'DELETE' });
+      const dr = await api(`/api/notebooks/${encodeURIComponent(nb.id)}${profQS(true)}`, { method: 'DELETE' });
       if (dr.error) { alert(`Delete failed: ${dr.error}`); del.disabled = false; del.textContent = '🗑'; return; }
       addPrefill = null;
       await loadNbModal(true);                 // refresh list + count
@@ -4319,7 +4375,7 @@ async function chooseNotebook(nb, current) {
   $('nb-sources-wrap').classList.remove('hidden');
   $('nb-sources').textContent = 'Loading sources…';
   // force=true so a source just added to this notebook shows up immediately
-  const res = await api(`/api/sources?notebook_id=${encodeURIComponent(nb.id)}&force=true`);
+  const res = await api(`/api/sources?notebook_id=${encodeURIComponent(nb.id)}&force=true${profQS()}`);
   nbState.sources = res.sources || [];
   const preselected = (current && current.notebook_id === nb.id)
     ? new Set(current.selected_source_ids || []) : new Set();

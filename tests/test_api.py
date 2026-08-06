@@ -446,7 +446,7 @@ def test_ask_notebook_fans_out_across_rollover_siblings(client, monkeypatch):
     """Candidates beyond the source cap live in sibling notebooks (auto-rollover).
     A query must hit ALL of them, not just the connected one — otherwise patents in
     the siblings are unreachable (the EP3087655 bug)."""
-    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {"notebooks": [
+    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False, **k: {"notebooks": [
         {"id": "nb-3", "title": "Cands (3)"}, {"id": "nb-2", "title": "Cands (2)"}]})
     tab = client.post("/api/tabs", json={"name": "Roll"}).json()
     # connected notebook = the latest; an earlier candidate was exported to a sibling
@@ -467,7 +467,7 @@ def test_chat_ask_notebook_fans_out_to_claude(client, monkeypatch):
     monkeypatch.setattr(claude_bridge, "chat",
                         lambda *a, **k: seen.update(sources=k.get("sources")) or
                         {"answer": "synthesized", "model": "claude-fable-5"})
-    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {"notebooks": [
+    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False, **k: {"notebooks": [
         {"id": "nb-3", "title": "Cands (3)"}, {"id": "nb-2", "title": "Cands (2)"}]})
     tab = client.post("/api/tabs", json={"name": "Roll2"}).json()
     client.put(f"/api/tabs/{tab['id']}/notebook",
@@ -577,9 +577,9 @@ def test_auto_create_notebook_on_first_candidate(client, monkeypatch):
     added = []
     monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", True)
     monkeypatch.setattr(nlm_bridge, "create_notebook",
-                        lambda title: {"id": "nb-auto", "title": title})
+                        lambda title, **k: {"id": "nb-auto", "title": title})
     monkeypatch.setattr(nlm_bridge, "add_source_text",
-                        lambda nb, title, text: (added.append((nb, title)), {"ok": True})[1])
+                        lambda nb, title, text, **k: (added.append((nb, title)), {"ok": True})[1])
     tab = client.post("/api/tabs", json={"name": "Proj-X"}).json()
     client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
     cfg = client.get(f"/api/tabs/{tab['id']}/state").json()["notebook"]
@@ -595,10 +595,10 @@ def test_auto_export_rolls_over_when_full(client, monkeypatch):
     monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", True)
     nb_seq = iter(["nb-1", "nb-2"])
     monkeypatch.setattr(nlm_bridge, "create_notebook",
-                        lambda title: {"id": next(nb_seq), "title": title})
+                        lambda title, **k: {"id": next(nb_seq), "title": title})
     calls = []
 
-    def fake_add(nb, title, text):
+    def fake_add(nb, title, text, **k):
         calls.append(nb)
         return {"error": "full", "full": True} if nb == "nb-1" else {"ok": True}
 
@@ -614,7 +614,7 @@ def test_auto_export_rolls_over_when_full(client, monkeypatch):
 def test_no_auto_create_when_disabled(client, monkeypatch):
     monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", False)
     monkeypatch.setattr(nlm_bridge, "create_notebook",
-                        lambda title: (_ for _ in ()).throw(AssertionError("should not create")))
+                        lambda title, **k: (_ for _ in ()).throw(AssertionError("should not create")))
     tab = client.post("/api/tabs", json={"name": "NoAuto"}).json()
     client.post(f"/api/tabs/{tab['id']}/documents", json={"text": "US10395648B1"})
     assert client.get(f"/api/tabs/{tab['id']}/state").json()["notebook"] is None
@@ -636,12 +636,12 @@ def test_nlm_rate_scores_candidates(client, monkeypatch):
     for d in client.get(f"/api/tabs/{tid}/documents").json()["documents"]:
         db.update_document(d["id"], nlm_source_notebook="nb-1")
     # the notebook reports its sources (titles start with the patent number)
-    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": [
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {"sources": [
         {"id": "s-ep", "title": "EP3667902A1 — x"}, {"id": "s-cn", "title": "CN114853847 — y"}]})
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: {"answer": "MATCH SCORE: 6\nKEY FEATURES: widget",
+                        lambda nb, q, source_ids=None, **k: {"answer": "MATCH SCORE: 6\nKEY FEATURES: widget",
                                                         "sources_used": []})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     assert client.post(f"/api/tabs/{tid}/nlm-rate", json={}).json()["started"] is True
     # the rating runs in a daemon thread — wait briefly for it to finish
     for _ in range(50):
@@ -666,11 +666,11 @@ def test_nlm_rate_only_selected(client, monkeypatch):
     docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
     for d in docs:
         db.update_document(d["id"], nlm_source_notebook="nb-1")
-    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": [
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {"sources": [
         {"id": "s-ep", "title": "EP3667902A1 — x"}, {"id": "s-cn", "title": "CN114853847 — y"}]})
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: {"answer": "MATCH SCORE: 8\nKEY FEATURES: gear"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+                        lambda nb, q, source_ids=None, **k: {"answer": "MATCH SCORE: 8\nKEY FEATURES: gear"})
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     target = next(d for d in docs if d["number"] == "EP3667902A1")
     other = next(d for d in docs if d["number"] != "EP3667902A1")
     assert client.post(f"/api/tabs/{tid}/nlm-rate",
@@ -834,8 +834,8 @@ def test_notebook_resync_retracks_and_finds_duplicates(client, monkeypatch):
     client.put(f"/api/tabs/{tid}/notebook",
                json={"notebook_id": "nb-a", "notebook_title": "A", "source_ids": []})
     client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114853847B CN114547092"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {"notebooks": [
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False, **k: {"notebooks": [
         {"id": "nb-a", "title": "A", "sources": 2}, {"id": "nb-b", "title": "B", "sources": 1}]})
     # EP3667902 is in BOTH notebooks (duplicate); CN114853847 only in B; CN114547092 in none
     srcs = {
@@ -844,7 +844,7 @@ def test_notebook_resync_retracks_and_finds_duplicates(client, monkeypatch):
                  {"id": "sb2", "title": "CN114853847B — bar"}],
     }
     monkeypatch.setattr(nlm_bridge, "list_sources",
-                        lambda nb, force=False: {"sources": srcs.get(nb, [])})
+                        lambda nb, force=False, **k: {"sources": srcs.get(nb, [])})
     # scan both notebooks explicitly
     r = client.post(f"/api/tabs/{tid}/notebook/resync",
                     json={"notebook_ids": ["nb-a", "nb-b"]}).json()
@@ -862,11 +862,11 @@ def test_notebook_distribute_fills_across_notebooks(client, monkeypatch):
     tab = client.post("/api/tabs", json={"name": "Split"}).json()
     tid = tab["id"]
     client.post(f"/api/tabs/{tid}/documents", json={"text": "EP3667902A1 CN114853847B CN114547092 CN117241689"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False: {"notebooks": [
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "list_notebooks", lambda force=False, **k: {"notebooks": [
         {"id": "nb-a", "title": "A", "sources": 0}, {"id": "nb-b", "title": "B", "sources": 0}]})
     store, cap = {"nb-a": 0, "nb-b": 0}, {"nb-a": 2, "nb-b": 5}
-    def fake_add(nb, title, text):
+    def fake_add(nb, title, text, **k):
         if store[nb] >= cap[nb]:
             return {"error": "full", "full": True}
         store[nb] += 1
@@ -892,7 +892,7 @@ def test_notebook_source_delete_clears_tracking(client, monkeypatch):
     db.update_document(doc["id"], nlm_source_notebook="nb-x", nlm_source_id="src-9")
     deleted = {}
     monkeypatch.setattr(nlm_bridge, "delete_source",
-                        lambda ids, notebook_id=None: deleted.update(ids=ids, nb=notebook_id) or {"ok": True, "deleted": len(ids)})
+                        lambda ids, notebook_id=None, **k: deleted.update(ids=ids, nb=notebook_id) or {"ok": True, "deleted": len(ids)})
     r = client.post(f"/api/tabs/{tid}/notebook/source-delete",
                     json={"notebook_id": "nb-x", "source_ids": ["src-9"]}).json()
     assert r["ok"] and r["deleted"] == 1 and r["cleared"] == 1
@@ -912,9 +912,9 @@ def test_nlm_shortlist_matches_candidates(client, monkeypatch):
                       "title": "gauge + thermistor"})
     client.post(f"/api/tabs/{tid}/documents",
                 json={"numbers": ["EP4340163A1", "CN117241689", "US10395648B1"], "source": "image"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     # NLM names two of the three candidates (one with a different kind code) + a stranger
-    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None: {
+    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None, **k: {
         "answer": "SHORTLIST: EP4340163 (kind-insensitive), CN117241689, "
                   "and also WO2022239372 which is not in the pool. BEST: EP4340163."})
     r = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={}).json()
@@ -951,9 +951,9 @@ def test_nlm_shortlist_ranks_best_with_feature_map(client, monkeypatch):
                       "title": "gauge + thermistor"})
     client.post(f"/api/tabs/{tid}/documents",
                 json={"numbers": ["EP4340163A1", "CN117241689", "US10395648B1"], "source": "image"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     calls = []
-    def fake_q(nb, q, source_ids=None):
+    def fake_q(nb, q, source_ids=None, **k):
         calls.append(q)
         return {"answer": "SHORTLIST: EP4340163, CN117241689. BEST: EP4340163 — A) YES, B) YES. "
                           "SECOND-BEST: CN117241689 — A) YES, B) NO."}
@@ -968,7 +968,7 @@ def test_nlm_shortlist_ranks_best_with_feature_map(client, monkeypatch):
 def test_notebook_delete_account_disconnects_tabs(client, monkeypatch):
     deleted = []
     monkeypatch.setattr(nlm_bridge, "delete_notebook",
-                        lambda nb: deleted.append(nb) or {"ok": True})
+                        lambda nb, **k: deleted.append(nb) or {"ok": True})
     tab = client.post("/api/tabs", json={"name": "Del"}).json()
     client.put(f"/api/tabs/{tab['id']}/notebook",
                json={"notebook_id": "nb-doomed", "notebook_title": "NB", "source_ids": [],
@@ -983,7 +983,7 @@ def test_notebook_delete_account_disconnects_tabs(client, monkeypatch):
 def test_notebook_create_at_cap_returns_helpful_error(client, monkeypatch):
     # nlm_bridge maps the cryptic INVALID_ARGUMENT into an actionable cap message
     monkeypatch.setattr(nlm_bridge, "create_notebook",
-                        lambda t: {"limit": True, "error": "NotebookLM refused to create the "
+                        lambda t, **k: {"limit": True, "error": "NotebookLM refused to create the "
                                    "notebook — your account has 100 notebooks (caps at ~100). "
                                    "Delete some old notebooks to free a slot, then try again."})
     tab = client.post("/api/tabs", json={"name": "Cap"}).json()
@@ -993,11 +993,11 @@ def test_notebook_create_at_cap_returns_helpful_error(client, monkeypatch):
 
 def test_notebook_consolidate_creates_and_copies(client, monkeypatch):
     added = []
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     monkeypatch.setattr(nlm_bridge, "add_source_text",
-                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+                        lambda nb, title, text, **k: added.append((nb, title)) or {"ok": True})
     monkeypatch.setattr(nlm_bridge, "create_notebook",
-                        lambda t: {"id": "nb-consol", "title": t})
+                        lambda t, **k: {"id": "nb-consol", "title": t})
     tab = client.post("/api/tabs", json={"name": "Cons"}).json()
     tid = tab["id"]
     # candidates already live in another notebook (auto_add off so the pipeline doesn't mirror)
@@ -1027,9 +1027,9 @@ def test_nlm_shortlist_scoped_to_one_notebook(client, monkeypatch):
                 json={"spec": "A) x.\nB) y.", "title": "feats"})
     client.post(f"/api/tabs/{tid}/documents",
                 json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     seen = []
-    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None: (
+    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None, **k: (
         seen.append(nb) or {"answer": "BEST: EP4340163. SECOND-BEST: CN117241689."}))
     r = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-consol"}).json()
     assert r["ok"] is True
@@ -1047,10 +1047,10 @@ def test_nlm_query_cache_avoids_rerun(client, monkeypatch):
                 json={"spec": "A) a fuel-gauge IC.\nB) a thermistor via voltage divider.",
                       "title": "gauge + thermistor"})
     client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1"], "source": "image"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     calls = []
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: calls.append(1) or {"answer": "BEST: EP4340163."})
+                        lambda nb, q, source_ids=None, **k: calls.append(1) or {"answer": "BEST: EP4340163."})
     r1 = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-1"}).json()
     r2 = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-1"}).json()
     assert r1["ok"] and r2["ok"]
@@ -1071,11 +1071,11 @@ def test_nlm_challenge_debates_finalists_both_sides(client, monkeypatch):
     import patentbench.db as _db
     docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
     _db.set_shortlisted(tid, [docs[0]["id"]])
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
     nlm_calls, claude_calls = [], []
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: nlm_calls.append(q) or {
+                        lambda nb, q, source_ids=None, **k: nlm_calls.append(q) or {
                             "answer": f"{docs[0]['number']}: A) YES, B) PARTIAL."})
     debate_models = []
     def fake_debate(blocks, finals, nlm, model=None):
@@ -1109,16 +1109,16 @@ def test_pipeline_runs_all_steps_and_reports_done(client, monkeypatch):
     # Claude's #1 = CN117241689 (higher score); NLM will pick EP4340163A1 → genuine divergence
     _db.update_document(by_num["CN117241689"], score=9, scored_at=1, score_model="claude-sonnet-4-6")
     _db.update_document(by_num["EP4340163A1"], score=5, scored_at=1, score_model="claude-sonnet-4-6")
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-pipe", "title": t})
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t, **k: {"id": "nb-pipe", "title": t})
     monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
-    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda nb, ti, tx: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda nb, ti, tx, **k: {"ok": True})
     deleted = []
-    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: deleted.append(nb) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb, **k: deleted.append(nb) or {"ok": True})
     monkeypatch.setattr(nlm_bridge, "list_sources",
-                        lambda nb, force=False: {"sources": [{"id": "s1", "title": "EP4340163A1"}]})
+                        lambda nb, force=False, **k: {"sources": [{"id": "s1", "title": "EP4340163A1"}]})
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. "
+                        lambda nb, q, source_ids=None, **k: {"answer": "SHORTLIST: EP4340163A1. "
                                                         "BEST: EP4340163A1. A) YES."})
     debated = []
     monkeypatch.setattr(claude_bridge, "debate",
@@ -1159,15 +1159,15 @@ def test_pipeline_consensus_skips_debate(client, monkeypatch):
     by_num = {d["number"]: d["id"] for d in docs}
     _db.update_document(by_num["EP4340163A1"], score=9, scored_at=1, score_model="claude-sonnet-4-6")
     _db.update_document(by_num["CN117241689"], score=4, scored_at=1, score_model="claude-sonnet-4-6")
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-agree", "title": t})
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t, **k: {"id": "nb-agree", "title": t})
     monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb, **k: {"ok": True})
     monkeypatch.setattr(nlm_bridge, "list_sources",
-                        lambda nb, force=False: {"sources": [{"id": "s1", "title": "EP4340163A1"}]})
+                        lambda nb, force=False, **k: {"sources": [{"id": "s1", "title": "EP4340163A1"}]})
     monkeypatch.setattr(nlm_bridge, "query",   # NLM agrees: EP4340163A1 is best
-                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
+                        lambda nb, q, source_ids=None, **k: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
     debated = []
     monkeypatch.setattr(claude_bridge, "debate", lambda *a, **k: debated.append(1) or {"answer": "x"})
     client.post(f"/api/tabs/{tid}/pipeline",
@@ -1196,15 +1196,15 @@ def test_pipeline_funnel_auto_selects_top_n(client, monkeypatch):
     _db.update_document(by_num["CN117241689"], score=7, scored_at=1, score_model="claude-sonnet-4-6")
     _db.update_document(by_num["US10395648B1"], score=2, scored_at=1, score_model="claude-sonnet-4-6")
     copied = []
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-fn", "title": t})
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t, **k: {"id": "nb-fn", "title": t})
     monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text",
-                        lambda nb, ti, tx: copied.append(ti) or {"ok": True})
-    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: {"ok": True})
-    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
+                        lambda nb, ti, tx, **k: copied.append(ti) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb, **k: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {"sources": []})
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
+                        lambda nb, q, source_ids=None, **k: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
     monkeypatch.setattr(claude_bridge, "debate", lambda *a, **k: {"answer": "x", "model": "claude-opus-4-8"})
     # no doc_ids → auto-pick the top 2 by score (US10395648B1 score=2 excluded)
     r = client.post(f"/api/tabs/{tid}/pipeline", json={"title": "Funnel", "top_n": 2}).json()
@@ -1233,14 +1233,14 @@ def test_pipeline_deletes_rollover_notebooks(client, monkeypatch):
     _db.update_document(ids[0], nlm_source_notebook="nb-old-A", score=9, scored_at=1, score_model="x")
     _db.update_document(ids[1], nlm_source_notebook="nb-old-B", score=5, scored_at=1, score_model="x")
     deleted, cleared = [], []
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-new", "title": t})
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t, **k: {"id": "nb-new", "title": t})
     monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: deleted.append(nb) or {"ok": True})
-    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb, **k: deleted.append(nb) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {"sources": []})
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
+                        lambda nb, q, source_ids=None, **k: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
     monkeypatch.setattr(claude_bridge, "debate", lambda *a, **k: {"answer": "x", "model": "claude-opus-4-8"})
     client.post(f"/api/tabs/{tid}/pipeline", json={"title": "Roll", "doc_ids": ids})
     import time as _t
@@ -1264,10 +1264,10 @@ def test_pipeline_frees_slots_before_create(client, monkeypatch):
     _db.update_document(ids[0], nlm_source_notebook="nb-old-A", score=9, scored_at=1, score_model="x")
     _db.update_document(ids[1], nlm_source_notebook="nb-old-B", score=5, scored_at=1, score_model="x")
     order = []
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: order.append(("del", nb)) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb, **k: order.append(("del", nb)) or {"ok": True})
     # create fails while at the cap (2 notebooks still alive), succeeds once a slot is freed
-    def fake_create(t):
+    def fake_create(t, **k):
         live = 2 - sum(1 for o in order if o[0] == "del")
         order.append(("create", live))
         if live >= 2:
@@ -1276,9 +1276,9 @@ def test_pipeline_frees_slots_before_create(client, monkeypatch):
     monkeypatch.setattr(nlm_bridge, "create_notebook", fake_create)
     monkeypatch.setattr(nlm_bridge, "wait_sources_ready", lambda *a, **k: {"ready": True, "processed": 1, "total": 1})
     monkeypatch.setattr(nlm_bridge, "add_source_text", lambda *a, **k: {"ok": True})
-    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {"sources": []})
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
+                        lambda nb, q, source_ids=None, **k: {"answer": "SHORTLIST: EP4340163A1. BEST: EP4340163A1."})
     monkeypatch.setattr(claude_bridge, "debate", lambda *a, **k: {"answer": "x", "model": "claude-opus-4-8"})
     client.post(f"/api/tabs/{tid}/pipeline", json={"title": "Cap", "doc_ids": ids})
     import time as _t
@@ -1297,7 +1297,7 @@ def test_pipeline_funnel_needs_scored_candidates(client, monkeypatch):
     tab = client.post("/api/tabs", json={"name": "PipeNo"}).json()
     tid = tab["id"]
     client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     assert client.post(f"/api/tabs/{tid}/pipeline", json={"title": "X"}).status_code == 400
 
 
@@ -1315,11 +1315,11 @@ def test_pipeline_consolidate_only_stops_before_query(client, monkeypatch):
     _db.update_document(by_num["EP4340163A1"], score=9, scored_at=1, score_model="x")
     _db.update_document(by_num["CN117241689"], score=4, scored_at=1, score_model="x")
     copied = []
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
-    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t: {"id": "nb-only", "title": t})
-    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda nb, ti, tx: copied.append(ti) or {"ok": True})
-    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb: {"ok": True})
-    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": []})
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "create_notebook", lambda t, **k: {"id": "nb-only", "title": t})
+    monkeypatch.setattr(nlm_bridge, "add_source_text", lambda nb, ti, tx, **k: copied.append(ti) or {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "delete_notebook", lambda nb, **k: {"ok": True})
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {"sources": []})
     queried = []
     monkeypatch.setattr(nlm_bridge, "query", lambda *a, **k: queried.append(1) or {"answer": "x"})
     debated = []
@@ -1342,13 +1342,13 @@ def test_pipeline_consolidate_only_stops_before_query(client, monkeypatch):
 def test_wait_sources_ready_blocks_until_ingested(monkeypatch):
     """The ingestion gate returns only once EVERY source reports content — not while any is
     still 'empty' (un-processed). It probes via source_content (no chat quota)."""
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     monkeypatch.setattr(nlm_bridge, "list_sources",
-                        lambda nb, force=False: {"sources": [{"id": "s1", "title": "a"},
+                        lambda nb, force=False, **k: {"sources": [{"id": "s1", "title": "a"},
                                                              {"id": "s2", "title": "b"}]})
     # s1 ready immediately; s2 only on its 2nd probe → the gate must loop once
     calls = {"s2": 0}
-    def fake_content(sid):
+    def fake_content(sid, **k):
         if sid == "s1":
             return {"content": "ready"}
         calls["s2"] += 1
@@ -1363,12 +1363,12 @@ def test_wait_sources_ready_blocks_until_ingested(monkeypatch):
 def test_wait_sources_ready_times_out_when_stuck(monkeypatch):
     """If a source never ingests, the gate gives up at the deadline and reports the shortfall
     (so the pipeline can warn rather than hang forever)."""
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     monkeypatch.setattr(nlm_bridge, "list_sources",
-                        lambda nb, force=False: {"sources": [{"id": "s1", "title": "a"},
+                        lambda nb, force=False, **k: {"sources": [{"id": "s1", "title": "a"},
                                                              {"id": "s2", "title": "b"}]})
     monkeypatch.setattr(nlm_bridge, "source_content",
-                        lambda sid: {"content": "ok"} if sid == "s1" else {"error": "empty source content"})
+                        lambda sid, **k: {"content": "ok"} if sid == "s1" else {"error": "empty source content"})
     # fake clock: advances past the deadline after a couple of polls
     ticks = iter([0.0, 5.0, 50.0, 200.0, 400.0])
     rd = nlm_bridge.wait_sources_ready("nb", timeout=100, poll=5,
@@ -1385,10 +1385,10 @@ def test_shortlist_rejects_truncated_answer(client, monkeypatch):
                json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
     client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
     client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     calls = []
     # mimics the live dud: names a doc in passing, announces 'next', no verdict markers
-    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None: calls.append(1) or {
+    monkeypatch.setattr(nlm_bridge, "query", lambda nb, q, source_ids=None, **k: calls.append(1) or {
         "answer": "Confirming source availability. I'm cross-referencing the texts; EP4340163A1 "
                   "is listed. I'm going to proceed to evaluate CN117241689 next."})
     r = client.post(f"/api/tabs/{tid}/nlm-shortlist", json={"notebook_id": "nb-1"}).json()
@@ -1418,12 +1418,12 @@ def test_nlm_challenge_includes_claude_top_picks(client, monkeypatch):
     by_num = {d["number"]: d for d in docs}
     _db.set_shortlisted(tid, [by_num["EP4340163A1"]["id"]])          # NLM finalist
     _db.update_document(by_num["CN117241689"]["id"], score=8.0, score_note="strong")  # Claude pick
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     added = []
     monkeypatch.setattr(nlm_bridge, "add_source_text",
-                        lambda nb, ti, tx: added.append(ti) or {"ok": True})
+                        lambda nb, ti, tx, **k: added.append(ti) or {"ok": True})
     monkeypatch.setattr(nlm_bridge, "query",
-                        lambda nb, q, source_ids=None: {"answer": "block-by-block…"})
+                        lambda nb, q, source_ids=None, **k: {"answer": "block-by-block…"})
     monkeypatch.setattr(claude_bridge, "debate",
                         lambda *a, **k: {"answer": "consensus", "model": "claude-opus-4-8"})
     r = client.post(f"/api/tabs/{tid}/nlm-challenge", json={}).json()
@@ -1439,7 +1439,7 @@ def test_nlm_challenge_needs_finalists(client, monkeypatch):
                json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
     client.post(f"/api/tabs/{tid}/benchmark/features", json={"spec": "A) x.\nB) y.", "title": "f"})
     client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1"], "source": "image"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     assert client.post(f"/api/tabs/{tid}/nlm-challenge", json={}).status_code == 400
 
 
@@ -1449,7 +1449,7 @@ def test_nlm_shortlist_requires_benchmark(client, monkeypatch):
     client.put(f"/api/tabs/{tid}/notebook",
                json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
     client.post(f"/api/tabs/{tid}/documents", json={"numbers": ["EP4340163A1"], "source": "image"})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
     assert client.post(f"/api/tabs/{tid}/nlm-shortlist", json={}).status_code == 400
 
 
@@ -1532,11 +1532,11 @@ def test_nlm_rate_all_skips_already_rated(client, monkeypatch):
         db.update_document(d["id"], nlm_source_notebook="nb-1")
     db.update_document(docs["EP3667902A1"]["id"], nlm_score=9)   # already rated → must be skipped
     queried = []
-    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False: {"sources": [
+    monkeypatch.setattr(nlm_bridge, "list_sources", lambda nb, force=False, **k: {"sources": [
         {"id": "s-ep", "title": "EP3667902A1 — x"}, {"id": "s-cn", "title": "CN114853847 — y"}]})
-    monkeypatch.setattr(nlm_bridge, "available", lambda: (True, ""))
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
 
-    def fake_query(nb, q, source_ids=None):
+    def fake_query(nb, q, source_ids=None, **k):
         queried.append(source_ids)
         return {"answer": "MATCH SCORE: 4\nKEY FEATURES: x"}
 
@@ -1800,14 +1800,14 @@ def test_deep_compare_stores_scores(client, monkeypatch):
 
 def test_notebook_auto_add_and_sync(client, monkeypatch):
     added, state = [], {"full_after": 2}
-    def fake_add(nb, title, text):
+    def fake_add(nb, title, text, **k):
         if len(added) >= state["full_after"]:
             return {"error": "notebook is full (50 sources)", "full": True}
         added.append((nb, title))
         return {"ok": True}
     monkeypatch.setattr(nlm_bridge, "add_source_text", fake_add)
     monkeypatch.setattr(nlm_bridge, "create_notebook",
-                        lambda t: {"id": "nb-2", "title": t})
+                        lambda t, **k: {"id": "nb-2", "title": t})
     tab = client.post("/api/tabs", json={"name": "NbSync"}).json()
     # auto-add on: new candidates mirror into the notebook during the pipeline
     client.put(f"/api/tabs/{tab['id']}/notebook",
@@ -1834,7 +1834,7 @@ def test_notebook_auto_add_and_sync(client, monkeypatch):
 def test_notebook_export_includes_benchmark(client, monkeypatch):
     added = []
     monkeypatch.setattr(nlm_bridge, "add_source_text",
-                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+                        lambda nb, title, text, **k: added.append((nb, title)) or {"ok": True})
     tab = client.post("/api/tabs", json={"name": "Exp"}).json()
     client.put(f"/api/tabs/{tab['id']}/notebook",
                json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": [],
@@ -1855,7 +1855,7 @@ def test_notebook_export_includes_benchmark(client, monkeypatch):
 def test_notebook_add_selected_pushes_only_chosen(client, monkeypatch):
     added = []
     monkeypatch.setattr(nlm_bridge, "add_source_text",
-                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+                        lambda nb, title, text, **k: added.append((nb, title)) or {"ok": True})
     tab = client.post("/api/tabs", json={"name": "AddSel"}).json()
     # connect with auto_add OFF so the pipeline does NOT pre-mirror candidates
     client.put(f"/api/tabs/{tab['id']}/notebook",
@@ -1879,7 +1879,7 @@ def test_notebook_add_selected_pushes_only_chosen(client, monkeypatch):
 
 def test_notebook_add_selected_benchmark_first_then_full(client, monkeypatch):
     added, state = [], {"full_after": 1}
-    def fake_add(nb, title, text):
+    def fake_add(nb, title, text, **k):
         if len(added) >= state["full_after"]:
             return {"error": "notebook is full (50 sources)", "full": True}
         added.append((nb, title)); return {"ok": True}
@@ -1902,9 +1902,9 @@ def test_notebook_add_selected_benchmark_first_then_full(client, monkeypatch):
 def test_notebook_add_selected_auto_creates_when_none_connected(client, monkeypatch):
     added = []
     monkeypatch.setattr(nlm_bridge, "add_source_text",
-                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+                        lambda nb, title, text, **k: added.append((nb, title)) or {"ok": True})
     monkeypatch.setattr(nlm_bridge, "create_notebook",
-                        lambda t: {"id": "nb-made", "title": t})
+                        lambda t, **k: {"id": "nb-made", "title": t})
     # disable the pipeline's own auto-create so the tab stays notebook-less until we add
     monkeypatch.setattr(api, "AUTO_CREATE_NOTEBOOK", False)
     tab = client.post("/api/tabs", json={"name": "Lonely"}).json()
@@ -1924,7 +1924,7 @@ def test_notebook_add_selected_to_explicit_notebook(client, monkeypatch):
     """An explicit notebook_id sends docs to THAT notebook, not the connected one."""
     added = []
     monkeypatch.setattr(nlm_bridge, "add_source_text",
-                        lambda nb, title, text: added.append((nb, title)) or {"ok": True})
+                        lambda nb, title, text, **k: added.append((nb, title)) or {"ok": True})
     tab = client.post("/api/tabs", json={"name": "Pick"}).json()
     # tab is connected to nb-1, but we add to a DIFFERENT notebook
     client.put(f"/api/tabs/{tab['id']}/notebook",
@@ -1944,11 +1944,11 @@ def test_notebook_add_selected_to_explicit_notebook(client, monkeypatch):
 
 def test_notebook_import_patents_and_text(client, monkeypatch):
     monkeypatch.setattr(nlm_bridge, "list_sources",
-                        lambda nb, force=False: {"sources": [
+                        lambda nb, force=False, **k: {"sources": [
                             {"id": "sp", "title": "US10395648B1 — a patent"},
                             {"id": "st", "title": "Meeting notes"}]})
     monkeypatch.setattr(nlm_bridge, "source_content",
-                        lambda sid: {"content": "raw text body of the notes"})
+                        lambda sid, **k: {"content": "raw text body of the notes"})
     tab = client.post("/api/tabs", json={"name": "Imp"}).json()
     client.put(f"/api/tabs/{tab['id']}/notebook",
                json={"notebook_id": "nb-1", "notebook_title": "NB", "source_ids": []})
@@ -2684,7 +2684,7 @@ def test_additional_read_endpoint(client, monkeypatch):
     _db.update_document(doc["id"], digest="A remaining-capacity meter IC with a removable battery pack.",
                         score=8, scored_at=1, score_model="opus")
     captured = {}
-    def fake_add(a_features, docs, model=None):
+    def fake_add(a_features, docs, model=None, **k):
         captured["a"] = [f["name"] for f in a_features]
         captured["n"] = [d["number"] for d in docs]
         captured["model"] = model
@@ -2736,7 +2736,7 @@ def test_additional_read_all_docs_covers_every_candidate(client, monkeypatch):
     from patentbench import claude_bridge as cb
     tid, nums = _add_read_tab(client, 12)
     seen = []
-    def fake_add(a_features, docs, model=None):
+    def fake_add(a_features, docs, model=None, **k):
         seen.extend(d["number"] for d in docs)
         return {"results": {d["number"]: [{"name": "detachable pack", "weight": 4, "sl": 7,
                                            "status": "present", "evidence": "e"}] for d in docs},
@@ -2761,7 +2761,7 @@ def test_additional_read_all_docs_batches_the_bulk_calls(client, monkeypatch):
     from patentbench import claude_bridge as cb
     tid, nums = _add_read_tab(client, 7, batch=2, monkeypatch=monkeypatch)
     sizes = []
-    def fake_add(a_features, docs, model=None):
+    def fake_add(a_features, docs, model=None, **k):
         sizes.append(len(docs))
         return {"results": {d["number"]: [{"name": "detachable pack", "weight": 4, "sl": 7,
                                            "status": "absent", "evidence": ""}] for d in docs},
@@ -2779,7 +2779,7 @@ def test_additional_read_partial_batch_failure_keeps_the_rest(client, monkeypatc
     tid, nums = _add_read_tab(client, 6, batch=2, monkeypatch=monkeypatch)
     calls = {"n": 0}
     lock = __import__("threading").Lock()
-    def fake_add(a_features, docs, model=None):
+    def fake_add(a_features, docs, model=None, **k):
         with lock:
             calls["n"] += 1
             first = calls["n"] == 1
