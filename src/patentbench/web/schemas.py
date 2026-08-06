@@ -198,7 +198,9 @@ class NlmScreenRequest(BaseModel):
     include_screened: bool = False         # False = skip docs already screened earlier
     batch_size: int = Field(default=39, ge=5, le=48)
     survivor_cap: int = Field(default=10, ge=1, le=20)
-    target: int = Field(default=40, ge=5, le=49)   # finalize shortlist size
+    # 49 = NLM's true max (benchmark takes the 50th source slot): a full final
+    # notebook doubles as a durable "come back later" artifact (user 2026-08-06).
+    target: int = Field(default=49, ge=5, le=49)   # finalize shortlist size
 
     @model_validator(mode="after")
     def _fits_notebook(self):
