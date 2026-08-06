@@ -3898,7 +3898,8 @@ def nlm_screen_start(tab_id: int, body: schemas.NlmScreenRequest):
     bm = db.get_benchmark(tab_id)
     if not bm or bm.get("status") != "ready":
         raise HTTPException(400, "benchmark is not ready — set it first")
-    cands = [d for d in db.list_documents(tab_id) if d["status"] == "fetched"]
+    fetched = [d for d in db.list_documents(tab_id) if d["status"] == "fetched"]
+    cands = fetched
     if body.doc_ids:
         want = set(body.doc_ids)
         cands = [d for d in cands if d["id"] in want]
@@ -3908,8 +3909,25 @@ def nlm_screen_start(tab_id: int, body: schemas.NlmScreenRequest):
         raise HTTPException(400, "no fetched candidates to screen"
                             + ("" if body.include_screened
                                else " (all already screened — tick ↻ include screened)"))
+    # 🏆 Champion seeding: a default run over newcomers carries the previous
+    # tournament forward instead of isolating them — prior graduates enter the
+    # ledger (so finalize ranks old+new together and set_shortlisted no longer
+    # wipes a big run's result with a newcomers-only ranking) and the best of
+    # them pre-fill the survivor pool, so a newcomer must BEAT the champions to
+    # graduate. Carried rounds reset to 0: on equal best-rank the "later round
+    # wins" tiebreak then favors the doc that earned it against the seeded
+    # champions. Explicit doc_ids or ↻ include_screened = a deliberate fresh
+    # tournament, no seeding.
+    seed_ledger, seed_survivors = {}, []
+    if not body.include_screened and not body.doc_ids:
+        prev = _screen_read(tab_id) or {}
+        fetched_ids = {d["id"] for d in fetched}
+        seed_ledger = {k: [v[0], 0] for k, v in (prev.get("ledger") or {}).items()
+                       if int(k) in fetched_ids}
+        seed_survivors = [int(k) for k, v in sorted(seed_ledger.items(),
+                          key=lambda kv: kv[1][0])[:body.survivor_cap]]
     _screen_set(tab_id, step="round", queue=[d["id"] for d in cands], cursor=0, round=0,
-                roster=[], survivors=[], ledger={}, unmatched=[],
+                roster=[], survivors=seed_survivors, ledger=seed_ledger, unmatched=[],
                 params={"batch_size": body.batch_size, "survivor_cap": body.survivor_cap,
                         "target": body.target},
                 started_at=db._now(), quota=None, stop=False, error=None,
@@ -3919,7 +3937,11 @@ def nlm_screen_start(tab_id: int, body: schemas.NlmScreenRequest):
         f"🔬 NLM mega-screen STARTED over {len(cands)} candidate(s): ~{rounds} round(s) of "
         f"{body.batch_size} through one rotating notebook, {body.survivor_cap} survivors "
         f"carry forward each round, finalize writes the top ~{body.target} to the shortlist. "
-        "Free (zero Claude tokens); survives restarts; NLM quota pauses auto-resume.")
+        "Free (zero Claude tokens); survives restarts; NLM quota pauses auto-resume."
+        + (f"\n🏆 Seeded with the previous run: {len(seed_survivors)} champion(s) pre-fill "
+           f"the survivor pool and {len(seed_ledger)} prior graduate(s) stay in the ledger — "
+           "newcomers must beat the champions to graduate; finalize ranks old and new "
+           "together." if seed_survivors else ""))
     started = _screen_launch(tab_id)
     return {"started": started, "rounds_estimate": rounds, **_screen_status(tab_id)}
 

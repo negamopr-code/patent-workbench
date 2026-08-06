@@ -1804,6 +1804,31 @@ function renderDocs(allDocs) {
       bar.appendChild(pickTop);
       bar.appendChild(nIn);
     }
+    // ☑ Bulk pick of the 🔬 mega-screen GRADUATES — the finalize auto-checks only the
+    // top-`target` finalists, but every doc NLM ever named keeps its graduate chip.
+    // Reading ALL of them was otherwise hand-ticking: graduates outside the finalist
+    // cut have no score/nlm_score/rank yet, so «☑ select top» can't express them.
+    const grads = allDocs.filter(d => d.status === 'fetched' && d.nlm_screen_state === 'graduate');
+    if (grads.length) {
+      const pickG = document.createElement('button');
+      pickG.className = 'btn small';
+      const freshG = grads.filter(d => !docSelection.has(d.id));
+      pickG.textContent = `☑ select ${grads.length} 🔬 graduates`;
+      pickG.disabled = !freshG.length;
+      pickG.title = freshG.length
+        ? `Tick every 🔬 mega-screen graduate (${freshG.length} not already checked), ADDING them `
+          + 'to the selection — then 🏆 Deep-analyse selected (or raise 📖 first) reads exactly '
+          + 'those. Graduate = NLM named it in some round; the shortlist keeps only the top '
+          + 'finalists, this picks them ALL.'
+        : 'All graduates are already checked.';
+      pickG.onclick = () => {
+        for (const d of grads) docSelection.add(d.id);
+        // Same reason as the pickers above: an active filter would prune hidden picks.
+        docsFilter = 'all';
+        renderDocs(allDocs);
+      };
+      bar.appendChild(pickG);
+    }
     // ☑ Bulk pick of the LATEST ADD-BATCH — when a fresh set of candidates lands in
     // a tab already holding hundreds of unread ones, "read the new ones first" needs
     // exactly those. A batch = fetched docs whose added_at timestamps cluster

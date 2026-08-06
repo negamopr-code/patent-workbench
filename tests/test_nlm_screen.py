@@ -284,3 +284,50 @@ def test_available_refuses_without_auth_profile(monkeypatch, tmp_path):
     (prof / "cookies.json").write_text("{}")
     ok, why = nlm_bridge.available()
     assert ok is True
+
+
+def test_second_run_seeds_champions_and_merges_ledger(client, monkeypatch):
+    # Run 1 over 4 docs → 902 (rank 1) + 901 (rank 2) graduate. Newcomers 905/906
+    # arrive later; the default second run must (a) queue ONLY the newcomers,
+    # (b) pre-seed the survivor pool with the champions so newcomers face them,
+    # (c) finalize over the MERGED ledger so set_shortlisted writes a global
+    # ranking instead of wiping run 1's result with a newcomers-only list.
+    fake = FakeNlm([
+        {"answer": "TOP:\n1. EP3667902A1 — best\n2. EP3667901A1 — ok"},
+        {"answer": "SHORTLIST — EP3667902A1\nBEST: EP3667902A1\nFEATURE MAP: 1. YES"},
+        # run 2, one round: newcomer 907 beats champion 902; champion 901 unnamed
+        {"answer": "TOP:\n1. EP3667907A1 — new best\n2. EP3667902A1 — champ holds"},
+        {"answer": "SHORTLIST — EP3667907A1, EP3667902A1\nBEST: EP3667907A1\n"
+                   "SECOND-BEST: EP3667902A1\nFEATURE MAP: 1. YES"},
+    ])
+    fake.install(monkeypatch)
+    tid, ids = _mk_tab(client, n_docs=4)
+    r = client.post(f"/api/tabs/{tid}/nlm-screen",
+                    json={"batch_size": 5, "survivor_cap": 2}).json()
+    assert r["started"] is True
+    _wait_screen(client, tid, until=("done",))
+
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP3667907A1", "EP3667908A1"], "source": "image"})
+    r = client.post(f"/api/tabs/{tid}/nlm-screen",
+                    json={"batch_size": 5, "survivor_cap": 2}).json()
+    assert r["started"] is True and r["rounds_estimate"] == 1   # only the 2 newcomers queued
+    s = _wait_screen(client, tid, until=("done",))
+    assert s["graduates"] == 3                       # merged ledger: 902 + 901 + 907
+
+    docs = {d["number"]: d for d in
+            client.get(f"/api/tabs/{tid}/documents").json()["documents"]}
+    # champion 902 was STAGED in run 2 (seeded survivor) — provable because NLM could
+    # only name staged docs, and it kept a global rank through the merged finalize:
+    assert docs["EP3667907A1"]["nlm_rank"] == 1
+    assert docs["EP3667902A1"]["nlm_rank"] == 2
+    # unnamed champion 901 stays a graduate (survivor slots are never 'rejected')
+    # and still makes the merged finalist list from the carried ledger:
+    assert docs["EP3667901A1"]["nlm_screen_state"] == "graduate"
+    assert docs["EP3667901A1"]["nlm_rank"] == 3
+    # unnamed NEWCOMER is rejected as usual:
+    assert docs["EP3667908A1"]["nlm_screen_state"] == "rejected"
+    # the seeding was announced (and therefore actually happened at start):
+    msgs = " ".join(m["text"] for m in
+                    client.get(f"/api/tabs/{tid}/state").json()["messages"])
+    assert "2 champion(s)" in msgs and "2 prior graduate(s)" in msgs
