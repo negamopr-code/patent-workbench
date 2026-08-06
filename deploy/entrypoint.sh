@@ -15,6 +15,19 @@ else
   echo "entrypoint: no /seed credentials — Claude chat unavailable (mount /root/.claude:ro at /seed)"
 fi
 
+# NLM auth profile lives in the nlm-profile named volume. An empty/broken
+# profile does NOT block boot (documents + Claude chat keep working), but say so
+# LOUDLY here — otherwise the first symptom is a mega-screen/rating job dying
+# mid-round with a raw traceback (2026-08-06).
+NLM_PROF=/home/app/.notebooklm-mcp-cli
+if [ ! -f "$NLM_PROF/profiles/default/cookies.json" ]; then
+  echo "entrypoint: WARN NLM profile missing ($NLM_PROF) — NotebookLM features unavailable; run scripts/reseed-nlm-profile.sh"
+elif [ ! -w "$NLM_PROF" ]; then
+  echo "entrypoint: WARN NLM profile dir not writable by uid $(id -u) — run scripts/reseed-nlm-profile.sh (fixes ownership)"
+else
+  echo "entrypoint: NLM profile present"
+fi
+
 # Background-job locks (deep-read assessment, NLM rating) track IN-MEMORY worker
 # threads, which do NOT survive a container/process restart. A fresh start means
 # no job is running by definition, so any lingering lock/pause file is stale —

@@ -38,11 +38,25 @@ _sources_cache: dict[str, tuple[float, list[dict]]] = {}   # notebook_id → (ts
 
 
 def available() -> tuple[bool, str]:
-    """Is the nlm CLI reachable in this deployment? Returns (ok, reason-if-not)."""
+    """Is the nlm CLI reachable AND authenticated in this deployment? Returns
+    (ok, reason-if-not). The profile check exists because a wiped/root-owned
+    profile dir otherwise surfaces only as a raw PermissionError traceback in
+    the MIDDLE of a job (mega-screen round 13, 2026-08-06) instead of an
+    actionable refusal at start."""
     if shutil.which(NLM_BIN) is None and not os.path.exists(NLM_BIN):
         return False, (f"nlm CLI not found ({NLM_BIN}). Rebuild the container with "
                        "scripts/serve.sh — the image bakes notebooklm-mcp-cli and "
                        "needs the nlm-profile mount.")
+    prof_dir = os.path.expanduser("~/.notebooklm-mcp-cli")
+    cookies = os.path.join(prof_dir, "profiles", "default", "cookies.json")
+    if not os.path.isfile(cookies):
+        return False, ("NLM auth profile missing (" + cookies + "). Run "
+                       "scripts/reseed-nlm-profile.sh from the claude dev "
+                       "container, then retry.")
+    if not os.access(prof_dir, os.W_OK):
+        return False, (f"NLM profile dir not writable ({prof_dir}) — ownership "
+                       "broken (expected uid 1000). Re-run "
+                       "scripts/reseed-nlm-profile.sh, which fixes ownership.")
     return True, ""
 
 

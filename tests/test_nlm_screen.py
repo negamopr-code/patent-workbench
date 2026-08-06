@@ -270,3 +270,17 @@ def test_wait_sources_ready_known_ready_skips_probes(monkeypatch):
     r = nlm_bridge.wait_sources_ready("nb", timeout=5, poll=0.01, known_ready={"s1"})
     assert r["ready"] is True
     assert probed == ["s2"]                                 # s1 was pre-confirmed
+
+
+def test_available_refuses_without_auth_profile(monkeypatch, tmp_path):
+    # A wiped/root-owned profile dir must be an ACTIONABLE refusal at start, not
+    # a raw PermissionError in the middle of a screen round (2026-08-06).
+    monkeypatch.setattr(nlm_bridge, "NLM_BIN", "/bin/sh")   # binary "exists"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ok, why = nlm_bridge.available()
+    assert ok is False and "reseed-nlm-profile" in why
+    prof = tmp_path / ".notebooklm-mcp-cli" / "profiles" / "default"
+    prof.mkdir(parents=True)
+    (prof / "cookies.json").write_text("{}")
+    ok, why = nlm_bridge.available()
+    assert ok is True

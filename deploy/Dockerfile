@@ -30,7 +30,12 @@ ENV PYTHONPATH=/app/src \
     PORT=8000 \
     WEB_CONCURRENCY=2
 
-RUN useradd -m -u 1000 app && mkdir -p /data && chown -R app:app /data /home/app
+# .notebooklm-mcp-cli is created HERE so the nlm-profile named volume inherits
+# app:app ownership on first use (docker copies mountpoint ownership into a
+# fresh volume) — a root-owned profile dir kills every NLM call with a raw
+# PermissionError (2026-08-06).
+RUN useradd -m -u 1000 app && mkdir -p /data /home/app/.notebooklm-mcp-cli \
+    && chown -R app:app /data /home/app
 VOLUME /data
 EXPOSE 8000
 USER app

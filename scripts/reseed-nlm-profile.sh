@@ -3,20 +3,18 @@
 #
 # WHY THIS EXISTS
 # --------------
-# patent-bench mounts the NLM profile via:
-#     -v /root/claude-sandbox/persistent/nlm-profile:/home/app/.notebooklm-mcp-cli
-# but on this Docker-Desktop-on-WSL2 host that host path resolves (through the
-# daemon's bind layer) to a DIFFERENT, empty directory than the populated
-# profile the claude dev container sees at /home/node/.notebooklm-mcp-cli.
-# Result: nlm inside patent-bench reports "Profile 'default' not found" and the
-# in-app NotebookLM query crashes with a raw traceback at
-#   notebooklm_tools/cli/commands/notebook.py:171  (get_client -> profile_exists).
+# patent-bench keeps the NLM profile in the NAMED VOLUME `nlm-profile`
+# (serve.sh). The volume starts EMPTY, so it must be seeded ONCE from the
+# canonical profile the claude dev container sees at
+# /home/node/.notebooklm-mcp-cli — and re-seeded only when the cookies expire
+# (nlm starts failing with "Profile 'default' not found" or auth errors).
 #
-# This script copies the working profile (cookies.json + metadata.json) from the
-# canonical claude-container location into patent-bench and fixes ownership.
-# The files land in patent-bench's real bind dir, which is keyed off the -v path
-# string, so they SURVIVE `scripts/serve.sh` rebuilds. Re-run only when the
-# cookies expire (NLM starts failing again with the same traceback).
+# History: until 2026-08-06 this was a /root/claude-sandbox/... host bind. On
+# Docker-Desktop-on-WSL2 such binds materialize as docker-desktop-bind-mounts
+# dirs that are WIPED (root-owned, empty) on Docker Desktop/host restarts —
+# which killed the mega-screen mid-round with a raw PermissionError. The named
+# volume survives those restarts; this script is now first-seed + cookie-refresh
+# only, not a recurring recovery step.
 #
 # Run from INSIDE the claude dev container (docker socket is mounted).
 set -eu
