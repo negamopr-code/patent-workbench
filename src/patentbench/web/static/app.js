@@ -1666,18 +1666,22 @@ function renderDocs(allDocs) {
   // stale — it never saw a feature you added — and must be re-read regardless of model).
   const fresh = d => (d.scored_at || 0) >= bmAt;
   const readAtLevel = d => hasRead(d) && fresh(d) && modelRank(d.score_model) <= modelRank(rm);
-  const unread = allDocs.filter(d => d.status === 'fetched' && !readAtLevel(d)).length;
-  const assessed = allDocs.filter(hasRead).length;
+  // Continue is scoped to the ☑ selection when one exists — count over the same pool
+  // the click will act on, so "(N left)" never promises more than the button does.
+  const contPool = docSelection.size ? allDocs.filter(d => docSelection.has(d.id)) : allDocs;
+  const unread = contPool.filter(d => d.status === 'fetched' && !readAtLevel(d)).length;
+  const assessed = contPool.filter(hasRead).length;
   const cont = $('claude-continue');
   if (cont) {
     const rmShort = rm.replace('claude-', '');
+    const selMark = docSelection.size ? ' of ☑' : '';
     cont.classList.toggle('hidden', !(unread || assessed));
     // Always reads as "▶️ Continue" so it's clearly the RESUME button (never the restart). With
     // leftovers it reads only those; with none, it re-ranks from stored (0 tokens).
-    cont.textContent = unread ? `▶️ Continue read (${unread} left)`
+    cont.textContent = unread ? `▶️ Continue read (${unread}${selMark} left)`
                               : `▶️ Continue · re-rank ${assessed} (none left)`;
     cont.title = unread
-      ? `RESUME without restarting: full-reads ONLY the ${unread} candidate(s) not yet read by `
+      ? `RESUME without restarting: full-reads ONLY the ${unread}${selMark} candidate(s) not yet read by `
         + `${rmShort} or a stronger model — never re-reads what's done, never restarts the whole corpus.`
       : `Every candidate is already read by ${rmShort} or stronger, so there's nothing new to read — `
         + `this re-ranks from the stored reads (0 tokens). To deliberately RE-READ specific docs `
@@ -3113,15 +3117,18 @@ async function runDeepCompare(idsArg, skipScored, readModelOverride) {
   let scope = ids.length ? `the ${ids.length} SELECTED candidate(s)` : 'EVERY candidate';
   let rerankOnly = false;
   if (skipScored) {
-    // model-aware: "to do" = candidates not yet read by `readModel` or a stronger one
+    // model-aware: "to do" = candidates not yet read by `readModel` or a stronger one,
+    // counted over the ☑ selection when Continue is scoped to one.
+    const pool = ids.length ? lastDocs.filter(d => ids.includes(d.id)) : lastDocs;
     const hasRead = d => d.status === 'fetched' && (d.verdict_len || d.score != null);
     const readAtLevel = d => hasRead(d) && modelRank(d.score_model) <= modelRank(readModel);
-    const todo = lastDocs.filter(d => d.status === 'fetched' && !readAtLevel(d)).length;
-    const have = lastDocs.filter(hasRead).length;
+    const todo = pool.filter(d => d.status === 'fetched' && !readAtLevel(d)).length;
+    const have = pool.filter(hasRead).length;
     if (!todo && !have) { alert('No candidate has been full-read yet. Use 🤖 Claude deep-read all first.'); return; }
     rerankOnly = !todo;
-    scope = todo ? `the ${todo} candidate(s) not yet read by ${short(readModel)} (most promising first)`
-                 : `all ${have} already-read candidate(s) — RE-RANK from stored assessments, no re-reading`;
+    const sel = ids.length ? ` of the ${ids.length} selected` : '';
+    scope = todo ? `the ${todo}${sel} candidate(s) not yet read by ${short(readModel)} (most promising first)`
+                 : `all ${have}${sel} already-read candidate(s) — RE-RANK from stored assessments, no re-reading`;
   }
   // ⚠️ no-features guard (tab-11 double-spend): reads made before the feature list is
   // accepted are holistic-only and must be REPEATED for feature ranking — say so BEFORE
@@ -3329,7 +3336,9 @@ $('cross-tab').onclick = () => {
   crossTabScanThen(() => { refreshDocs(); reloadChat(); });
 };
 $('claude-rate-all').onclick = () => runDeepCompare(null);            // re-read EVERY candidate
-$('claude-continue').onclick = () => runDeepCompare(null, true);      // only the not-yet-read ones
+// Only the not-yet-read ones — scoped to the ☑ selection when one exists (e.g. check
+// all 🔬 graduates → Continue reads just the graduates opus hasn't assessed yet).
+$('claude-continue').onclick = () => runDeepCompare(docSelection.size ? [...docSelection] : null, true);
 $('deep-selected').onclick = () => {
   if (!docSelection.size) { alert('No candidates are checked. Tick the box on the candidates you want analysed.'); return; }
   runDeepCompare([...docSelection]);
