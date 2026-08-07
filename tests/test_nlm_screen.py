@@ -348,3 +348,23 @@ def test_nlm_question_total_length_capped():
     assert len(q) <= api.NLM_QUERY_SAFE_TOTAL and "EP1, EP2" in q
     # a small spec is passed through whole
     assert "tiny spec" in api._nlm_question(api.NLM_SHORTLIST_PROMPT, "tiny spec")
+
+
+def test_source_index_strict_raises_on_list_failure(monkeypatch):
+    """A failed source LIST must never read as an EMPTY notebook (tab 11 round 14:
+    the rotation saw {} on a transient failure and tried to add the benchmark into
+    a full notebook). strict retries once, then raises resumably."""
+    calls = []
+
+    def failing_list(nb, force=False, profile=None, **k):
+        calls.append(nb)
+        return {"sources": [], "error": "transient boom"}
+
+    monkeypatch.setattr(api.nlm_bridge, "list_sources", failing_list)
+    monkeypatch.setattr(api.time, "sleep", lambda s: None)
+    import pytest
+    with pytest.raises(RuntimeError, match="could not list notebook sources"):
+        api._notebook_source_index("nb1", strict=True)
+    assert len(calls) == 2                       # retried once before raising
+    calls.clear()
+    assert api._notebook_source_index("nb1") == ({}, None)   # non-strict: old behavior

@@ -3216,14 +3216,25 @@ def _benchmark_summary_for_nlm(bm: dict, limit: int = 4000) -> str:
     return "\n\n".join(p for p in parts if p)[:limit]
 
 
-def _notebook_source_index(nb: str, profile: str | None = None) -> tuple[dict[str, str], str | None]:
+def _notebook_source_index(nb: str, profile: str | None = None,
+                           strict: bool = False) -> tuple[dict[str, str], str | None]:
     """({patent-number -> source_id}, benchmark_source_id|None) for a notebook,
     read from its source titles ('CN1234 — …' / '🎯 BENCHMARK — …'). Knowing the
     benchmark's source id lets the rating query stay TINY — we ground NotebookLM on
-    the benchmark source instead of pasting the whole benchmark into every question."""
+    the benchmark source instead of pasting the whole benchmark into every question.
+    strict=True: a failed source LIST must not read as an EMPTY notebook — the 🔬
+    screen's rotation acted on that empty index and tried to add the benchmark into
+    a genuinely full notebook (tab 11 round 14, 2026-08-07). Retry once, then raise
+    so the job errors resumably instead of misdiagnosing."""
+    res = nlm_bridge.list_sources(nb, force=True, profile=profile)
+    if strict and res.get("error"):
+        time.sleep(5)
+        res = nlm_bridge.list_sources(nb, force=True, profile=profile)
+        if res.get("error"):
+            raise RuntimeError(f"could not list notebook sources: {res['error']}")
     m: dict[str, str] = {}
     bm_sid = None
-    for s in (nlm_bridge.list_sources(nb, force=True, profile=profile).get("sources") or []):
+    for s in (res.get("sources") or []):
         title = s.get("title") or ""
         if title.startswith("🎯 BENCHMARK"):
             bm_sid = s["id"]
@@ -3691,7 +3702,7 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
                  if docs_by_id.get(i)}
 
     def index() -> tuple[dict[str, str], str | None]:
-        return _notebook_source_index(nb, prof)
+        return _notebook_source_index(nb, prof, strict=True)
 
     num_map, bm_sid = index()
     # 1. delete candidate sources that are neither benchmark nor wanted (previous
