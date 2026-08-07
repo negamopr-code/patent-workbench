@@ -331,3 +331,20 @@ def test_second_run_seeds_champions_and_merges_ledger(client, monkeypatch):
     msgs = " ".join(m["text"] for m in
                     client.get(f"/api/tabs/{tid}/state").json()["messages"])
     assert "2 champion(s)" in msgs and "2 prior graduate(s)" in msgs
+
+
+def test_nlm_question_total_length_capped():
+    """Google rejects the WHOLE question past ~5-6k chars (INVALID_ARGUMENT, live
+    2026-08-07 tab 11): a spec that fills its own cap must be sliced further so the
+    rendered template never exceeds NLM_QUERY_SAFE_TOTAL."""
+    huge = "F. feature line (importance 5/5)\n" * 400          # ≈ 13k chars
+    for template, kw in ((api.NLM_SCREEN_PROMPT, {"top": 10}),
+                         (api.NLM_SHORTLIST_PROMPT, {})):
+        q = api._nlm_question(template, huge, **kw)
+        assert len(q) <= api.NLM_QUERY_SAFE_TOTAL
+        assert "feature line" in q                             # spec still present
+    q = api._nlm_question(api.NLM_DEBATE_PROMPT, huge, spec_key="spec",
+                          finalists="EP1, EP2")
+    assert len(q) <= api.NLM_QUERY_SAFE_TOTAL and "EP1, EP2" in q
+    # a small spec is passed through whole
+    assert "tiny spec" in api._nlm_question(api.NLM_SHORTLIST_PROMPT, "tiny spec")

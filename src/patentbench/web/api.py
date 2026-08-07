@@ -3349,6 +3349,18 @@ NLM_SHORTLIST_PROMPT = (
 )
 
 NLM_SHORTLIST_QUERY_CAP = 6000   # NotebookLM rejects very long questions (~5-7k char ceiling)
+# Google rejects the WHOLE question past ~5-6k chars (verified live 2026-08-07: 6708 and
+# 6000 → INVALID_ARGUMENT code 3 on tab 11, whose feature spec alone filled the 6k cap).
+# So the spec's slice must budget for the template around it, not just for itself.
+NLM_QUERY_SAFE_TOTAL = 5000
+
+
+def _nlm_question(template: str, spec: str, *, spec_key: str = "benchmark", **kw) -> str:
+    """Render an NLM question with the feature spec sliced so the TOTAL question stays
+    under NLM_QUERY_SAFE_TOTAL — capping the spec alone let a long template push the
+    total past the ceiling and Google refused the query."""
+    room = NLM_QUERY_SAFE_TOTAL - len(template.format(**{spec_key: ""}, **kw))
+    return template.format(**{spec_key: (spec or "")[:max(0, room)]}, **kw)
 
 
 def _shortlist_answer_complete(answer: str) -> bool:
@@ -3390,8 +3402,7 @@ def nlm_shortlist(tab_id: int, body: schemas.NlmShortlistRequest):
     if not cands:
         raise HTTPException(400, "no fetched candidate documents to shortlist")
     spec = _benchmark_feature_spec_for_nlm(bm)        # weighted feature names → spec → summary
-    question = (body.question or "").strip() or NLM_SHORTLIST_PROMPT.format(
-        benchmark=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
+    question = (body.question or "").strip() or _nlm_question(NLM_SHORTLIST_PROMPT, spec)
     if body.notebook_id:
         # one consolidated notebook → a single global best/second-best across all of them
         titles = {n["id"]: n["title"]
@@ -3761,8 +3772,7 @@ def _run_nlm_screen(tab_id: int) -> None:
         params = st.get("params") or {}
         s_cap = int(params.get("survivor_cap", 10))
         batch = int(params.get("batch_size", 39))
-        question = NLM_SCREEN_PROMPT.format(top=s_cap,
-                                            benchmark=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
+        question = _nlm_question(NLM_SCREEN_PROMPT, spec, top=s_cap)
         docs_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
                       if d["status"] == "fetched"}
         while st.get("step") == "round":
@@ -3854,7 +3864,7 @@ def _screen_finalize(tab_id: int, st: dict, docs_by_id: dict[int, dict]) -> None
     nb, bm_sid, key_map, _failed = _screen_stage(tab_id, st, finalists, docs_by_id)
     bm = db.get_benchmark(tab_id)
     spec = _benchmark_feature_spec_for_nlm(bm)
-    question = NLM_SHORTLIST_PROMPT.format(benchmark=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
+    question = _nlm_question(NLM_SHORTLIST_PROMPT, spec)
     _screen_set(tab_id, status_text="🏁 finalize: asking for the global ranking…")
     res = nlm_bridge.query(nb, question, profile=_tab_profile(tab_id))
     if nlm_bridge.is_quota_error(res):
@@ -5705,7 +5715,7 @@ def nlm_challenge(tab_id: int, body: schemas.NlmChallengeRequest):
                     not_in_nb.append(d["number"])
     # 1) NotebookLM round — one bulk grounded prompt, scoped to the connected notebook (now
     #    holding both sides' picks); cached so re-runs are free.
-    question = NLM_DEBATE_PROMPT.format(finalists=nums, spec=(spec or "")[:NLM_SHORTLIST_QUERY_CAP])
+    question = _nlm_question(NLM_DEBATE_PROMPT, spec, spec_key="spec", finalists=nums)
     if cfg.get("notebook_id"):
         titles = {n["id"]: n["title"]
                   for n in (nlm_bridge.list_notebooks(profile=_tab_profile(tab_id))
