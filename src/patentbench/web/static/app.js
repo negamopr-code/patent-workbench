@@ -3367,12 +3367,24 @@ async function runShortlist({ confirmFirst = true, statusEl = 'funnel-status', n
 }
 $('nlm-shortlist').onclick = () => runShortlist();
 $('verify-shortlist').onclick = () => {
-  if (!docSelection.size) {
-    alert('No shortlist is checked. Run 📓 NLM shortlist first, or tick the candidates you want opus to verify.');
+  let ids = [...docSelection];
+  if (!ids.length) {
+    // The 🔬 mega-screen finalize persists its picks server-side (shortlisted=1,
+    // nlm_rank best-first) but runs in the background and can't tick this
+    // session's checkboxes — fall back to that stored shortlist, best-first.
+    ids = lastDocs.filter(d => d.status === 'fetched' && d.shortlisted === 1)
+      .sort((a, b) => (a.nlm_rank ?? 1e9) - (b.nlm_rank ?? 1e9))
+      .map(d => d.id);
+    // Same reason as the ☑ bulk pickers: an active filter would prune hidden picks
+    // when the list re-renders, so drop back to the full list first.
+    if (ids.length) { docSelection = new Set(ids); docsFilter = 'all'; refreshDocs(); }
+  }
+  if (!ids.length) {
+    alert('No shortlist is checked. Run 📓 NLM shortlist or a 🔬 mega-screen first, or tick the candidates you want opus to verify.');
     return;
   }
   // one-shot opus for THIS verify only — do NOT mutate the tab's 📖 model choice
-  runDeepCompare([...docSelection], false, VERIFY_MODEL);
+  runDeepCompare(ids, false, VERIFY_MODEL);
 };
 
 // 🧺 Consolidate → copy ONLY the best (checked) candidates into ONE new notebook so
