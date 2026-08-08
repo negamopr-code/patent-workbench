@@ -150,7 +150,7 @@ function renderTabs() {
     x.className = 'x'; x.textContent = '×'; x.title = 'Delete tab';
     x.onclick = async e => {
       e.stopPropagation();
-      if (!confirm(`Delete tab "${t.name}" with all its documents and chat history?`)) return;
+      if (!await safeConfirm(`Delete tab "${t.name}" with all its documents and chat history?`)) return;
       await api(`/api/tabs/${t.id}`, { method: 'DELETE' });
       if (activeTab === t.id) activeTab = null;
       loadTabs();
@@ -368,7 +368,7 @@ function renderBenchmark(bm) {
   del.className = 'btn small del'; del.textContent = '🗑';
   del.title = 'Remove benchmark';
   del.onclick = async () => {
-    if (!confirm('Remove the benchmark document (uploaded files are deleted)?')) return;
+    if (!await safeConfirm('Remove the benchmark document (uploaded files are deleted)?')) return;
     await api(`/api/tabs/${activeTab}/benchmark`, { method: 'DELETE' });
     renderBenchmark(null);
   };
@@ -459,12 +459,36 @@ SEED / SIMILAR DOCUMENTS already known to be near this space (use to anchor the
 search and to pull their families and citing/cited art — do NOT just return these):
 <WO…, CN…, EP…>`;
 
-$('bm-feat-tpl').onclick = () => {
+$('bm-feat-tpl').onclick = async () => {
   const ta = $('bm-feat-spec');
-  if (ta.value.trim() && !confirm('Replace the current feature spec with the template?')) return;
+  if (ta.value.trim() && !await safeConfirm('Replace the current feature spec with the template?')) return;
   ta.value = BM_FEATURE_TEMPLATE;
   ta.focus();
 };
+
+/* Native confirm() can be SILENTLY suppressed by the browser (the "prevent this page
+   from creating additional dialogs" checkbox, Chrome's dialog throttling): it then
+   returns false immediately and the click dies with zero feedback — this is exactly
+   the "🔬 Decompose click → no request" bug on tabs 13/14. A human cannot read a
+   question and hit Cancel in under ~100ms, so a fast false = suppressed → fall back
+   to an in-page card, which the browser cannot suppress. */
+function pageConfirm(msg) {
+  return new Promise(resolve => {
+    const modal = $('confirm-modal');
+    $('confirm-modal-text').textContent = msg;
+    const done = v => { modal.classList.add('hidden'); modal.onclick = null; resolve(v); };
+    $('confirm-ok').onclick = () => done(true);
+    $('confirm-cancel').onclick = () => done(false);
+    modal.onclick = e => { if (e.target === modal) done(false); };
+    modal.classList.remove('hidden');
+  });
+}
+async function safeConfirm(msg) {
+  const t0 = performance.now();
+  if (confirm(msg)) return true;
+  if (performance.now() - t0 > 100) return false;   // a real human Cancel
+  return pageConfirm(msg);                          // suppressed → in-page card
+}
 
 // M/A kind selector + SL (stretch level) input, shared by the row editor and the add box.
 // M = mandatory (drives the base score); A = additional (presence raises the score via the
@@ -615,7 +639,7 @@ async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false,
              ? `${addF.length} additional feature(s) (your ${mand.length} mandatory elements are already split and stay as they are)`
              : mand.length ? `${mand.length} mandatory feature(s)`
              : 'the benchmark\'s claims (claim 1 → mandatory elements, dependent claims → ➕ additional)';
-  if (!skipConfirm && !confirm(`🔬 Decompose ${what} into separable elements?\n\n`
+  if (!skipConfirm && !await safeConfirm(`🔬 Decompose ${what} into separable elements?\n\n`
       + `One cheap call. The proposed elements open in the editor for you to review, edit `
       + `and re-weight — NOTHING is saved or scored until you click save.\n\n`
       + (mand.length === 1
@@ -783,7 +807,7 @@ async function uploadBenchmark(fileList) {
   if (res.reuse) {
     const r = res.reuse;
     const m = r.text_model ? ` by ${r.text_model.replace('claude-', '')}` : '';
-    if (confirm(`These exact files were already transcribed${m} in tab “${r.tab_name || '?'}” ` +
+    if (await safeConfirm(`These exact files were already transcribed${m} in tab “${r.tab_name || '?'}” ` +
                 `(${r.chars} chars). Reuse that transcription instead of re-running OCR?`)) {
       const rr = await api(`/api/tabs/${activeTab}/benchmark/reuse`, { method: 'POST' });
       $('bm-status').textContent = rr.error ? `Error: ${rr.error}` : '';
@@ -1036,7 +1060,7 @@ async function runCombiScan() {
     // The investigation NEEDS the split, so offer to do it here rather than dead-ending on
     // "go press the other button". The approval gate still applies: the proposed elements
     // land in the editor, and the scan only resumes once you save them.
-    if (!confirm(`🔎 2-document coverage needs at least TWO elements — this benchmark has ${mand.length}.\n\n`
+    if (!await safeConfirm(`🔎 2-document coverage needs at least TWO elements — this benchmark has ${mand.length}.\n\n`
         + `A single monolithic feature cannot be split between two documents, so no pair could `
         + `ever "cover everything" and the analysis would always come back empty.\n\n`
         + `Decompose the claim into its elements now?\n`
@@ -1055,7 +1079,7 @@ async function runCombiScan() {
     .filter(f => (f.kind || 'M') === 'A' && (f.name || '').length > CHUNKY_FEATURE_CHARS);
   if (chunkyA.length) {
     const chars = chunkyA.reduce((s, f) => s + f.name.length, 0);
-    if (confirm(`🔎 Before investigating — ${chunkyA.length} additional feature(s) are still `
+    if (await safeConfirm(`🔎 Before investigating — ${chunkyA.length} additional feature(s) are still `
         + `ONE block (${chars} chars).\n\n`
         + `Additional elements are what separate documents once they all cover the mandatory `
         + `set. Held as a block it is judged all-or-nothing: a document disclosing most of its `
@@ -1073,7 +1097,7 @@ async function runCombiScan() {
   if (eligible.length < 2) { appendMsg({ role: 's', text: 'Need ≥2 candidates with a stored digest — 🔁 backfill first.' }); return; }
   const add = ((currentBm && currentBm.features) || []).filter(f => (f.kind || 'M') === 'A');
   const KEEP = Math.min(50, eligible.length);
-  if (!confirm(`🔎 Investigate 2-document coverage\n\n`
+  if (!await safeConfirm(`🔎 Investigate 2-document coverage\n\n`
       + `🩺 STAGE 0 — fast screen: cuts ${eligible.length} candidates down to ~${KEEP} worth a `
       + `closer look. Cheapest model, short digest extracts, GENEROUS (broad/implicit readings `
       + `count) — quick, and not a verdict.\n`
@@ -1142,7 +1166,7 @@ async function runCombiVerify({ ids: explicitIds = null } = {}) {
       + (nearMiss.length ? `${coverers.length ? ' + ' : ' ('}${Math.min(8, nearMiss.length)} near-misses that a full read may flip)` : (coverers.length ? ')' : ''));
   }
   if (!ids.length) { appendMsg({ role: 's', text: 'No documents to verify.' }); return; }
-  if (!confirm(`🔎 STAGE 2 — confirm against FULL text\n\n`
+  if (!await safeConfirm(`🔎 STAGE 2 — confirm against FULL text\n\n`
       + `Re-reads the full primary text of ${blurb}, replacing their digest/screen verdicts `
       + `with citable ones.\n\n`
       + `This is a full read per document — the expensive, accurate pass. A solo hit or a pair `
@@ -1164,7 +1188,7 @@ async function runCombiVerify({ ids: explicitIds = null } = {}) {
 async function runCombiIdeal() {
   if (!activeTab) return;
   const model = $('model').value;
-  if (!confirm(`🏆 CHAT-GRADE IDEAL PAIR — model: ${model}\n\n`
+  if (!await safeConfirm(`🏆 CHAT-GRADE IDEAL PAIR — model: ${model}\n\n`
       + `Phase 1 answers the chat question "what is the ideal combination of TWO documents `
       + `covering the whole benchmark (dependent claims included, some stretch allowed)" with `
       + `the SAME grounding the chat uses: benchmark, anchor full text, every stored verdict `
@@ -2318,7 +2342,7 @@ function updateFocusHint() {
 // Auto-split: fill the not-in-NLM candidates across notebooks that already have room.
 async function autoSplitNotInNlm(ids) {
   if (!ids.length) return;
-  if (!confirm(`Auto-split ${ids.length} candidate(s) across your notebooks that have free space `
+  if (!await safeConfirm(`Auto-split ${ids.length} candidate(s) across your notebooks that have free space `
     + `(most-free first, spilling over as each fills)?`)) return;
   const r = await api(`/api/tabs/${activeTab}/notebook/distribute`,
     { method: 'POST', body: JSON.stringify({ doc_ids: ids }) });
@@ -2377,6 +2401,10 @@ $('in-add').onclick = async () => {
 function maybePromptReuse(res) {
   const reusable = (res && res.reusable) || [];
   if (!reusable.length) return Promise.resolve();
+  // The doc_ids belong to the tab that was active when the add ran. The user can
+  // switch tabs while the modal sits open — posting to the then-active tab 404s on
+  // every doc and the whole answer is silently lost (bit tabs 13/14, 2026-08-08).
+  const tab = activeTab;
   return new Promise(resolve => {
     const body = $('reuse-modal-body');
     body.innerHTML = '';
@@ -2402,14 +2430,14 @@ function maybePromptReuse(res) {
       const cbs = [...body.querySelectorAll('input[type=checkbox]')];
       for (const cb of cbs) {
         const id = cb.dataset.docId;
-        if (cb.checked) await api(`/api/tabs/${activeTab}/documents/${id}/reuse`, { method: 'POST' });
-        else await api(`/api/tabs/${activeTab}/documents/${id}/refetch`, { method: 'POST' });
+        if (cb.checked) await api(`/api/tabs/${tab}/documents/${id}/reuse`, { method: 'POST' });
+        else await api(`/api/tabs/${tab}/documents/${id}/refetch`, { method: 'POST' });
       }
       finish(); refreshDocs();
     };
     $('reuse-skip').onclick = async () => {
       for (const r of reusable)
-        await api(`/api/tabs/${activeTab}/documents/${r.doc_id}/refetch`, { method: 'POST' });
+        await api(`/api/tabs/${tab}/documents/${r.doc_id}/refetch`, { method: 'POST' });
       finish(); refreshDocs();
     };
     $('reuse-modal').classList.remove('hidden');
@@ -3073,7 +3101,7 @@ async function runPsa(stretch) {
   const basisLabel = { benchmark: '🎯 benchmark document',
                        features: `🧩 benchmark features (${(currentBm && currentBm.features || []).length})`,
                        text: `✍️ pasted text (${basisText.length} chars)` }[basis];
-  if (!confirm(`${head}\n\n`
+  if (!await safeConfirm(`${head}\n\n`
       + `BASIS (the claimed invention assessed): ${basisLabel}\n`
       + (basis === 'text' ? `  "${basisText.slice(0, 160)}${basisText.length > 160 ? '…' : ''}"\n`
                           + '  The benchmark document will NOT be sent.\n' : '')
@@ -3146,7 +3174,7 @@ async function runDeepCompare(idsArg, skipScored, readModelOverride) {
         + `📖 reads/matches each candidate with: ${short(readModel)}\n`
         + `💬 compiles the ranking with: ${short(answerModel)}\n\n`
         + (ids.length ? '' : 'Takes a few minutes. ') + 'Start?';
-  if (!confirm(ask)) return;
+  if (!await safeConfirm(ask)) return;
   const q = $('q').value.trim();          // optional custom task; default ranking otherwise
   $('q').value = '';
   qGrow();
@@ -3280,7 +3308,7 @@ async function runBestMatch() {
     runDeepCompare(sel);
     return;
   }
-  if (!confirm(`🏆 Best match (batched)\n\n`
+  if (!await safeConfirm(`🏆 Best match (batched)\n\n`
       + `Reads the next ${BEST_MATCH_BATCH} candidates IN THIS TAB in FULL vs the benchmark — `
       + `most-promising first (by current score) — then assesses the 2-document COMBINATION over `
       + `everything read so far.\n\n`
@@ -3327,9 +3355,9 @@ async function afterBestMatchBatch() {
 $('best-match').onclick = () => runBestMatch();
 // 🌐 Cross-tab pull is now OPT-IN — it used to fire automatically inside Best match, which
 // surprised the user by importing other tabs' documents mid-investigation.
-$('cross-tab').onclick = () => {
+$('cross-tab').onclick = async () => {
   if (!activeTab) return;
-  if (!confirm(`🌐 Cross-tab pull\n\n`
+  if (!await safeConfirm(`🌐 Cross-tab pull\n\n`
       + `Scans EVERY other tab's fetched documents and pulls in any that cover ≥1 of this `
       + `benchmark's features (cheap digest pre-check), so they join this tab as candidates.\n\n`
       + `They then rank alongside your own. Start?`)) return;
@@ -3354,7 +3382,7 @@ async function runShortlist({ confirmFirst = true, statusEl = 'funnel-status', n
   if (!activeTab) return;
   const fetched = lastDocs.filter(d => d.status === 'fetched').length;
   if (!fetched) { alert('No fetched candidates yet. Add and let some candidates fetch first.'); return; }
-  if (confirmFirst && !confirm(`Ask NotebookLM (free) — in one fan-out question — which of the ${fetched} `
+  if (confirmFirst && !await safeConfirm(`Ask NotebookLM (free) — in one fan-out question — which of the ${fetched} `
     + 'candidate(s) disclose the benchmark\'s FULL feature combination, and which are the best + '
     + 'second-best? It auto-checks the ones it names so you can then 🤖 Verify shortlist on just those.')) return;
   const fs = $(statusEl); if (fs) fs.textContent = '📓 asking NotebookLM…';
@@ -3474,7 +3502,7 @@ $('nlm-screen').onclick = async () => {
       + 'The graduates are in the shortlist (📓 rank); re-run is only useful after the benchmark changes.');
     return;
   }
-  if (!confirm(`🔬 Mega-screen ${todo} candidate(s) with NotebookLM for FREE?\n\n`
+  if (!await safeConfirm(`🔬 Mega-screen ${todo} candidate(s) with NotebookLM for FREE?\n\n`
     + `~${rounds} round(s) of ~39 docs rotate through ONE screening notebook; 10 survivors `
     + 'carry forward each round; at the end the global top ~40 land in the shortlist for '
     + '🤖 Verify.\n\nHonest estimate: ~7-13 min per round '
@@ -3493,7 +3521,7 @@ $('screen-resume').onclick = async () => {
   pollScreen();
 };
 $('screen-stop').onclick = async () => {
-  if (!confirm('Stop rotating and finalize NOW from the graduates found so far?')) return;
+  if (!await safeConfirm('Stop rotating and finalize NOW from the graduates found so far?')) return;
   await api(`/api/tabs/${activeTab}/nlm-screen/stop`, { method: 'POST', body: '{}' });
   pollScreen();
 };
@@ -3601,7 +3629,7 @@ async function startNlmRate(ids, force) {
     if (!todo) { alert(`All ${fetched.length} candidates are already NLM-rated. Use “📓 NLM-rate selected” to re-rate specific ones.`); return; }
     scope = `${todo} not-yet-rated candidate(s) (skipping ${already} already rated)`;
   }
-  if (!confirm(`Ask NotebookLM to rate ${scope} against the benchmark? One query per candidate `
+  if (!await safeConfirm(`Ask NotebookLM to rate ${scope} against the benchmark? One query per candidate `
     + '— runs in the background; scores fill in live and you can keep working.')) return;
   const res = await api(`/api/tabs/${activeTab}/nlm-rate`, {
     method: 'POST', body: JSON.stringify({ doc_ids: ids && ids.length ? ids : null, force }) });
@@ -3634,7 +3662,7 @@ $('digest-rescore').onclick = async () => {
     .filter(id => { const d = byId.get(id); return d && d.status === 'fetched' && d.digest_len; })
     .slice(0, N);
   if (!ids.length) { appendMsg({ role: 's', text: 'No candidates with a stored digest yet — run a 🏆 deep-compare / full read once first.' }); return; }
-  if (!confirm(`Re-check the top ${ids.length} against the current benchmark from their digests?\n\nONE bulk pass, no full-text re-read. Scores get tagged ·digest.`)) return;
+  if (!await safeConfirm(`Re-check the top ${ids.length} against the current benchmark from their digests?\n\nONE bulk pass, no full-text re-read. Scores get tagged ·digest.`)) return;
   const btn = $('digest-rescore'); btn.disabled = true;
   setBusy(true, `Re-checking top ${ids.length} from digests (no re-read)`);
   const res = await api(`/api/tabs/${activeTab}/digest-rescore`, {
@@ -3668,7 +3696,7 @@ $('additional-read').onclick = async () => {
 // One cheap call per missing doc — always user-triggered, never automatic.
 async function backfillDigests(n) {
   if (!activeTab) return;
-  if (!confirm(`🔁 Backfill ${n} missing digest(s)\n\n`
+  if (!await safeConfirm(`🔁 Backfill ${n} missing digest(s)\n\n`
       + `These candidates are fetched but have NO digest, so ➕ additional read, ♻️ re-check `
       + `and 🧩 combi all skip them today.\n\n`
       + `Costs ~${n} cheap call(s), one per document. Continue?`)) return;
@@ -3685,7 +3713,7 @@ async function backfillDigests(n) {
 // verdicts still match by name, only the frozen 0-10 aggregation was made with old labels.
 $('score-recalc').onclick = async () => {
   if (!activeTab) return;
-  if (!confirm('🧮 Recalculate all stored scores from the per-element verdicts already on '
+  if (!await safeConfirm('🧮 Recalculate all stored scores from the per-element verdicts already on '
       + 'file, using the CURRENT M/A labels?\n\nFree and instant — ZERO model calls, nothing '
       + 'is re-read. Score becomes the weighted Must-rating; additional-feature coverage '
       + 'goes into the note as a bonus.')) return;
@@ -3705,7 +3733,7 @@ $('digest-rescore-all').onclick = async () => {
   if (!eligible.length) { appendMsg({ role: 's', text: 'No candidates with a stored digest yet — run a 🏆 deep-compare / full read first.' }); return; }
   const passes = Math.ceil(eligible.length / 25);
   const gap = (lastDocs || []).filter(d => d.status === 'fetched' && !d.digest_len).length;
-  if (!confirm(`♻️ Re-check ALL ${eligible.length} candidate(s) with a digest`
+  if (!await safeConfirm(`♻️ Re-check ALL ${eligible.length} candidate(s) with a digest`
              + `\n\n≈ ${passes} bulk pass(es) over stored digests (no full-text re-read).`
              + `\nScores are tagged ·digest. Each pass is saved as it lands.`
              + (gap ? `\n\n⚠ ${gap} fetched candidate(s) have NO digest and will be SKIPPED — `
@@ -3729,7 +3757,7 @@ $('additional-read-all').onclick = async () => {
   if (!eligible.length) { appendMsg({ role: 's', text: 'No candidates with a stored digest yet — run a 🏆 deep-compare / full read first.' }); return; }
   const passes = Math.ceil(eligible.length / 25);
   const gap = (lastDocs || []).filter(d => d.status === 'fetched' && !d.digest_len).length;
-  if (!confirm(`➕ Additional read over ALL ${eligible.length} candidate(s) with a digest`
+  if (!await safeConfirm(`➕ Additional read over ALL ${eligible.length} candidate(s) with a digest`
              + `\n\n≈ ${passes} bulk sonnet pass(es) over stored digests (no full-text re-read).`
              + `\nEach pass is saved as it lands.`
              + (gap ? `\n\n⚠ ${gap} fetched candidate(s) have NO digest and will be SKIPPED — `
@@ -3764,7 +3792,7 @@ async function runChallenge({ confirmFirst = true, docIds = null } = {}) {
   if (confirmFirst) {
     const subj = useSel ? `the ${docSelection.size} checked document(s)`
                         : "both sides' picks (NotebookLM's shortlist + Claude's high-scored)";
-    if (!confirm(`Run a Claude ↔ NotebookLM debate over ${subj}? Claude's picks are added into the `
+    if (!await safeConfirm(`Run a Claude ↔ NotebookLM debate over ${subj}? Claude's picks are added into the `
       + 'notebook so NotebookLM can judge them too; NLM reads each block-by-block, then Claude '
       + 'reconciles on opus. One prompt per side.')) return;
   }
@@ -4083,7 +4111,7 @@ async function runNotebookSync(setStatus) {
     setStatus(`Added ${res.added}; notebook is FULL, ${res.remaining} candidate(s) left.`);
     const st = await api(`/api/tabs/${activeTab}/state`);
     const title = (st.notebook && st.notebook.notebook_title) || 'notebook';
-    if (!confirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
+    if (!await safeConfirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
     const created = await api(`/api/tabs/${activeTab}/notebook/create`, {
       method: 'POST', body: JSON.stringify({ title: nextSeriesTitle(title) }) });
     if (created.error) { setStatus(created.error); return res; }
@@ -4217,7 +4245,7 @@ async function loadNbModal(force = false, selectId = null) {
     del.title = 'Delete this notebook permanently from NotebookLM (frees a slot toward the ~100 cap)';
     del.onclick = async (ev) => {
       ev.preventDefault();
-      if (!confirm(`Delete notebook «${nb.title}» permanently from NotebookLM? Its sources are lost. `
+      if (!await safeConfirm(`Delete notebook «${nb.title}» permanently from NotebookLM? Its sources are lost. `
         + 'This frees a slot so you can create / consolidate.')) return;
       del.disabled = true; del.textContent = '⏳';
       const dr = await api(`/api/notebooks/${encodeURIComponent(nb.id)}${profQS(true)}`, { method: 'DELETE' });
@@ -4356,7 +4384,7 @@ async function runAddToNotebook(payload, setStatus) {
   while (res.full) {
     setStatus(`Added ${res.added}; notebook is FULL, ${res.remaining} left.`);
     const title = res.notebook_title || 'notebook';
-    if (!confirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
+    if (!await safeConfirm(`Notebook "${title}" is full. Create a follow-up notebook and continue?`)) break;
     const created = await api(`/api/tabs/${activeTab}/notebook/create`, {
       method: 'POST', body: JSON.stringify({ title: nextSeriesTitle(title) }) });
     if (created.error) {
@@ -4422,7 +4450,7 @@ async function chooseNotebook(nb, current) {
     del.className = 'btn small del'; del.textContent = '🗑';
     del.title = 'Delete this source permanently from the notebook (frees a slot toward the 50-source cap)';
     del.onclick = async () => {
-      if (!confirm(`Delete source «${s.title}» permanently from «${nb.title}»?`)) return;
+      if (!await safeConfirm(`Delete source «${s.title}» permanently from «${nb.title}»?`)) return;
       del.disabled = true; del.textContent = '⏳';
       const r = await api(`/api/tabs/${activeTab}/notebook/source-delete`,
         { method: 'POST', body: JSON.stringify({ notebook_id: nb.id, source_ids: [s.id] }) });
@@ -4480,7 +4508,7 @@ $('nb-resync').onclick = async () => {
           del.className = 'btn small del'; del.textContent = '🗑';
           del.title = `Delete this copy of ${d.number} from «${loc.notebook_title}»`;
           del.onclick = async () => {
-            if (!confirm(`Delete the copy of ${d.number} in «${loc.notebook_title}»?`)) return;
+            if (!await safeConfirm(`Delete the copy of ${d.number} in «${loc.notebook_title}»?`)) return;
             del.disabled = true; del.textContent = '⏳';
             const dr = await api(`/api/tabs/${activeTab}/notebook/source-delete`,
               { method: 'POST', body: JSON.stringify({ notebook_id: loc.notebook_id, source_ids: [loc.source_id] }) });
@@ -4502,7 +4530,7 @@ $('nb-resync').onclick = async () => {
   refreshDocs();             // re-tracked candidates now show their notebook badge
 };
 $('nb-import').onclick = async () => {
-  if (!confirm('Import the notebook’s sources into this tab? Patent numbers become ' +
+  if (!await safeConfirm('Import the notebook’s sources into this tab? Patent numbers become ' +
                'fetched candidates; other sources are imported as text documents. ' +
                'Already-present sources are skipped.')) return;
   $('nb-sync-status').textContent = 'Importing sources from the notebook…';
@@ -4713,7 +4741,7 @@ function renderKgNode(node, depth) {
   del.className = 'kg-del'; del.textContent = '🗑'; del.title = 'Delete this node and its children';
   del.onclick = async e => {
     e.stopPropagation();
-    if (!confirm(`Delete "${node.name}" and everything under it?`)) return;
+    if (!await safeConfirm(`Delete "${node.name}" and everything under it?`)) return;
     await api(`/api/kg/node/${node.id}`, { method: 'DELETE' });
     loadKgTree();
   };

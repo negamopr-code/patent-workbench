@@ -1,5 +1,7 @@
 """🔁 stuck-pending recovery — fetches orphaned by a container restart get re-queued
-in bulk; reuse-held pendings (awaiting the user's reuse-vs-refetch choice) never are."""
+in bulk; STALE reuse-held pendings are auto-reused (the modal that would have asked
+is long gone — its answer was lost to a closed browser or the wrong-tab 404 race —
+and the alternative is pending-forever); FRESH pendings are always left alone."""
 import time
 
 import patentbench.db as db
@@ -31,23 +33,27 @@ def test_refetch_pending_requeues_stale(client):
     docs = _wait_fetched(client, tid)
     assert all(d["status"] == "fetched" for d in docs)
     msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
-    assert any("Re-queued 2 stuck pending" in t for t in msgs)
+    assert any("Recovered 2 stuck pending" in t for t in msgs)
 
 
-def test_refetch_pending_skips_fresh_and_reuse_held(client, monkeypatch):
+def test_refetch_pending_skips_fresh_and_reuses_stale_held(client, monkeypatch):
     # a FRESH pending (a live add may still be working on it) is left alone
     tid = _add_pending(client, "Fresh", ["EP3667903A1"], age_s=0)
-    assert client.post(f"/api/tabs/{tid}/documents/refetch-pending").json()["requeued"] == 0
-    # a reuse-held pending (fetched copy exists in another tab) is pending BY DESIGN
+    r = client.post(f"/api/tabs/{tid}/documents/refetch-pending").json()
+    assert r["requeued"] == 0 and r["reused"] == 0
+    # a STALE reuse-held pending (fetched copy in another tab, past the staleness
+    # window) is auto-reused: the asking modal is gone, nobody will ever answer it
     src_tab = client.post("/api/tabs", json={"name": "Src"}).json()["id"]
     client.post(f"/api/tabs/{src_tab}/documents",
                 json={"numbers": ["EP3667904A1"], "source": "image"})
     for d in db.list_documents(src_tab):             # give the copy a digest → reusable
         db.update_document(d["id"], digest="d")
     tid2 = _add_pending(client, "Held", ["EP3667904A1"])
-    assert client.post(f"/api/tabs/{tid2}/documents/refetch-pending").json()["requeued"] == 0
+    r = client.post(f"/api/tabs/{tid2}/documents/refetch-pending").json()
+    assert r["requeued"] == 0 and r["reused"] == 1
     docs = client.get(f"/api/tabs/{tid2}/documents").json()["documents"]
-    assert docs[0]["status"] == "pending"            # untouched, still awaiting the choice
+    assert docs[0]["status"] == "fetched"            # copied from the src tab
+    assert docs[0].get("digest_len")                 # digest came along with the copy
 
 
 def test_boot_sweep_requeues_all_tabs_once(client, monkeypatch, tmp_path):

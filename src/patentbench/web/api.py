@@ -1671,38 +1671,65 @@ AUTO_REFETCH = os.environ.get("PB_AUTO_REFETCH", "1") not in ("0", "", "false", 
 STALE_PENDING_S = float(os.environ.get("PB_STALE_PENDING_MIN", "15")) * 60
 
 
-def _pending_stale_docs(tab_id: int) -> list[dict]:
-    """A tab's status='pending' docs older than the staleness window, excluding
-    reuse-held ones."""
+def _pending_stale_split(tab_id: int) -> tuple[list[dict], list[tuple[dict, dict]]]:
+    """A tab's status='pending' docs older than the staleness window, split into
+    (to_fetch, to_reuse) where to_reuse pairs each doc with its best cross-tab
+    source. Reuse-held docs used to be excluded ("someone will answer the modal"),
+    but a stale one means the modal is long gone — its answer was lost (wrong-tab
+    404 race, a closed browser) and nobody is coming back. Auto-reusing then is the
+    modal's own default answer, and the only alternative is pending-forever."""
     now = db._now()
-    out = []
+    to_fetch, to_reuse = [], []
     for d in db.list_documents(tab_id):
         if d["status"] != "pending":
             continue
         if now - (d.get("added_at") or 0) < STALE_PENDING_S:
             continue                     # a live add may still be working on it
-        if db.find_reusable_by_number(d["number"], exclude_tab_id=tab_id):
-            continue                     # held back for the reuse question, not lost
-        out.append(d)
-    return out
+        src = db.find_reusable_by_number(d["number"], exclude_tab_id=tab_id)
+        if src:
+            to_reuse.append((d, src))
+        else:
+            to_fetch.append(d)
+    return to_fetch, to_reuse
+
+
+def _requeue_stale(tab_id: int) -> tuple[list[dict], list[dict]]:
+    """Recover a tab's stuck pendings: copy the reuse-held ones from their cross-tab
+    source (instant, token-free), start a fetch pipeline for the rest. Returns
+    (fetch_docs, reused_docs); NLM mirroring of reused docs is the CALLER's job
+    (endpoint → BackgroundTasks, sweep → direct call)."""
+    to_fetch, to_reuse = _pending_stale_split(tab_id)
+    for d, src in to_reuse:
+        db.copy_into_document(d["id"], src)
+    if to_fetch:
+        ids = [d["id"] for d in to_fetch]
+        for i in ids:
+            db.update_document(i, error=None)
+        threading.Thread(target=_process_documents, args=(ids,), daemon=True).start()
+    return to_fetch, [d for d, _ in to_reuse]
 
 
 @app.post("/api/tabs/{tab_id}/documents/refetch-pending")
-def documents_refetch_pending(tab_id: int):
-    """Bulk re-queue every stuck-pending document of this tab (fetch is a token-free
-    scrape; figures/digest follow the deploy defaults, i.e. off)."""
+def documents_refetch_pending(tab_id: int, bg: BackgroundTasks):
+    """Bulk-recover every stuck-pending document of this tab: reuse cross-tab copies
+    where they exist, re-fetch the rest (fetch is a token-free scrape; figures/digest
+    follow the deploy defaults, i.e. off)."""
     _tab_or_404(tab_id)
-    docs = _pending_stale_docs(tab_id)
-    if not docs:
-        return {"requeued": 0, "numbers": []}
-    ids = [d["id"] for d in docs]
-    for i in ids:
-        db.update_document(i, error=None)
-    threading.Thread(target=_process_documents, args=(ids,), daemon=True).start()
+    fetch_docs, reused_docs = _requeue_stale(tab_id)
+    if not fetch_docs and not reused_docs:
+        return {"requeued": 0, "reused": 0, "numbers": []}
+    if reused_docs:
+        bg.add_task(_auto_export_docs, tab_id, [d["id"] for d in reused_docs])
+    parts = []
+    if reused_docs:
+        parts.append(f"{len(reused_docs)} reused from other tabs (instant)")
+    if fetch_docs:
+        parts.append(f"{len(fetch_docs)} re-queued for token-free fetch")
     db.append_message(tab_id, "s",
-                      f"🔁 Re-queued {len(ids)} stuck pending fetch(es) — they were "
-                      "orphaned by a restart. Fetching now (token-free).")
-    return {"requeued": len(ids), "numbers": [d["number"] for d in docs][:50]}
+                      f"🔁 Recovered {len(fetch_docs) + len(reused_docs)} stuck pending "
+                      f"document(s): {', '.join(parts)}.")
+    return {"requeued": len(fetch_docs), "reused": len(reused_docs),
+            "numbers": [d["number"] for d in fetch_docs + reused_docs][:50]}
 
 
 def _auto_refetch_sweep() -> None:
@@ -1717,17 +1744,26 @@ def _auto_refetch_sweep() -> None:
         return
     try:
         for t in db.list_tabs():
-            docs = _pending_stale_docs(t["id"])
-            if not docs:
+            to_fetch, to_reuse = _pending_stale_split(t["id"])
+            if not to_fetch and not to_reuse:
                 continue
-            ids = [d["id"] for d in docs]
+            for d, src in to_reuse:
+                db.copy_into_document(d["id"], src)
+            if to_reuse:
+                _auto_export_docs(t["id"], [d["id"] for d, _ in to_reuse])
+            ids = [d["id"] for d in to_fetch]
             for i in ids:
                 db.update_document(i, error=None)
+            parts = []
+            if to_reuse:
+                parts.append(f"{len(to_reuse)} reused from other tabs")
+            if ids:
+                parts.append(f"{len(ids)} re-queued (token-free fetch)")
             db.append_message(t["id"], "s",
-                              f"🔁 Auto-resume after restart: {len(ids)} pending "
-                              "fetch(es) had been orphaned — re-queued (token-free "
-                              "fetch; reuse-held documents untouched).")
-            _process_documents(ids)      # serial per tab — the fetcher throttles itself
+                              f"🔁 Auto-resume after restart: {len(ids) + len(to_reuse)} "
+                              f"pending document(s) had been orphaned — {', '.join(parts)}.")
+            if ids:
+                _process_documents(ids)  # serial per tab — the fetcher throttles itself
     except Exception:
         pass                             # a failed sweep must never take the app down
 

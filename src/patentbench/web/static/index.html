@@ -386,6 +386,20 @@
   </div>
 </div>
 
+<!-- In-page confirm: the fallback safeConfirm() uses when the browser silently
+     suppresses native confirm() dialogs (a suppressed dialog returns false instantly
+     and the click dies with zero feedback) — this card cannot be suppressed. -->
+<div id="confirm-modal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Confirm</h3>
+    <div id="confirm-modal-text" style="white-space:pre-wrap"></div>
+    <div class="row right">
+      <button id="confirm-ok" class="btn primary">Continue</button>
+      <button id="confirm-cancel" class="btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Cross-tab reuse modal: these documents were already processed in another tab -->
 <div id="reuse-modal" class="modal hidden">
   <div class="modal-box">
