@@ -784,6 +784,34 @@ def benchmark_add_feature(tab_id: int, body: schemas.FeatureItem):
     return {"ok": True, "benchmark": _benchmark_view(tab_id)}
 
 
+# CLAIMS-section heading / end-of-claims heading, line-anchored so prose that merely
+# MENTIONS claims ("...说明书和权利要求书中的术语...") can never trigger. Multi-language:
+# WO/CN publications head the section 权利要求书, EP/DE Patentansprüche, US "CLAIMS" or
+# "WHAT IS CLAIMED IS:". The section ends where the next document part begins (search
+# report, abstract, drawings) — or at end-of-text when nothing follows.
+_CLAIMS_START_RE = re.compile(
+    r"(?mi)^\s*(?:权利要求书?|CLAIMS?|WHAT IS CLAIMED(?: IS)?[:：]?"
+    r"|Patentansprüche|Revendications)\s*$")
+_CLAIMS_END_RE = re.compile(
+    r"(?mi)^\s*\**(?:INTERNATIONAL SEARCH REPORT|国际检索报告|ABSTRACT|摘要"
+    r"|说明书附图|Zusammenfassung|Abrégé)\**\s*.*$")
+
+
+def _claims_section(text: str) -> str | None:
+    """Best-effort CLAIMS section of a FULL patent document text. A full-doc
+    benchmark (no separate claims upload) otherwise decomposes 35k+ chars of
+    description — slow, timeout-prone on the cheap model, and noisy. None when
+    the section is absent or implausibly short — the caller falls back to the
+    full text, so this can only ever improve the input, never lose it."""
+    m = _CLAIMS_START_RE.search(text or "")
+    if not m:
+        return None
+    rest = text[m.end():]
+    e = _CLAIMS_END_RE.search(rest)
+    sec = (rest[:e.start()] if e else rest).strip()
+    return sec if len(sec) >= 200 else None
+
+
 @app.post("/api/tabs/{tab_id}/benchmark/decompose")
 def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
     """🔬 PROPOSE a split of the claimed invention into its separable ELEMENTS.
@@ -828,18 +856,31 @@ def benchmark_decompose_ep(tab_id: int, body: schemas.DecomposeRequest):
         if not text.strip() and not add_feats:
             raise HTTPException(400, "no features to decompose")
     elif body.source == "whole":
-        # WHOLE-DOCUMENT features: decompose the BENCHMARK DOCUMENT's own claims into elements
-        # and tag them W — a bonus pool that boosts (never gates) a candidate's ranking.
+        # WHOLE-DOCUMENT features: distill the REST of the document — the description,
+        # everything beyond the claims — into W elements: a bonus pool of comparison
+        # points that boosts (never gates) a candidate's ranking, deciding close calls
+        # around the core of the invention (user doctrine 2026-08-08). The claims
+        # already gate through M/A elements, so they stay out of this pool.
         if not bm:
             raise HTTPException(400, "set a benchmark first")
-        text = (bm.get("claims") or bm.get("text") or "").strip()
+        keep = list(feats)          # W elements ADD to the tab's features, never replace
+        full = (bm.get("text") or "").strip()
+        sec = _claims_section(full) if full else None
+        if sec:
+            text = full.replace(sec, "", 1).strip() or full
+        else:
+            text = full or (bm.get("claims") or "").strip()
         if not text:
             raise HTTPException(400, "the benchmark document has no claims/text to decompose")
         text_kind = "W"
     else:                       # the benchmark document's own claims: claim 1 → M, deps → A
         if not bm:
             raise HTTPException(400, "set a benchmark first")
-        text = (bm.get("claims") or bm.get("text") or "").strip()
+        text = (bm.get("claims") or "").strip()
+        if not text:
+            # full-doc benchmark: prefer its CLAIMS section over the whole text
+            full = (bm.get("text") or "").strip()
+            text = _claims_section(full) or full
         if not text:
             raise HTTPException(400, "the benchmark has no claims/text to decompose")
         claims_mode = True

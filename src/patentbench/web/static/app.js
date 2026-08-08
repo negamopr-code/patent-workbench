@@ -635,7 +635,9 @@ async function decomposeBenchmark(bm, { skipConfirm = false, thenScan = false,
   // their words); fall back to the benchmark document's claims.
   const split = forceSource === 'additional' || (mand.length > 2 && addF.length);
   const source = forceSource || (split ? 'additional' : (mand.length ? 'features' : 'benchmark'));
-  const what = source === 'additional'
+  const what = source === 'whole'
+             ? 'the REST of the benchmark document (description, beyond the claims) into 🏅 W key features — bonus comparison points that boost but never gate, deciding close calls near the core of the invention. Your existing features stay as they are'
+             : source === 'additional'
              ? `${addF.length} additional feature(s) (your ${mand.length} mandatory elements are already split and stay as they are)`
              : mand.length ? `${mand.length} mandatory feature(s)`
              : 'the benchmark\'s claims (claim 1 → mandatory elements, dependent claims → ➕ additional)';
@@ -1488,6 +1490,18 @@ $('decompose-btn').onclick = () => {
     return;
   }
   decomposeBenchmark(currentBm);
+};
+
+// 🏅 W key features: the REST of the document (description) distilled into bonus
+// comparison points — they boost, never gate, and decide close calls near the core
+// of the invention. Existing features ride through untouched (backend keeps them).
+$('decompose-whole-btn').onclick = () => {
+  if (!activeTab) return;
+  if (!currentBm || currentBm.status !== 'ready') {
+    appendMsg({ role: 's', text: 'Set a benchmark first — 🏅 Key features distill the rest of the document into W bonus points.' });
+    return;
+  }
+  decomposeBenchmark(currentBm, { source: 'whole' });
 };
 
 function runCombi() {
