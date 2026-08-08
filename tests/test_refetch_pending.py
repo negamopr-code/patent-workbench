@@ -60,7 +60,7 @@ def test_boot_sweep_requeues_all_tabs_once(client, monkeypatch, tmp_path):
     tid = _add_pending(client, "Boot", ["EP3667905A1"])
     monkeypatch.setenv("PB_AUTO_REFETCH_DELAY", "0")
     api._auto_refetch_sweep()                        # first sweep takes the lock + fetches
-    docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
+    docs = _wait_fetched(client, tid)                # per-tab fetch thread is async now
     assert all(d["status"] == "fetched" for d in docs)
     msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
     assert sum("Auto-resume after restart" in t for t in msgs) == 1

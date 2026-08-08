@@ -1804,7 +1804,11 @@ def _auto_refetch_sweep() -> None:
                               f"🔁 Auto-resume after restart: {len(ids) + len(to_reuse)} "
                               f"pending document(s) had been orphaned — {', '.join(parts)}.")
             if ids:
-                _process_documents(ids)  # serial per tab — the fetcher throttles itself
+                # one thread per tab: the fetcher throttles globally so total time is
+                # the same, but serial draining made every LATER tab look dead for
+                # hours after a deploy ("fetch stopped" reports, 2026-08-08)
+                threading.Thread(target=_process_documents, args=(ids,),
+                                 daemon=True).start()
     except Exception:
         pass                             # a failed sweep must never take the app down
 
