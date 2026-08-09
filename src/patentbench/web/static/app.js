@@ -3434,8 +3434,14 @@ $('verify-shortlist').onclick = () => {
     alert('No shortlist is checked. Run 📓 NLM shortlist or a 🔬 mega-screen first, or tick the candidates you want opus to verify.');
     return;
   }
-  // one-shot opus for THIS verify only — do NOT mutate the tab's 📖 model choice
-  runDeepCompare(ids, false, VERIFY_MODEL);
+  // one-shot opus for THIS verify only — do NOT mutate the tab's 📖 model choice.
+  // skipScored=true makes the button RESUME-SAFE: a re-click after an interrupted
+  // verify (401/limit/restart) reads only the shortlist candidates not yet read by
+  // opus-or-stronger and re-ranks from the stored assessments — never a second
+  // paid read of the same card. Model-awareness keeps the verify semantics intact:
+  // cards previously read only by a cheaper model, or stale after a benchmark
+  // change, are still (re-)read at opus level.
+  runDeepCompare(ids, true, VERIFY_MODEL);
 };
 
 // 🧺 Consolidate → copy ONLY the best (checked) candidates into ONE new notebook so
