@@ -18,8 +18,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 docker build -t nlm-keeper "$ROOT/keeper"
 docker rm -f nlm-keeper 2>/dev/null || true
+# noVNC is an unauthenticated remote-control surface over a logged-in Google
+# session — bind it to loopback only, never LAN-reachable.
 docker run -d --name nlm-keeper --restart unless-stopped \
-  -p 8106:6080 --shm-size=1g \
+  -p 127.0.0.1:8106:6080 --shm-size=1g \
   -e PB_URL="${PB_URL:-http://host.docker.internal:8099}" \
   -e REFRESH_SECS="${REFRESH_SECS:-900}" \
   -v nlm-profile:/home/app/.notebooklm-mcp-cli \
