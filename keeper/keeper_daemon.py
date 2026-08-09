@@ -50,11 +50,35 @@ def accounts():
 
 
 def refresh(name, port):
+    cdp_url = f"http://127.0.0.1:{port}"
+    # Visit the OLD domain first: the CLI talks to notebooklm.google.com, but a
+    # login completed on the rebranded notebook.google.com alone never mints
+    # OSID cookies there — only riding the redirect chain does (bit 2026-08-09:
+    # fresh work2 login saved 58 cookies yet patent-bench still got "auth
+    # expired"). The navigation is also the reload that keeps Google rotating
+    # the session server-side.
+    try:
+        page = cdp.find_or_create_notebooklm_page_by_cdp_url(cdp_url)
+        ws = cdp._normalize_ws_url(page.get("webSocketDebuggerUrl"))
+        cdp.navigate_to_url(ws, "https://notebooklm.google.com")
+        time.sleep(6)
+    except Exception:
+        pass  # extraction below surfaces the real error
     result = cdp.extract_cookies_via_existing_cdp(
-        cdp_url=f"http://127.0.0.1:{port}", wait_for_login=False, login_timeout=1)
+        cdp_url=cdp_url, wait_for_login=False, login_timeout=1)
     cookies = result["cookies"]
-    if not any("OSID" in c.get("name", "") for c in cookies):
-        print(f"[{name}] LOGIN NEEDED — no OSID cookies; sign in once at {NOVNC_HINT}")
+    # A usable profile needs BOTH layers: the notebooklm.google.com OSID
+    # (service session) AND the central .google.com SID/SAPISID family — the
+    # batchexecute API authenticates with a SAPISID hash, and a service-only
+    # login (OSID present, SAPISID absent) still gets "Authentication expired"
+    # (bit 2026-08-09 twice).
+    has_nlm_osid = any("OSID" in c.get("name", "")
+                       and "notebooklm.google.com" in c.get("domain", "") for c in cookies)
+    has_central = any(c.get("name") in ("SAPISID", "__Secure-1PSID", "SID")
+                      and c.get("domain", "").lstrip(".") == "google.com" for c in cookies)
+    if not (has_nlm_osid and has_central):
+        print(f"[{name}] LOGIN NEEDED (nlm_osid={has_nlm_osid} central={has_central}) — "
+              f"sign in once at {NOVNC_HINT}")
         return False
     AuthManager(name).save_profile(
         cookies=cookies,
@@ -66,6 +90,39 @@ def refresh(name, port):
     )
     print(f"[{name}] refreshed: {len(cookies)} cookies, email={result.get('email')}")
     return True
+
+
+def inject_profile_cookies(name, port):
+    """Boot-time restore: push the last-saved cookie set back into the freshly
+    started Chromium. Some central Google cookies are session-scoped in this
+    browser, so a bare container restart would silently drop them and demand a
+    new human login; restoring from the volume makes restarts lossless."""
+    from pathlib import Path
+    f = Path.home() / ".notebooklm-mcp-cli" / "profiles" / name / "cookies.json"
+    if not f.exists():
+        return
+    payload = []
+    for c in json.load(open(f)):
+        k = {"name": c["name"], "value": c["value"], "domain": c["domain"],
+             "path": c.get("path", "/"), "secure": c.get("secure", False),
+             "httpOnly": c.get("httpOnly", False)}
+        if c.get("expires", -1) and c.get("expires", -1) > 0:
+            k["expires"] = c["expires"]
+        if c.get("sameSite"):
+            k["sameSite"] = c["sameSite"]
+        payload.append(k)
+    try:
+        from websocket import create_connection
+        page = cdp.find_or_create_notebooklm_page_by_cdp_url(f"http://127.0.0.1:{port}")
+        ws_url = cdp._normalize_ws_url(page.get("webSocketDebuggerUrl"))
+        ws = create_connection(ws_url, timeout=10, suppress_origin=True)
+        ws.send(json.dumps({"id": 1, "method": "Storage.setCookies",
+                            "params": {"cookies": payload}}))
+        ws.recv()
+        ws.close()
+        print(f"[{name}] restored {len(payload)} saved cookies into the fresh browser")
+    except Exception as e:
+        print(f"[{name}] cookie restore failed: {type(e).__name__}: {e}")
 
 
 def bring_to_front(port):
@@ -113,6 +170,8 @@ def resume_auth_errored():
 print(f"keeper daemon up: accounts={[a for a, _ in accounts()]} "
       f"refresh every {REFRESH_SECS}s, patent-bench at {PB_URL}")
 time.sleep(25)  # let the chromiums finish first paint
+for _name, _port in accounts():
+    inject_profile_cookies(_name, _port)
 ever_ok = set()
 while True:
     any_ok = False
