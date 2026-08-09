@@ -68,6 +68,21 @@ def refresh(name, port):
     return True
 
 
+def bring_to_front(port):
+    """Focus this account's Chrome window so the noVNC page shows the right
+    sign-in screen without the user hunting through stacked windows."""
+    try:
+        from websocket import create_connection
+        page = cdp.find_or_create_notebooklm_page_by_cdp_url(f"http://127.0.0.1:{port}")
+        ws_url = cdp._normalize_ws_url(page.get("webSocketDebuggerUrl"))
+        ws = create_connection(ws_url, timeout=5, suppress_origin=True)
+        ws.send(json.dumps({"id": 1, "method": "Page.bringToFront"}))
+        ws.recv()
+        ws.close()
+    except Exception:
+        pass
+
+
 def api(path, payload=None):
     req = urllib.request.Request(
         PB_URL + path,
@@ -101,13 +116,18 @@ time.sleep(25)  # let the chromiums finish first paint
 ever_ok = set()
 while True:
     any_ok = False
+    pending_ports = []
     for name, port in accounts():
         try:
             if refresh(name, port):
                 any_ok = True
                 ever_ok.add(name)
+            else:
+                pending_ports.append(port)
         except Exception as e:
             print(f"[{name}] refresh failed: {type(e).__name__}: {e}")
+    if pending_ports:
+        bring_to_front(pending_ports[0])
     if any_ok:
         try:
             resume_auth_errored()
