@@ -708,11 +708,12 @@ def test_deep_compare_continue_skips_read_and_records_model(client, monkeypatch)
     assert after["CN114853847"]["score_model"] == "claude-sonnet-4-6"   # records which model read it
 
 
-def test_deep_read_aborts_on_dead_auth_token(client, monkeypatch):
+def test_deep_read_pauses_and_arms_watchdog_on_dead_auth_token(client, monkeypatch):
     """A revoked OAuth token fails EVERY call identically — after one worker-window
-    of pure auth errors the batch must ABORT, write nothing, and tell the user how
-    to recover, instead of grinding through all N earning nothing while the UI sits
-    on 'assessing 0/N' (bit 2026-07-28: 577 × 401 after a container recreate)."""
+    of pure auth errors the batch must stop early, write nothing, and arm the
+    auto-resume watchdog (the reseed daemon delivers a fresh token; the user is
+    never asked to reseed by hand — 2026-08-09). Previously it ground through all
+    N earning nothing while the UI sat on 'assessing 0/N' (bit 2026-07-28)."""
     tab = client.post("/api/tabs", json={"name": "Auth"}).json()
     tid = tab["id"]
     client.put(f"/api/tabs/{tid}/benchmark", json={"text": "US10395648B1"})
@@ -733,9 +734,13 @@ def test_deep_read_aborts_on_dead_auth_token(client, monkeypatch):
     docs = client.get(f"/api/tabs/{tid}/documents").json()["documents"]
     assert all(d["score"] is None for d in docs)            # nothing written
     msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
-    note = [m for m in msgs if "ABORTED" in m]
-    assert note and "AUTHENTICATION" in note[0] and "reseed" in note[0].lower()
-    assert "Continue" in note[0]                            # recovery path named
+    note = [m for m in msgs if "PAUSED" in m]
+    assert note and "revoked" in note[0]                    # names the cause
+    assert any("watchdog ARMED" in m for m in msgs)         # auto-resume armed, no manual step
+    import os
+    from patentbench.web.api import _limit_resume_path, _disarm_limit_watchdog
+    assert os.path.exists(_limit_resume_path(tid))          # resume state persisted
+    _disarm_limit_watchdog(tid)                             # don't leak into other tests
 
 
 def test_deep_compare_batch_reads_top_N_by_prior_score(client, monkeypatch):

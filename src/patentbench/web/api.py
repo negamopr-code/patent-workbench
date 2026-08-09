@@ -6005,6 +6005,12 @@ def _promise(d: dict) -> float:
 # if everything was read and only the ranking failed, it re-ranks with zero
 # re-reading. Manual ▶️ Continue before the reset stays possible and harmless.
 _LIMIT_ERR = re.compile(r"(session|usage|5-hour|weekly)\s+limit", re.IGNORECASE)
+# Auth failures (revoked/rotated OAuth token) are TRANSIENT here: the host-side
+# reseed daemon pushes a fresh token into this container within ~1 min of any
+# re-login or rotation, so they park-and-resume exactly like limit errors —
+# just probed on a much shorter cadence. Never ask the user to reseed by hand.
+_AUTH_ERR = re.compile(r"401|OAuth|revoked|authenticat|logged in", re.IGNORECASE)
+_AUTH_PROBE_EVERY = 120
 _LIMIT_RESET = re.compile(r"resets\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)\s*\(UTC\)", re.IGNORECASE)
 _LIMIT_MARGIN = 180             # relaunch this many seconds after the announced reset
 _LIMIT_PROBE_EVERY = 15 * 60    # re-probe cadence when no reset time is announced
@@ -6033,7 +6039,9 @@ def _parse_limit_reset(err: str) -> float | None:
 def _arm_limit_watchdog(tab_id: int, *, doc_ids: list[int], model: str, read_model: str,
                         skills: list[str], question: str, err: str) -> None:
     reset_ep = _parse_limit_reset(err)
-    resume_at = (reset_ep + _LIMIT_MARGIN) if reset_ep else (time.time() + _LIMIT_PROBE_EVERY)
+    is_auth = bool(_AUTH_ERR.search(err or "")) and not _LIMIT_ERR.search(err or "")
+    resume_at = ((reset_ep + _LIMIT_MARGIN) if reset_ep
+                 else time.time() + (_AUTH_PROBE_EVERY if is_auth else _LIMIT_PROBE_EVERY))
     state = {"tab_id": tab_id, "doc_ids": doc_ids, "model": model,
              "read_model": read_model, "skills": list(skills or []),
              "question": question, "resume_at": resume_at, "armed_at": db._now(),
@@ -6041,13 +6049,19 @@ def _arm_limit_watchdog(tab_id: int, *, doc_ids: list[int], model: str, read_mod
     with open(_limit_resume_path(tab_id), "w", encoding="utf-8") as f:
         json.dump(state, f)
     when = (datetime.fromtimestamp(resume_at, timezone.utc).strftime("%H:%M UTC")
-            if reset_ep else f"~{_LIMIT_PROBE_EVERY // 60} min (no reset time announced; will probe)")
+            if reset_ep else (f"~{_AUTH_PROBE_EVERY // 60} min" if is_auth
+                              else f"~{_LIMIT_PROBE_EVERY // 60} min (no reset time announced; will probe)"))
     db.append_message(
         tab_id, "s",
-        f"⏳ Token-limit watchdog ARMED — will auto-resume this deep-read/ranking in "
-        f"Continue mode around {when}. Already-read candidates are never re-read; "
-        "nothing to click. Survives a container restart. A manual ▶️ Continue before "
-        "then is fine — once the work completes, the watchdog stands down.")
+        (f"⏳ Auth watchdog ARMED — the Claude token was revoked/rotated; the host "
+         f"reseed daemon delivers a fresh one automatically and this deep-read/ranking "
+         f"auto-resumes in Continue mode (probing every {_AUTH_PROBE_EVERY // 60} min). "
+         if is_auth else
+         f"⏳ Token-limit watchdog ARMED — will auto-resume this deep-read/ranking in "
+         f"Continue mode around {when}. ")
+        + "Already-read candidates are never re-read; nothing to click. Survives a "
+        "container restart. A manual ▶️ Continue before then is fine — once the work "
+        "completes, the watchdog stands down.")
     _spawn_limit_watchdog(tab_id)
 
 
@@ -6091,8 +6105,11 @@ def _limit_watchdog_loop(tab_id: int) -> None:
                                           claude_bridge.DIGEST_MODEL, timeout=180)
         if "error" in probe:
             nxt = _parse_limit_reset(probe["error"])
+            still_auth = (_AUTH_ERR.search(probe["error"] or "")
+                          and not _LIMIT_ERR.search(probe["error"] or ""))
             state["resume_at"] = ((nxt + _LIMIT_MARGIN) if nxt
-                                  else time.time() + _LIMIT_PROBE_EVERY)
+                                  else time.time() + (_AUTH_PROBE_EVERY if still_auth
+                                                      else _LIMIT_PROBE_EVERY))
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(state, f)
@@ -6155,7 +6172,6 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
         # the rest of the batch cannot fare better. Without this the pool ground
         # through all candidates earning nothing and the UI sat on "assessing 0/N"
         # (bit 2026-07-28: 577 × 401 after a container-recreate rotated the token).
-        _auth_err = re.compile(r"401|OAuth|revoked|authenticat", re.IGNORECASE)
         verdicts, paused, auth_dead, limit_dead = [], False, False, False
         with ThreadPoolExecutor(max_workers=DIGEST_WORKERS) as ex:
             pending, nxt = {}, iter(docs)
@@ -6171,7 +6187,7 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                     verdicts.append(fut.result())
                 if (not any(v["ok"] for v in verdicts)
                         and len(verdicts) >= DIGEST_WORKERS
-                        and all(_auth_err.search(v["verdict"] or "") for v in verdicts)):
+                        and all(_AUTH_ERR.search(v["verdict"] or "") for v in verdicts)):
                     auth_dead = True                  # nothing will succeed — stop the batch
                     for fut in pending:
                         verdicts.append(fut.result())
@@ -6204,12 +6220,13 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
         if auth_dead:
             db.append_message(
                 tab_id, "s",
-                f"⛔ Deep-read ABORTED after {len(verdicts)} attempt(s): every call failed "
-                "with an AUTHENTICATION error (the container's Claude token is revoked or "
-                f"expired) — e.g. {verdicts[0]['verdict'][:160]}. Nothing was assessed or "
-                "overwritten. Reseed the token "
-                "(`bash ~/.claude/scripts/reseed-claude-containers.sh` on the host side), "
-                "then ▶️ Continue deep-read — it resumes exactly these candidates.")
+                f"⏳ Deep-read PAUSED after {len(verdicts)} attempt(s): the Claude token "
+                "was revoked/rotated mid-run. Nothing was assessed or overwritten; the "
+                "reseed daemon refreshes the token automatically and the watchdog below "
+                "resumes exactly these candidates — nothing to click.")
+            _arm_limit_watchdog(tab_id, doc_ids=doc_ids, model=model,
+                                read_model=read_model, skills=skills,
+                                question=question, err=verdicts[0]["verdict"] or "")
             return
         read = sum(1 for v in verdicts if v["ok"])
         failed = len(verdicts) - read
@@ -6317,7 +6334,7 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                                         model=model, history=history, rank_rule=rank_rule)
         if "error" in res:
             db.append_message(tab_id, "s", f"Claude error compiling the ranking: {res['error']}")
-            if _LIMIT_ERR.search(res["error"] or ""):
+            if _LIMIT_ERR.search(res["error"] or "") or _AUTH_ERR.search(res["error"] or ""):
                 # reads are stored; only the ranking is missing → the watchdog's
                 # Continue relaunch will re-rank from stored assessments (0 re-reads)
                 _arm_limit_watchdog(tab_id, doc_ids=doc_ids, model=model,
