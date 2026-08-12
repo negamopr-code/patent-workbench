@@ -4171,6 +4171,547 @@ def nlm_screen_stop(tab_id: int):
     return {"stopping": True, **_screen_status(tab_id)}
 
 
+# ---------- 🧾 Claims audit: quote-backed MUST re-rank of the graduates ----------
+# t11 lesson (2026-08-12): the mega-screen's DISCOVERY is sound (all 66 opus champions
+# graduated) but its rank-cut is not — best-in-round mention order is a similarity
+# signal, nearly uninformative for champion-ness (kept docs median in-round rank 8 vs
+# 14 for the missed champions; recall@49 of the opus top-66 was 18/66). This stage
+# re-screens the graduates with a MUST-feature checklist question in which EVERY claim
+# must carry an exact verbatim quotation; the quote is verified in code against the
+# stored document text (hallucinations score 0), and the shortlist is cut by weighted
+# verified-claim score — an absolute, cross-round-comparable measure. Experiment-only:
+# the default mega-screen flow is untouched; dry-run unless apply=true.
+
+NLM_CLAIMS_PROMPT = (
+    "For EACH numbered MANDATORY feature below, name every candidate source document "
+    "that discloses it — explicitly or as an implicit realisation (a document that "
+    "physically does it without the literal words) — and back EACH claim with ONE "
+    "EXACT VERBATIM quotation (at most ~25 words) copied from that document's text. "
+    "Ignore the 🎯 BENCHMARK source itself. Reply with one block per feature, one "
+    "line per claiming document, in exactly this form:\n"
+    "FEATURE <k>:\n"
+    "- <publication number> :: \"<verbatim quotation>\"\n"
+    "(write \"- NONE\" if no candidate discloses that feature.)\n"
+    "Only name documents actually among the sources; quote only text that literally "
+    "appears in them; do not invent publication numbers or quotations."
+    "\n\n=== MANDATORY FEATURES (most important first) ===\n{benchmark}"
+)
+
+_CLAIMS_FEAT_SPLIT = re.compile(r"FEATURE\s*#?\s*(\d+)\s*:", re.I)
+_claims_watchdogs: dict[int, threading.Thread] = {}
+_claims_watchdogs_mu = threading.Lock()
+
+
+def _claims_state_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".nlm_claims_{tab_id}.json")
+
+
+def _claims_pause_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".nlm_claims_{tab_id}.pause")
+
+
+def _claims_lock_path(tab_id: int) -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".nlm_claims_{tab_id}.lock")
+
+
+def _claims_read(tab_id: int) -> dict | None:
+    try:
+        with open(_claims_state_path(tab_id)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _claims_set(tab_id: int, **kw) -> dict:
+    st = _claims_read(tab_id) or {}
+    st.update(kw)
+    with open(_claims_state_path(tab_id), "w") as f:
+        json.dump(st, f)
+    return st
+
+
+def _claims_running(tab_id: int) -> bool:
+    try:
+        return (time.time() - os.path.getmtime(_claims_lock_path(tab_id))) < SCREEN_TTL
+    except OSError:
+        return False
+
+
+def _claims_heartbeat(tab_id: int) -> None:
+    try:
+        os.utime(_claims_lock_path(tab_id), None)
+    except OSError:
+        pass
+
+
+def _claims_status(tab_id: int) -> dict:
+    st = _claims_read(tab_id)
+    if not st:
+        return {"present": False, "phase": "idle", "running": False, "resumable": False}
+    running = _claims_running(tab_id)
+    quota = st.get("quota") or {}
+    if st.get("step") == "done":
+        phase = "done"
+    elif quota.get("paused"):
+        phase = "quota_paused"
+    elif st.get("error"):
+        phase = "error"
+    elif os.path.exists(_claims_pause_path(tab_id)) and not running:
+        phase = "paused"
+    elif running:
+        phase = "running"
+    else:
+        phase = "interrupted"
+    return {"present": True, "phase": phase, "running": phase == "running",
+            "resumable": phase in ("error", "interrupted", "paused", "quota_paused"),
+            "round": st.get("round", 0), "audited": st.get("cursor", 0),
+            "total": len(st.get("queue") or []),
+            "claimants": len(st.get("claims") or {}),
+            "status_text": st.get("status_text", ""), "error": st.get("error"),
+            "quota_resume_at": quota.get("resume_at"),
+            "ranking": st.get("ranking") if st.get("step") == "done" else None,
+            "applied": st.get("applied", False)}
+
+
+def _quote_norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def _quote_verify(quote: str, hay_norm: str) -> str:
+    """Code-side trust layer: 'verified' = the quotation literally appears in the
+    document's stored text (whitespace/case/punctuation-insensitive), 'fuzzy' = most
+    of its 4-word shingles do (OCR/punctuation noise), else 'unverified' — which
+    earns NO score, so a hallucinated quotation dies here automatically."""
+    q = _quote_norm(quote)
+    if len(q) < 10 or not hay_norm:
+        return "unverified"
+    if q in hay_norm:
+        return "verified"
+    words = q.split()
+    if len(words) >= 5:
+        grams = [" ".join(words[i:i + 4]) for i in range(len(words) - 3)]
+        hits = sum(1 for g in grams if g in hay_norm)
+        if hits / len(grams) >= 0.7:
+            return "fuzzy"
+    return "unverified"
+
+
+def _claims_parse(answer: str, key_map: dict[str, int], n_must: int
+                  ) -> tuple[dict[int, dict[int, str]], list[str]]:
+    """{doc_id: {feature_idx: quote}} from the FEATURE-block answer. Publication
+    numbers are taken only from the part BEFORE '::' (a number inside a quotation
+    must not become a claim); numbers outside the roster are reported, never used."""
+    claims: dict[int, dict[int, str]] = {}
+    unmatched: list[str] = []
+    parts = _CLAIMS_FEAT_SPLIT.split(answer or "")
+    for i in range(1, len(parts) - 1, 2):
+        try:
+            k = int(parts[i])
+        except ValueError:
+            continue
+        if not 1 <= k <= n_must:
+            continue
+        for line in parts[i + 1].splitlines():
+            body = line.strip()
+            if not body or body.upper().lstrip("-• ").startswith("NONE"):
+                continue
+            head, _, tail = body.partition("::")
+            quote = tail.strip().strip('"“”\'«»').strip() if tail else ""
+            for n in patents.extract_candidates(head):
+                did = key_map.get(_shortlist_key(n))
+                if did is None:
+                    if n not in unmatched:
+                        unmatched.append(n)
+                    continue
+                feats = claims.setdefault(did, {})
+                if k not in feats or (quote and not feats[k]):
+                    feats[k] = quote
+    return claims, unmatched
+
+
+def _claims_doc_hay(d: dict) -> str:
+    """Normalized haystack = exactly the text staged as the NLM source
+    (_doc_source_text fields, digest included — NLM may quote from any of it)."""
+    return _quote_norm(" ".join(filter(None, [
+        d.get("number"), d.get("title"), d.get("abstract"),
+        d.get("claims"), d.get("description"), d.get("digest")])))
+
+
+def _claims_notebook(tab_id: int, st: dict) -> str:
+    """Dedicated audit notebook (find by exact title, else create) — separate from
+    the mega-screen's rotation notebook so the two never rotate each other out."""
+    nb = st.get("notebook_id")
+    prof = _tab_profile(tab_id)
+    want = f"🧾 Claims — {_tab_name(tab_id)}"[:100]
+    known = (nlm_bridge.list_notebooks(force=True, profile=prof).get("notebooks") or [])
+    if nb and any(n["id"] == nb for n in known):
+        return nb
+    for n in known:
+        if n.get("title") == want:
+            _claims_set(tab_id, notebook_id=n["id"], notebook_title=want)
+            return n["id"]
+    created = nlm_bridge.create_notebook(want, profile=prof)
+    if not created.get("id"):
+        raise RuntimeError(created.get("error") or "claims notebook create failed")
+    _claims_set(tab_id, notebook_id=created["id"], notebook_title=created["title"])
+    return created["id"]
+
+
+def _claims_stage(tab_id: int, st: dict, want_ids: list[int],
+                  docs_by_id: dict[int, dict]) -> tuple[str, dict[str, int], list[int]]:
+    """Simplified _screen_stage for the audit notebook: benchmark + want_ids exactly,
+    idempotent, one re-add pass. Unlike the mega-screen it must NOT touch
+    nlm_screen_state — the docs here are already graduates; staging failures are
+    recorded in the audit state only. Returns (nb, key_map, failed_ids)."""
+    nb = _claims_notebook(tab_id, st)
+    prof = _tab_profile(tab_id)
+    want_keys = {_shortlist_key(docs_by_id[i]["number"]): i for i in want_ids
+                 if docs_by_id.get(i)}
+    num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
+    stale = [sid for num, sid in num_map.items() if _shortlist_key(num) not in want_keys]
+    if stale:
+        _claims_set(tab_id, status_text=f"🗑 rotating out {len(stale)} source(s)…")
+        nlm_bridge.delete_source(stale, nb, profile=prof)
+        num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
+    if not bm_sid:
+        bm = db.get_benchmark(tab_id)
+        label = (bm.get("number") or bm.get("title") or "benchmark")
+        res = nlm_bridge.add_source_text(nb, f"🎯 BENCHMARK — {label}",
+                                         _benchmark_fulltext(bm), profile=prof)
+        if not res.get("ok"):
+            raise RuntimeError(f"benchmark add failed: {res.get('error')}")
+    present = {_shortlist_key(n) for n in num_map}
+    missing = [i for k, i in want_keys.items() if k not in present]
+    for idx, did in enumerate(missing):
+        d = docs_by_id[did]
+        _claims_set(tab_id, status_text=f"📤 staging round {st.get('round', 0) + 1}: "
+                                        f"{idx}/{len(missing)} added…")
+        _claims_heartbeat(tab_id)
+        nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
+                                   _doc_source_text(d), profile=prof)
+    _claims_set(tab_id, status_text="⏳ waiting for NotebookLM to ingest the batch…")
+    known = set(num_map.values()) | ({bm_sid} if bm_sid else set())
+    nlm_bridge.wait_sources_ready(nb, timeout=PIPELINE_INGEST_TIMEOUT,
+                                  known_ready=known, profile=prof)
+    num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
+    have = {_shortlist_key(n) for n in num_map}
+    failed: list[int] = []
+    if any(k not in have for k in want_keys):
+        for k, did in want_keys.items():
+            if k not in have:
+                d = docs_by_id[did]
+                nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
+                                           _doc_source_text(d), profile=prof)
+        nlm_bridge.wait_sources_ready(nb, timeout=60, known_ready=set(num_map.values()),
+                                      profile=prof)
+        num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
+        have = {_shortlist_key(n) for n in num_map}
+        failed = [did for k, did in want_keys.items() if k not in have]
+    key_map = {_shortlist_key(n): want_keys.get(_shortlist_key(n)) for n in num_map
+               if _shortlist_key(n) in want_keys}
+    return nb, key_map, failed
+
+
+def _claims_query(tab_id: int, nb: str, question: str) -> dict:
+    prof = _tab_profile(tab_id)
+    res = nlm_bridge.query(nb, question, profile=prof)
+    if "answer" in res and "FEATURE" not in (res["answer"] or "").upper():
+        res = nlm_bridge.query(nb, question, profile=prof)   # one retry on truncation
+        if "answer" in res and "FEATURE" not in (res["answer"] or "").upper():
+            return {"incomplete": True, "answer": res["answer"]}
+    return res
+
+
+_CLAIM_OK = ("verified", "fuzzy")
+_CLAIM_STATUS_RANK = {"verified": 2, "fuzzy": 1, "unverified": 0}
+
+
+def _run_claims_audit(tab_id: int) -> None:
+    lock = _claims_lock_path(tab_id)
+    try:
+        st = _claims_read(tab_id)
+        if not st or st.get("step") == "done":
+            return
+        must = st.get("must") or []                      # [[name, weight], …] frozen at start
+        spec = "\n".join(f"{i}. {name} (importance {w}/5)"
+                         for i, (name, w) in enumerate(must, 1))
+        question = _nlm_question(NLM_CLAIMS_PROMPT, spec)
+        batch = int((st.get("params") or {}).get("batch_size", 12))
+        docs_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
+                      if d["status"] == "fetched"}
+        while st.get("step") == "round":
+            if os.path.exists(_claims_pause_path(tab_id)):
+                _claims_set(tab_id, status_text="⏸ paused")
+                return
+            if st.get("stop"):
+                break                                    # score from the claims so far
+            queue, cursor = st.get("queue") or [], int(st.get("cursor", 0))
+            if cursor >= len(queue):
+                break
+            roster = [i for i in queue[cursor:cursor + batch] if i in docs_by_id]
+            st = _claims_set(tab_id, roster=roster,
+                             status_text=f"round {st.get('round', 0) + 1}: staging…")
+            nb, key_map, failed = _claims_stage(tab_id, st, roster, docs_by_id)
+            _claims_set(tab_id, status_text=f"📓 round {st.get('round', 0) + 1}: asking NotebookLM…")
+            _claims_heartbeat(tab_id)
+            res = _claims_query(tab_id, nb, question)
+            if nlm_bridge.is_quota_error(res):
+                _claims_quota_pause(tab_id, res.get("error") or "quota exhausted")
+                return
+            if res.get("incomplete"):
+                _claims_set(tab_id, error="round answer truncated twice — sources kept, "
+                                          "resume retries this round (consider a smaller batch_size)",
+                            status_text="⚠️ truncated answer")
+                db.append_message(tab_id, "s",
+                    f"🧾 Claims audit round {st.get('round', 0) + 1}: truncated/structureless "
+                    "answer twice — nothing lost; resume retries the round (a smaller "
+                    "batch_size may be needed).")
+                return
+            if "error" in res:
+                _claims_set(tab_id, error=res["error"][:300], status_text="⚠️ query failed")
+                db.append_message(tab_id, "s",
+                    f"🧾 Claims audit round {st.get('round', 0) + 1} query failed: "
+                    f"{res['error'][:200]} — resume retries this round.")
+                return
+            parsed, unmatched = _claims_parse(res["answer"], key_map, len(must))
+            hay = {did: _claims_doc_hay(docs_by_id[did]) for did in roster}
+            rnd = int(st.get("round", 0)) + 1
+            round_claims: dict[str, dict[str, list]] = {}
+            for did, feats in parsed.items():
+                for k, quote in feats.items():
+                    status = _quote_verify(quote, hay.get(did, ""))
+                    round_claims.setdefault(str(did), {})[str(k)] = [status, quote]
+            db.add_nlm_claims_round(tab_id, rnd, roster, res["answer"], round_claims)
+            merged = st.get("claims") or {}              # keep the BEST status per feature
+            for did, feats in round_claims.items():
+                cur = merged.setdefault(did, {})
+                for k, sv in feats.items():
+                    if (k not in cur
+                            or _CLAIM_STATUS_RANK[sv[0]] > _CLAIM_STATUS_RANK[cur[k][0]]):
+                        cur[k] = sv
+            st = _claims_set(tab_id, claims=merged,
+                             cursor=cursor + len(queue[cursor:cursor + batch]), round=rnd,
+                             unmatched=(st.get("unmatched") or []) + unmatched,
+                             failed=sorted(set(st.get("failed") or []) | set(failed)),
+                             error=None,
+                             status_text=f"round {rnd} done — {len(merged)} claimant(s) so far")
+            _claims_heartbeat(tab_id)
+        _claims_finalize(tab_id, _claims_set(tab_id, step="finalize"))
+    except Exception as exc:                             # keep the state file → resumable
+        _claims_set(tab_id, error=str(exc)[:300], status_text=f"interrupted: {str(exc)[:120]}")
+        db.append_message(tab_id, "s",
+                          f"🧾 Claims audit interrupted: {str(exc)[:200]} — resume to continue.")
+    finally:
+        try:
+            os.unlink(lock)
+        except OSError:
+            pass
+
+
+def _claims_finalize(tab_id: int, st: dict) -> None:
+    """Pure computation — no NLM query. score(doc) = Σ weight of MUST features whose
+    quotation VERIFIED (fuzzy counts, unverified = 0); ranking is written to the
+    state + nlm_score/nlm_score_note per doc; shortlisted/nlm_rank only on apply."""
+    must = st.get("must") or []
+    weights = {str(i): w for i, (_n, w) in enumerate(must, 1)}
+    claims = st.get("claims") or {}
+    params = st.get("params") or {}
+    docs = {d["id"]: d for d in db.list_documents(tab_id)}
+    rows = []
+    for did_s, feats in claims.items():
+        did = int(did_s)
+        if did not in docs:
+            continue
+        ok = {k for k, sv in feats.items() if sv[0] in _CLAIM_OK}
+        score = sum(weights.get(k, 0) for k in ok)
+        rows.append({"id": did, "number": docs[did].get("number"),
+                     "score": score, "crown": "1" in ok, "n_ok": len(ok),
+                     "n_claimed": len(feats)})
+    rows.sort(key=lambda r: (-r["score"], not r["crown"], -r["n_ok"], r["id"]))
+    for r in rows:
+        feats = claims[str(r["id"])]
+        note = " · ".join(
+            f"F{k}{'✓' if sv[0] == 'verified' else '~' if sv[0] == 'fuzzy' else '✗'}"
+            f" \"{(sv[1] or '')[:80]}\""
+            for k, sv in sorted(feats.items(), key=lambda kv: int(kv[0])))
+        db.update_document(r["id"], nlm_score=float(r["score"]),
+                           nlm_score_note=f"claims-audit: {note}"[:2000],
+                           nlm_scored_at=db._now())
+    target = int(params.get("target", 49))
+    top = rows[:target]
+    applied = False
+    if params.get("apply") and top:
+        db.set_shortlisted(tab_id, [r["id"] for r in top])
+        applied = True
+    n_claims = sum(len(f) for f in claims.values())
+    n_ver = sum(1 for f in claims.values() for sv in f.values() if sv[0] == "verified")
+    n_fuz = sum(1 for f in claims.values() for sv in f.values() if sv[0] == "fuzzy")
+    db.append_message(tab_id, "s",
+        f"🧾 Claims audit DONE: {len(st.get('queue') or [])} graduate(s) audited in "
+        f"{st.get('round', 0)} round(s); {len(rows)} made ≥1 verified MUST claim. "
+        f"Quotes: {n_ver} verified / {n_fuz} fuzzy / {n_claims - n_ver - n_fuz} rejected "
+        f"(hallucination guard). Top by verified-claim score: "
+        + ", ".join(f"{r['number']} ({r['score']}{'👑' if r['crown'] else ''})"
+                    for r in top[:10])
+        + (". Shortlist REWRITTEN (apply=true)." if applied else
+           ". Dry-run — shortlist untouched; raw answers in the nlm_claims table."))
+    _claims_set(tab_id, step="done", status_text="✅ done", error=None, applied=applied,
+                ranking=[[r["id"], r["number"], r["score"], r["crown"], r["n_ok"]]
+                         for r in rows])
+
+
+def _claims_quota_pause(tab_id: int, err: str) -> None:
+    resume_at = time.time() + SCREEN_QUOTA_PROBE_EVERY
+    _claims_set(tab_id, quota={"paused": True, "resume_at": resume_at,
+                               "paused_at": time.time(), "err": (err or "")[:300]},
+                status_text="😴 NLM quota exhausted — auto-resume armed")
+    db.append_message(tab_id, "s",
+        "😴 Claims audit: NotebookLM's Q&A quota is exhausted — PAUSED, probing hourly, "
+        f"auto-resumes. ({(err or '')[:160]})")
+    _spawn_claims_watchdog(tab_id)
+
+
+def _spawn_claims_watchdog(tab_id: int) -> None:
+    with _claims_watchdogs_mu:
+        t = _claims_watchdogs.get(tab_id)
+        if t and t.is_alive():
+            return
+        t = threading.Thread(target=_claims_watchdog_loop, args=(tab_id,), daemon=True)
+        _claims_watchdogs[tab_id] = t
+        t.start()
+
+
+def _claims_watchdog_loop(tab_id: int) -> None:
+    while True:
+        st = _claims_read(tab_id)
+        quota = (st or {}).get("quota") or {}
+        if not st or not quota.get("paused") or st.get("step") == "done":
+            return
+        if time.time() - (quota.get("paused_at") or 0) > SCREEN_QUOTA_GIVE_UP:
+            _claims_set(tab_id, quota=None,
+                        error="NLM quota still exhausted after 24h of probing",
+                        status_text="⚠️ gave up probing — resume manually")
+            return
+        wait_s = (quota.get("resume_at") or 0) - time.time()
+        if wait_s > 0:
+            time.sleep(min(wait_s, 300))
+            continue
+        if _claims_running(tab_id):
+            time.sleep(300)
+            continue
+        nb = st.get("notebook_id")
+        probe = (nlm_bridge.query(nb, "Reply with exactly: OK", profile=_tab_profile(tab_id))
+                 if nb else {"error": "no notebook"})
+        if nlm_bridge.is_quota_error(probe) or "error" in probe:
+            _claims_set(tab_id, quota={**quota, "resume_at": time.time() + SCREEN_QUOTA_PROBE_EVERY})
+            continue
+        _claims_set(tab_id, quota=None, error=None, status_text="▶️ quota back — resuming…")
+        db.append_message(tab_id, "s", "😴→▶️ Claims audit: quota is back — resuming.")
+        _claims_launch(tab_id)
+        return
+
+
+def _claims_launch(tab_id: int) -> bool:
+    lock = _claims_lock_path(tab_id)
+    if _claims_running(tab_id):
+        return False
+    try:
+        os.unlink(lock)                                   # clear a stale lock
+    except OSError:
+        pass
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+    except FileExistsError:
+        return False
+    try:
+        os.unlink(_claims_pause_path(tab_id))
+    except OSError:
+        pass
+    threading.Thread(target=_run_claims_audit, args=(tab_id,), daemon=True).start()
+    return True
+
+
+@app.post("/api/tabs/{tab_id}/claims-audit")
+def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
+    """Start (or resume=true) the 🧾 claims audit over the mega-screen graduates."""
+    _tab_or_404(tab_id)
+    ok, why = nlm_bridge.available(_tab_profile(tab_id))
+    if not ok:
+        raise HTTPException(400, f"NotebookLM unavailable: {why}")
+    stt = _claims_status(tab_id)
+    if stt["running"]:
+        return {"started": False, **stt}
+    if body.resume:
+        st = _claims_read(tab_id)
+        if not st or st.get("step") not in ("round", "finalize"):
+            raise HTTPException(400, "no interrupted claims audit to resume")
+        _claims_set(tab_id, error=None, quota=None, stop=False, status_text="▶️ resuming…")
+        return {"started": _claims_launch(tab_id), "resumed": True, **_claims_status(tab_id)}
+    bm = db.get_benchmark(tab_id)
+    if not bm or bm.get("status") != "ready":
+        raise HTTPException(400, "benchmark is not ready — set it first")
+    must = sorted(_combi_mandatory(bm), key=lambda f: -(f.get("weight") or 0))
+    if not must:
+        raise HTTPException(400, "the benchmark has no MANDATORY (M) features — the "
+                                 "claims audit is a MUST-coverage re-rank; accept a "
+                                 "feature list with M kinds first")
+    docs = [d for d in db.list_documents(tab_id) if d["status"] == "fetched"]
+    if body.doc_ids:
+        want = set(body.doc_ids)
+        docs = [d for d in docs if d["id"] in want]
+    else:
+        docs = [d for d in docs if d.get("nlm_screen_state") == "graduate"]
+    if not docs:
+        raise HTTPException(400, "no fetched graduates to audit (run the 🔬 mega-screen "
+                                 "first, or pass doc_ids)")
+    _claims_set(tab_id, step="round", queue=[d["id"] for d in docs], cursor=0, round=0,
+                roster=[], claims={}, unmatched=[], failed=[],
+                must=[[f["name"], f.get("weight") or 1] for f in must],
+                params={"batch_size": body.batch_size, "target": body.target,
+                        "apply": body.apply},
+                started_at=db._now(), quota=None, stop=False, error=None,
+                status_text="queued…")
+    rounds = -(-len(docs) // body.batch_size)
+    db.append_message(tab_id, "s",
+        f"🧾 Claims audit STARTED over {len(docs)} graduate(s): ~{rounds} round(s) of "
+        f"{body.batch_size}, {len(must)} MANDATORY feature(s), every claim must carry a "
+        "verbatim quotation (verified in code — hallucinated quotes score 0). "
+        f"{'Shortlist will be REWRITTEN on completion.' if body.apply else 'Dry-run: shortlist untouched.'} "
+        "Zero Claude tokens; survives restarts; quota pauses auto-resume.")
+    return {"started": _claims_launch(tab_id), "rounds_estimate": rounds,
+            **_claims_status(tab_id)}
+
+
+@app.get("/api/tabs/{tab_id}/claims-audit/status")
+def claims_audit_status(tab_id: int):
+    _tab_or_404(tab_id)
+    return _claims_status(tab_id)
+
+
+@app.post("/api/tabs/{tab_id}/claims-audit/pause")
+def claims_audit_pause(tab_id: int):
+    """Halt at the next round boundary (sources stay; resume continues)."""
+    _tab_or_404(tab_id)
+    with open(_claims_pause_path(tab_id), "w"):
+        pass
+    return {"pausing": True, **_claims_status(tab_id)}
+
+
+@app.post("/api/tabs/{tab_id}/claims-audit/stop")
+def claims_audit_stop(tab_id: int):
+    """Stop auditing and score NOW from the claims accumulated so far."""
+    _tab_or_404(tab_id)
+    st = _claims_read(tab_id)
+    if not st or st.get("step") == "done":
+        raise HTTPException(400, "no claims audit in progress")
+    _claims_set(tab_id, stop=True)
+    if not _claims_running(tab_id):
+        _claims_set(tab_id, step="finalize", error=None, quota=None)
+        _claims_launch(tab_id)
+    return {"stopping": True, **_claims_status(tab_id)}
+
+
 RECONCILE_MAX_DOCS = 30      # cap the disagreement set so the single call stays cheap
 
 
@@ -6523,6 +7064,12 @@ for _p in glob.glob(os.path.join(os.path.dirname(db.DB_PATH) or ".", ".nlm_scree
     _m = re.search(r"\.nlm_screen_(\d+)\.json$", _p)
     if _m and ((_screen_read(int(_m.group(1))) or {}).get("quota") or {}).get("paused"):
         _spawn_screen_watchdog(int(_m.group(1)))
+
+# And for a 🧾 claims audit that was quota-paused when the container stopped.
+for _p in glob.glob(os.path.join(os.path.dirname(db.DB_PATH) or ".", ".nlm_claims_*.json")):
+    _m = re.search(r"\.nlm_claims_(\d+)\.json$", _p)
+    if _m and ((_claims_read(int(_m.group(1))) or {}).get("quota") or {}).get("paused"):
+        _spawn_claims_watchdog(int(_m.group(1)))
 
 # 🔁 boot sweep for fetches orphaned by the restart (status='pending' with no worker)
 if AUTO_REFETCH:

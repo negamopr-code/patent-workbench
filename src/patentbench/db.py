@@ -145,6 +145,17 @@ CREATE TABLE IF NOT EXISTS tet_doc(
   progress TEXT,
   error TEXT,
   added_at INTEGER NOT NULL);
+-- 🧾 Claims-audit rounds: the RAW NotebookLM answer of every round is kept (the
+-- mega-screen discards its round answers — the t11 post-mortem could not mine
+-- NLM's reasoning because of that; this stage keeps everything re-analysable).
+CREATE TABLE IF NOT EXISTS nlm_claims(
+  id INTEGER PRIMARY KEY,
+  tab_id INTEGER NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
+  round INTEGER NOT NULL,
+  roster TEXT NOT NULL,               -- JSON list of staged doc ids
+  answer TEXT NOT NULL,               -- raw NotebookLM answer, verbatim
+  claims TEXT NOT NULL,               -- JSON {doc_id: {feat_idx: [status, quote]}}
+  ts INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_messages_tab ON messages(tab_id, id);
 CREATE INDEX IF NOT EXISTS idx_documents_tab ON documents(tab_id, id);
 CREATE INDEX IF NOT EXISTS idx_kg_node_parent ON kg_node(parent_id);
@@ -414,6 +425,24 @@ def mark_screened(tab_id: int, doc_ids: list[int], state: str) -> None:
         c.executemany("UPDATE documents SET nlm_screened_at=?, nlm_screen_state=? "
                       "WHERE tab_id=? AND id=?",
                       [(now, state, tab_id, did) for did in doc_ids])
+
+
+def add_nlm_claims_round(tab_id: int, rnd: int, roster: list[int],
+                         answer: str, claims: dict) -> None:
+    """🧾 Claims-audit bookkeeping: one row per round, raw answer included."""
+    with _conn() as c:
+        c.execute("INSERT INTO nlm_claims(tab_id, round, roster, answer, claims, ts) "
+                  "VALUES(?,?,?,?,?,?)",
+                  (tab_id, rnd, json.dumps(roster), answer or "",
+                   json.dumps(claims), _now()))
+
+
+def list_nlm_claims(tab_id: int) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute("SELECT round, roster, answer, claims, ts FROM nlm_claims "
+                         "WHERE tab_id=? ORDER BY id", (tab_id,)).fetchall()
+    return [{**dict(r), "roster": json.loads(r["roster"]),
+             "claims": json.loads(r["claims"])} for r in rows]
 
 
 def clear_nlm_refs(tab_id: int, notebook_id: str) -> int:

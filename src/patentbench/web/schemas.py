@@ -216,6 +216,22 @@ class NlmScreenRequest(BaseModel):
         return self
 
 
+class ClaimsAuditRequest(BaseModel):
+    """🧾 Claims audit (experiment stage, t11 lesson): re-screen the mega-screen's
+    GRADUATES with a MUST-feature checklist question — every claim must carry an
+    exact verbatim quotation, which is then verified in code against the stored
+    document text (hallucinated quotes score 0). The shortlist cut becomes a
+    weighted MUST-claim score: globally comparable across rounds, immune to the
+    round bias that made the rank-cut miss 48 of 66 opus champions on t11.
+    Dry-run by default — shortlisted/nlm_rank are only rewritten with apply=true."""
+    resume: bool = False
+    doc_ids: list[int] | None = None       # None = every 'graduate' of the mega-screen
+    # quoted answers are long: ~12 docs/round keeps the reply under NLM's cut-off
+    batch_size: int = Field(default=12, ge=5, le=20)
+    target: int = Field(default=49, ge=5, le=49)   # shortlist size when applied
+    apply: bool = False                    # True = write shortlisted + nlm_rank
+
+
 class CrossTabScanRequest(BaseModel):
     """🏆 Best-match cross-tab scan: digest-check every OTHER tab's fetched document
     against THIS tab's benchmark and import any that covers ≥1 target feature as a
