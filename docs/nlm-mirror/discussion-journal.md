@@ -102,3 +102,48 @@ Created NotebookLM notebook "patent benchmark match project"
 3. Deferred features / future implementation list.
 Canonical copies live in the repo at docs/nlm-mirror/; scripts/sync-nlm-mirror.sh
 replaces the NLM sources with the current file contents.
+
+### USER: "based on experiment we just made, think how the flow should be updated in order to nlm to find out the same champions as opus 5 does"
+
+Design analysis (plan mode). Two decisive data points sharpened the diagnosis:
+1. **Discovery is NOT broken** — every one of the 66 opus champions DID graduate; the
+   funnel failed only at the ranking/cut stage (349 → 49).
+2. **Re-cutting the existing ledger cannot fix it** — recall of the 66 champions under
+   the funnel's own ordering: @49→18, @100→23, @150→37, @250→51. Champion ledger
+   positions median 139/349; best in-round ranks scatter 1–31. The per-round
+   similarity-ranking signal itself is nearly uninformative; keeping more survivors or
+   raising the cut is useless.
+
+Design chosen: keep discovery untouched; add a separate **claims-audit stage** that
+re-screens the graduates with a MANDATORY-feature checklist question and cuts the
+shortlist by weighted MUST-claim score (absolute, cross-round-comparable → immune to
+round bias).
+
+USER decisions during planning:
+- Rejects audit: "Yes, sample 50 rejects" — opus reads 50 random discovery-rejected
+  docs to measure the discovery-stage false-negative rate (its one untested assumption).
+- Rollout: "T11-style experiments only" — the default mega-screen flow stays unchanged;
+  claims audit is a manually-triggered endpoint.
+- USER (verbatim): "must-feature should be also backed by nlm with exact quotations
+  which can be easily assesed and found by opus afterwards" → every claim must carry a
+  verbatim quotation; quotes are verified IN CODE against the stored document text
+  (substring after normalization + 4-gram shingle fuzzy fallback) — hallucinated quotes
+  score 0 and opus later verifies pre-located passages instead of hunting.
+
+### Implementation (2026-08-12, commit 2e982dd, deployed)
+
+- `POST /api/tabs/{id}/claims-audit` (+ /status /pause /stop): background job over the
+  graduates, rounds of 12 docs + benchmark in a dedicated "🧾 Claims" notebook,
+  NLM_CLAIMS_PROMPT (MUST features only, weight-ordered, quote-mandatory), resume-safe
+  state file, NLM-quota watchdog + boot re-arm — same self-healing as the mega-screen.
+- Raw round answers persist in the new `nlm_claims` DB table (the mega-screen discards
+  its answers — that's why the t11 post-mortem couldn't mine NLM's reasoning).
+- Scoring: score = Σ weight of MUST features whose quote verified (fuzzy counts,
+  unverified = 0); per-doc score+quotes land in nlm_score/nlm_score_note; dry-run by
+  default, apply=true rewrites shortlisted/nlm_rank.
+- 6 unit tests for the parser + quote verifier; full suite 331 passed.
+- **Validation launched (in flight)**: claims-audit dry-run over the 349 t11 graduates
+  (~30 rounds, zero Claude tokens) + opus deep-read of 50 seeded-random rejected docs
+  (seed 40387, sample of the 986 unscored fetched rejects). Success metric: recall@49
+  of the opus top-66 vs the baseline 18/66; plus quote-verification rate and the
+  per-feature NLM-vs-opus agreement matrix; plus discovery FN rate from the 50 rejects.
