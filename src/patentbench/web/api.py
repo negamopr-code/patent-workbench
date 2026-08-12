@@ -4197,6 +4197,20 @@ NLM_CLAIMS_PROMPT = (
     "\n\n=== MANDATORY FEATURES (most important first) ===\n{benchmark}"
 )
 
+# Stage-1/2a recall mode: same per-feature question, no quotations — replies are
+# numbers-only so ~35 docs fit a round (vs 12 quoted). Claims land as status
+# 'claimed' (uncheckable by design); the quoted stage re-verifies whoever advances.
+NLM_CLAIMS_FREE_PROMPT = (
+    "For EACH numbered feature below, name every candidate source document that "
+    "discloses it — explicitly or as an implicit realisation (a document that "
+    "physically does it without the literal words). Ignore the 🎯 BENCHMARK source "
+    "itself. Reply with EXACTLY one line per feature, in this form:\n"
+    "FEATURE <k>: <publication numbers, comma-separated, or NONE>\n"
+    "List every disclosing document — there is no limit per feature. Only name "
+    "documents actually among the sources; do not invent publication numbers."
+    "\n\n=== FEATURES (most important first) ===\n{benchmark}"
+)
+
 _CLAIMS_FEAT_SPLIT = re.compile(r"FEATURE\s*#?\s*(\d+)\s*:", re.I)
 _claims_watchdogs: dict[int, threading.Thread] = {}
 _claims_watchdogs_mu = threading.Lock()
@@ -4269,6 +4283,8 @@ def _claims_status(tab_id: int) -> dict:
             "claimants": len(st.get("claims") or {}),
             "status_text": st.get("status_text", ""), "error": st.get("error"),
             "quota_resume_at": quota.get("resume_at"),
+            "feature_kind": (st.get("params") or {}).get("feature_kind", "must"),
+            "quotes": (st.get("params") or {}).get("quotes", True),
             "ranking": st.get("ranking") if st.get("step") == "done" else None,
             "applied": st.get("applied", False)}
 
@@ -4422,8 +4438,8 @@ def _claims_query(tab_id: int, nb: str, question: str) -> dict:
     return res
 
 
-_CLAIM_OK = ("verified", "fuzzy")
-_CLAIM_STATUS_RANK = {"verified": 2, "fuzzy": 1, "unverified": 0}
+_CLAIM_OK = ("verified", "fuzzy", "claimed")   # 'claimed' only exists in quotes-free runs
+_CLAIM_STATUS_RANK = {"verified": 3, "fuzzy": 2, "claimed": 1, "unverified": 0}
 
 
 def _run_claims_audit(tab_id: int) -> None:
@@ -4435,8 +4451,11 @@ def _run_claims_audit(tab_id: int) -> None:
         must = st.get("must") or []                      # [[name, weight], …] frozen at start
         spec = "\n".join(f"{i}. {name} (importance {w}/5)"
                          for i, (name, w) in enumerate(must, 1))
-        question = _nlm_question(NLM_CLAIMS_PROMPT, spec)
-        batch = int((st.get("params") or {}).get("batch_size", 12))
+        params = st.get("params") or {}
+        quoted = params.get("quotes", True)
+        kind = params.get("feature_kind", "must")
+        question = _nlm_question(NLM_CLAIMS_PROMPT if quoted else NLM_CLAIMS_FREE_PROMPT, spec)
+        batch = int(params.get("batch_size", 12))
         docs_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
                       if d["status"] == "fetched"}
         while st.get("step") == "round":
@@ -4474,14 +4493,16 @@ def _run_claims_audit(tab_id: int) -> None:
                     f"{res['error'][:200]} — resume retries this round.")
                 return
             parsed, unmatched = _claims_parse(res["answer"], key_map, len(must))
-            hay = {did: _claims_doc_hay(docs_by_id[did]) for did in roster}
+            hay = ({did: _claims_doc_hay(docs_by_id[did]) for did in roster}
+                   if quoted else {})
             rnd = int(st.get("round", 0)) + 1
             round_claims: dict[str, dict[str, list]] = {}
             for did, feats in parsed.items():
                 for k, quote in feats.items():
-                    status = _quote_verify(quote, hay.get(did, ""))
+                    status = (_quote_verify(quote, hay.get(did, ""))
+                              if quoted else "claimed")
                     round_claims.setdefault(str(did), {})[str(k)] = [status, quote]
-            db.add_nlm_claims_round(tab_id, rnd, roster, res["answer"], round_claims)
+            db.add_nlm_claims_round(tab_id, rnd, roster, res["answer"], round_claims, kind)
             merged = st.get("claims") or {}              # keep the BEST status per feature
             for did, feats in round_claims.items():
                 cur = merged.setdefault(did, {})
@@ -4528,29 +4549,35 @@ def _claims_finalize(tab_id: int, st: dict) -> None:
                      "score": score, "crown": "1" in ok, "n_ok": len(ok),
                      "n_claimed": len(feats)})
     rows.sort(key=lambda r: (-r["score"], not r["crown"], -r["n_ok"], r["id"]))
-    for r in rows:
-        feats = claims[str(r["id"])]
-        note = " · ".join(
-            f"F{k}{'✓' if sv[0] == 'verified' else '~' if sv[0] == 'fuzzy' else '✗'}"
-            f" \"{(sv[1] or '')[:80]}\""
-            for k, sv in sorted(feats.items(), key=lambda kv: int(kv[0])))
-        db.update_document(r["id"], nlm_score=float(r["score"]),
-                           nlm_score_note=f"claims-audit: {note}"[:2000],
-                           nlm_scored_at=db._now())
+    kind = params.get("feature_kind", "must")
+    if kind == "must":         # A-runs must not clobber the MUST audit's nlm_score/note
+        for r in rows:
+            feats = claims[str(r["id"])]
+            note = " · ".join(
+                f"F{k}{'✓' if sv[0] == 'verified' else '~' if sv[0] == 'fuzzy' else '＋' if sv[0] == 'claimed' else '✗'}"
+                f" \"{(sv[1] or '')[:80]}\""
+                for k, sv in sorted(feats.items(), key=lambda kv: int(kv[0])))
+            db.update_document(r["id"], nlm_score=float(r["score"]),
+                               nlm_score_note=f"claims-audit: {note}"[:2000],
+                               nlm_scored_at=db._now())
     target = int(params.get("target", 49))
     top = rows[:target]
     applied = False
-    if params.get("apply") and top:
+    if params.get("apply") and kind == "must" and top:
         db.set_shortlisted(tab_id, [r["id"] for r in top])
         applied = True
     n_claims = sum(len(f) for f in claims.values())
     n_ver = sum(1 for f in claims.values() for sv in f.values() if sv[0] == "verified")
     n_fuz = sum(1 for f in claims.values() for sv in f.values() if sv[0] == "fuzzy")
+    label = "MUST" if kind == "must" else "ADDITIONAL"
+    quote_line = (f"Quotes: {n_ver} verified / {n_fuz} fuzzy / "
+                  f"{n_claims - n_ver - n_fuz} rejected (hallucination guard). "
+                  if params.get("quotes", True) else
+                  f"{n_claims} claim(s), quotes-free recall mode (unverified by design). ")
     db.append_message(tab_id, "s",
-        f"🧾 Claims audit DONE: {len(st.get('queue') or [])} graduate(s) audited in "
-        f"{st.get('round', 0)} round(s); {len(rows)} made ≥1 verified MUST claim. "
-        f"Quotes: {n_ver} verified / {n_fuz} fuzzy / {n_claims - n_ver - n_fuz} rejected "
-        f"(hallucination guard). Top by verified-claim score: "
+        f"🧾 Claims audit ({label}) DONE: {len(st.get('queue') or [])} doc(s) audited in "
+        f"{st.get('round', 0)} round(s); {len(rows)} made ≥1 counted {label} claim. "
+        f"{quote_line}Top by claim score: "
         + ", ".join(f"{r['number']} ({r['score']}{'👑' if r['crown'] else ''})"
                     for r in top[:10])
         + (". Shortlist REWRITTEN (apply=true)." if applied else
@@ -4651,11 +4678,20 @@ def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
     bm = db.get_benchmark(tab_id)
     if not bm or bm.get("status") != "ready":
         raise HTTPException(400, "benchmark is not ready — set it first")
-    must = sorted(_combi_mandatory(bm), key=lambda f: -(f.get("weight") or 0))
-    if not must:
-        raise HTTPException(400, "the benchmark has no MANDATORY (M) features — the "
-                                 "claims audit is a MUST-coverage re-rank; accept a "
-                                 "feature list with M kinds first")
+    if body.features == "must":
+        feats = sorted(_combi_mandatory(bm), key=lambda f: -(f.get("weight") or 0))
+        if not feats:
+            raise HTTPException(400, "the benchmark has no MANDATORY (M) features — the "
+                                     "claims audit is a MUST-coverage re-rank; accept a "
+                                     "feature list with M kinds first")
+    else:
+        if body.apply:
+            raise HTTPException(400, "apply is only valid for the MUST audit — the "
+                                     "ADDITIONAL stage refines ordering, not the shortlist")
+        feats = sorted((f for f in _combi_elements(bm) if _kind(f) == "A"),
+                       key=lambda f: -(f.get("weight") or 0))
+        if not feats:
+            raise HTTPException(400, "the benchmark has no ADDITIONAL (A) features")
     docs = [d for d in db.list_documents(tab_id) if d["status"] == "fetched"]
     if body.doc_ids:
         want = set(body.doc_ids)
@@ -4665,20 +4701,34 @@ def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
     if not docs:
         raise HTTPException(400, "no fetched graduates to audit (run the 🔬 mega-screen "
                                  "first, or pass doc_ids)")
+    # A finished audit of ANOTHER feature kind is a result worth keeping — archive its
+    # state file before this run overwrites it (all rounds also live in nlm_claims).
+    prev = _claims_read(tab_id)
+    if prev and (prev.get("params") or {}).get("feature_kind", "must") != body.features:
+        try:
+            shutil.copyfile(_claims_state_path(tab_id),
+                            _claims_state_path(tab_id) + "."
+                            + (prev.get("params") or {}).get("feature_kind", "must"))
+        except OSError:
+            pass
     _claims_set(tab_id, step="round", queue=[d["id"] for d in docs], cursor=0, round=0,
                 roster=[], claims={}, unmatched=[], failed=[],
-                must=[[f["name"], f.get("weight") or 1] for f in must],
+                must=[[f["name"], f.get("weight") or 1] for f in feats],
                 params={"batch_size": body.batch_size, "target": body.target,
-                        "apply": body.apply},
+                        "apply": body.apply, "feature_kind": body.features,
+                        "quotes": body.quotes},
                 started_at=db._now(), quota=None, stop=False, error=None,
                 status_text="queued…")
     rounds = -(-len(docs) // body.batch_size)
     db.append_message(tab_id, "s",
-        f"🧾 Claims audit STARTED over {len(docs)} graduate(s): ~{rounds} round(s) of "
-        f"{body.batch_size}, {len(must)} MANDATORY feature(s), every claim must carry a "
-        "verbatim quotation (verified in code — hallucinated quotes score 0). "
-        f"{'Shortlist will be REWRITTEN on completion.' if body.apply else 'Dry-run: shortlist untouched.'} "
-        "Zero Claude tokens; survives restarts; quota pauses auto-resume.")
+        f"🧾 Claims audit STARTED over {len(docs)} doc(s): ~{rounds} round(s) of "
+        f"{body.batch_size}, {len(feats)} {'MANDATORY' if body.features == 'must' else 'ADDITIONAL'} "
+        "feature(s), "
+        + ("every claim must carry a verbatim quotation (verified in code — "
+           "hallucinated quotes score 0). " if body.quotes else
+           "quotes-free recall mode (claims counted, verified later for whoever advances). ")
+        + (f"{'Shortlist will be REWRITTEN on completion.' if body.apply else 'Dry-run: shortlist untouched.'} "
+           "Zero Claude tokens; survives restarts; quota pauses auto-resume."))
     return {"started": _claims_launch(tab_id), "rounds_estimate": rounds,
             **_claims_status(tab_id)}
 

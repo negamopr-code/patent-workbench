@@ -69,6 +69,18 @@ def test_quote_fuzzy_survives_small_noise():
     assert _quote_verify(q, HAY) in ("verified", "fuzzy")
 
 
+def test_parse_quotes_free_lines():
+    # stage-1/2a mode: numbers only, no '::' — parser yields empty quotes
+    ans = ("FEATURE 1: CN117039286, CN118156696A, US20220158279\n"
+           "FEATURE 2: NONE\n"
+           "FEATURE 3: EP4340163A1\n")
+    claims, unmatched = _claims_parse(ans, KEY_MAP, n_must=7)
+    assert set(claims[1].keys()) == {1} and claims[1][1] == ""
+    assert set(claims) == {1, 2, 3, 4}
+    assert claims[4] == {3: ""}
+    assert unmatched == []
+
+
 def test_quote_hallucination_rejected():
     assert _quote_verify(
         "a completely different sentence about steel welding processes and ferrite",

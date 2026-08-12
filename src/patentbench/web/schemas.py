@@ -226,10 +226,24 @@ class ClaimsAuditRequest(BaseModel):
     Dry-run by default — shortlisted/nlm_rank are only rewritten with apply=true."""
     resume: bool = False
     doc_ids: list[int] | None = None       # None = every 'graduate' of the mega-screen
-    # quoted answers are long: ~12 docs/round keeps the reply under NLM's cut-off
-    batch_size: int = Field(default=12, ge=5, le=20)
+    # quoted answers are long: ~12 docs/round keeps the reply under NLM's cut-off;
+    # quotes-free replies are numbers-only, so ~35 docs/round fit (stage-1/2a mode)
+    batch_size: int | None = Field(default=None, ge=5, le=45)  # None = 12 quoted / 35 free
     target: int = Field(default=49, ge=5, le=49)   # shortlist size when applied
     apply: bool = False                    # True = write shortlisted + nlm_rank
+    # target flow stages (2026-08-12): which benchmark feature kind to assess, and
+    # whether every claim must carry a verbatim quotation (the code-verified trust
+    # layer) or run in the cheap quotes-free recall mode.
+    features: Literal["must", "additional"] = "must"
+    quotes: bool = True
+
+    @model_validator(mode="after")
+    def _claims_defaults(self):
+        if self.batch_size is None:
+            self.batch_size = 12 if self.quotes else 35
+        elif self.quotes and self.batch_size > 20:
+            raise ValueError("quoted mode: batch_size must be ≤ 20 (answers truncate)")
+        return self
 
 
 class CrossTabScanRequest(BaseModel):

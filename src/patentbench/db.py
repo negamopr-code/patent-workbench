@@ -245,6 +245,9 @@ def _conn():
             # rotated through the screening notebook, and what came of it —
             # 'graduate' (named in a round's ranking) | 'rejected' | 'add_failed'
             con.execute("ALTER TABLE documents ADD COLUMN nlm_screen_state TEXT")
+        ccols = {r[1] for r in con.execute("PRAGMA table_info(nlm_claims)")}
+        if "kind" not in ccols:             # 🧾 which feature set the round assessed
+            con.execute("ALTER TABLE nlm_claims ADD COLUMN kind TEXT NOT NULL DEFAULT 'must'")
         bmcols = {r[1] for r in con.execute("PRAGMA table_info(benchmark)")}
         if "nlm_source_notebook" not in bmcols:   # benchmark mirrored into which notebook
             con.execute("ALTER TABLE benchmark ADD COLUMN nlm_source_notebook TEXT")
@@ -428,13 +431,13 @@ def mark_screened(tab_id: int, doc_ids: list[int], state: str) -> None:
 
 
 def add_nlm_claims_round(tab_id: int, rnd: int, roster: list[int],
-                         answer: str, claims: dict) -> None:
+                         answer: str, claims: dict, kind: str = "must") -> None:
     """🧾 Claims-audit bookkeeping: one row per round, raw answer included."""
     with _conn() as c:
-        c.execute("INSERT INTO nlm_claims(tab_id, round, roster, answer, claims, ts) "
-                  "VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO nlm_claims(tab_id, round, roster, answer, claims, ts, kind) "
+                  "VALUES(?,?,?,?,?,?,?)",
                   (tab_id, rnd, json.dumps(roster), answer or "",
-                   json.dumps(claims), _now()))
+                   json.dumps(claims), _now(), kind))
 
 
 def list_nlm_claims(tab_id: int) -> list[dict]:
