@@ -3245,9 +3245,14 @@ async function pollRead() {
     reloadChat();
     rehydrateCombi(tabAt);   // fresh reads re-rank the 🔎 matrix (anchor may change) — redraw it
     if (bestMatch) afterBestMatchBatch();      // 🏆 chain: combination assessment + next-50 offer
+    readPoll = setTimeout(pollRead, 30000);    // idle heartbeat — see below
   } else {
     if (pauseBtn) pauseBtn.classList.add('hidden');
     el.classList.add('muted'); el.textContent = '';
+    // Idle heartbeat: the token/auth watchdog can auto-resume a parked read
+    // server-side while this page sits open on the tab — without a slow poll the
+    // strip stays on "stopped" until a reload (bit 2026-08-12, /login rotation).
+    readPoll = setTimeout(pollRead, 30000);
   }
 }
 $('claude-pause').onclick = async () => {
