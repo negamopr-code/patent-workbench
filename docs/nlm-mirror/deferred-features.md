@@ -57,8 +57,13 @@ query per round regardless of answer length):
 3. **Stage 1.5 — quoted MUST re-audit of graduates** (batch ~10–12, ~20 rounds):
    every advancing doc becomes quote-backed; code-side verification kills the ~14%
    over-claim rate before opus.
-4. **Stage 2 — quoted ADDITIONAL-feature audit of graduates** (20 A-features → two
-   10-feature queries per round or batch ~8, ~30 rounds).
+4. **Stage 2a — quotes-free ADDITIONAL sweep of the quote-confirmed docs** (~300 docs,
+   20 A-features, batch ~35, ~9 rounds) → who claims what.
+   **Stage 2b — quotes ONLY for the doc×feature pairs claimed in 2a** (bounded answers →
+   bigger batches, ~15–25 rounds) → verified A-coverage. (USER's two-tier refinement
+   2026-08-12; replaces the flat quoted A-audit, saves ~15 rounds.)
+   Final: opus deep-reads the top ~50 of the combined verified ladder with pre-located
+   quotes; opus-vs-ladder disagreement is the funnel's standing quality metric.
 5. **Second-chance pass** for zero-claim docs in reshuffled batches (~60 rounds) —
    the only unguarded FN channel is a doc never "looked at"; negative twice in
    different company = reliable reject.
