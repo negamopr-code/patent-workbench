@@ -203,3 +203,34 @@ extra NLM queries.
 the code guard — NLM backs most claims with real text; the hallucination guard is
 earning its keep. Crown feature scarce as expected (7 claims); broad MUSTs (F6, F7)
 claim widely.
+
+### Mid-run events (2026-08-12 afternoon)
+
+- Tabs 13+14 opus deep-reads COMPLETED cleanly (t13: all 153 read, 410 assessed total;
+  t14: all 81 read, 326 assessed, combi auto-judged) — both EP tabs now hold full opus
+  ground truth, ready for the same NLM-vs-opus validation as t11.
+- t11 claims audit QUOTA-PAUSED at round 21/30 (252/349 audited); watchdog auto-resumes.
+  Deploy window used: M/A/W letter badges on feature chips shipped (7e123ff) — USER asked
+  to clearly differentiate mandatory vs additional features in the verdict list.
+- **Preliminary comparison at 252/349** (provisional): claims-top-49 holds 19/47 audited
+  champions (~40% vs old funnel 27%); adaptive ladder much stronger — pool@80 = 62%,
+  pool@120 = 70%. Buried champions surfaced: CN220652168 (opus 6.0, old ledger pos 207)
+  → position 3 with verified crown claim + 7/7 MUST; CN109863626 → position 7. Tail of
+  ~6 champions at positions 181–248 (NLM claimed nothing verifiable) — per-feature
+  agreement matrix at completion will show which features NLM cannot see.
+- work2 re-authenticated by USER via nlm-keeper noVNC; CLI profile healthy after the
+  keeper's cookie snapshot.
+
+### USER: "we now know how to find right docs from 349, but what about the choice of 349 from ~2000? We should have the same mechanism, right?"
+
+Confirmed: same mechanism corpus-wide — claims ladder over ALL fetched candidates,
+"graduates" dissolve as a concept (the ladder IS the selection), zero-claim docs get one
+second-chance pass in reshuffled batches, old mega-screen keeps running in parallel for
+comparison. The endpoint already accepts doc_ids = whole corpus (no new code for the
+sweep itself); small pending piece = merging claims across runs from the nlm_claims
+table for the second-chance pass. Cost fork for t14: full corpus ~153 quoted rounds
+(multi-day) vs graduates-only ~28 rounds (~1 day).
+
+**USER decision: graduates-only for t14** (full-corpus sweep deferred). t14 claims audit
+LAUNCHED on work2 (326 graduates, 28 rounds, dry-run) — first live use of the per-tab
+account parallelism: t11 on default + t14 on work2, independent quotas.
