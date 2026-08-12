@@ -358,6 +358,14 @@ textarea, select, input[type="text"] {
 .doc .addl-chip.stretch { background: #fef9c3; }
 .doc .addl-chip.absent { opacity: .55; }
 .chip.feat-a { background: #dbeafe; }
+/* M/A/W letter on the per-doc feature verdict chips */
+.feat-mark .feat-kind { font-weight: 800; margin-right: 3px; }
+.chip.feat-mark.kind-m { border-left: 3px solid #dc2626; }
+.chip.feat-mark.kind-m .feat-kind { color: #b91c1c; }
+.chip.feat-mark.kind-a { border-left: 3px solid #2563eb; }
+.chip.feat-mark.kind-a .feat-kind { color: #1d4ed8; }
+.chip.feat-mark.kind-w { border-left: 3px solid #7c3aed; }
+.chip.feat-mark.kind-w .feat-kind { color: #6d28d9; }
 .doc .score .delta { color: var(--muted); font-weight: 600; }
 .doc .score .delta.big { color: var(--warn); }
 .doc .score .score-note { color: var(--muted); font-weight: 400; }

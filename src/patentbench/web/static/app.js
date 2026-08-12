@@ -2202,11 +2202,23 @@ function renderDocs(allDocs) {
       const chips = document.createElement('div');
       chips.className = 'feat-chip-row';
       const mark = { yes: '✓', partial: '~', no: '✗' };
+      // M/A letter per chip (user 2026-08-12): the verdict list mixes mandatory and
+      // additional benchmark features — join the kind in from the benchmark by name.
+      const kindByName = new Map((((currentBm || {}).features) || [])
+        .map(bf => [bf.name, (bf.kind || 'M').toUpperCase()]));
       for (const f of (d.feature_scores || [])) {
+        const kind = kindByName.get(f.name) || 'M';
         const c = document.createElement('span');
-        c.className = 'chip feat-mark clickable ' + f.status;
-        c.textContent = `${mark[f.status] || '?'} ${f.name} ·${'★'.repeat(f.weight || 1)}`;
-        c.title = (f.note ? f.note + '\n\n' : '') + 'Click → every document with this feature + full comments';
+        c.className = 'chip feat-mark clickable ' + f.status
+          + (kind === 'A' ? ' kind-a' : kind === 'W' ? ' kind-w' : ' kind-m');
+        const k = document.createElement('b');
+        k.className = 'feat-kind';
+        k.textContent = kind;
+        c.appendChild(k);
+        c.appendChild(document.createTextNode(
+          ` ${mark[f.status] || '?'} ${f.name} ·${'★'.repeat(f.weight || 1)}`));
+        c.title = `${kind === 'A' ? 'ADDITIONAL (bonus)' : kind === 'W' ? 'WHOLE-CONTENT' : 'MANDATORY'} feature\n`
+          + (f.note ? f.note + '\n\n' : '') + 'Click → every document with this feature + full comments';
         c.onclick = () => openFeatureModal(f.name, f.weight, 'M', d.id);
         chips.appendChild(c);
       }
