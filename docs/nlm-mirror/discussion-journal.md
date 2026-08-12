@@ -246,6 +246,40 @@ survivor filter is NOT good enough as sole discovery — adaptation justified. P
 proposed: opus read of the 101-doc sonnet-2.0 pocket (token cost, awaiting go) + free
 NLM per-feature sweep of all 1605 rejects (queued behind quota).
 
+### T14 CLAIMS AUDIT VERDICT (completed 2026-08-12 evening, work2, 28 rounds)
+
+317/326 graduates claimed; vs 42 opus champions among the audited: OLD similarity
+shortlist 10/42 (24%) — claims ladder@49 **18/42 (43%)**, @100 23/42. Only 12 docs
+overlap between old and new top-49 (75% turnover): 37 newcomers incl. **12 champions
+the old shortlist never ranked** (EP3166200, CN113646652, US20220209563, US12313687,
+CN111049204, CN115514036, AU1321292, CN107431369, CN112601969, US20250047121,
+CN116961149, EP4064412); 36 dropped of which only 4 were champions (old ranks 15/23/
+35/41). Quote verification 71% (translation-heavy corpus, many fuzzy). **NEW LESSON —
+MUST SATURATION**: t14's top-15 all tie at max claim score with crown verified (its 5
+MUSTs are broad) → the MUST ladder stops discriminating at the top; ordering power for
+such benchmarks lives in the ADDITIONAL features → stage 2a/2b is essential, not
+polish. Dry-run: the tool's shortlist untouched.
+
+### SONNET-2.0 POCKET RESULT (user-approved opus read, completed 2026-08-12 evening)
+
+101/101 rejected sonnet-2.0 docs opus-read: **23 champions (22.8%)** — measured vs the
+32% calibration, inside the CI. Top finds: CN220233407 6.0, CN119381711 6.0, five
+5.0s. Updated discovery recall of the old similarity screen: 66 champions kept vs
+~70 (23+2 measured + ~45 estimated remaining) discarded → **still ≈ 50%**. These 23+2
+champions are the instrument-independent label set for validating the per-feature
+discovery sweep (avoiding a second survivorship trap). ⚠ Ops lesson: the deploy after
+the pocket read killed its final ranking-compile chat message (scores all safe in DB;
+re-rank recoverable) — deploy gates must BLOCK on .claude_read_*.lock, not report it.
+
+### Claims-audit engine extended + t14 stage 2a launched (commit b: feature-kind + quotes-free)
+
+Added `features: must|additional` and `quotes: bool` to the claims audit (batch 35
+quotes-free; 'claimed' status counts in recall mode; A-runs never touch nlm_score or
+the shortlist; state of the finished MUST audit archived; nlm_claims rows carry kind).
+332 tests green, deployed. **t14 stage 2a LAUNCHED**: 22 A-features, quotes-free, over
+the 279 quote-confirmed docs, 8 rounds on work2 — first live run of the target flow's
+stage 2a. Next: 2b = quotes only for the doc×feature pairs 2a claims.
+
 ### Quota economics + USER's target flow (agreed on paper 2026-08-12)
 
 USER: per-feature approach makes the most sense — MUST-only sweep over ~3000 docs in
