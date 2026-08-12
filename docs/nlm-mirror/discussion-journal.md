@@ -147,3 +147,59 @@ USER decisions during planning:
   (seed 40387, sample of the 986 unscored fetched rejects). Success metric: recall@49
   of the opus top-66 vs the baseline 18/66; plus quote-verification rate and the
   per-feature NLM-vs-opus agreement matrix; plus discovery FN rate from the 50 rejects.
+
+### REJECTS AUDIT RESULT (2026-08-12): discovery is NOT loss-free
+
+2 of 50 randomly sampled rejected docs are opus champions: **JP2022548488 = 5.0**
+(two-piece inner/outer pole, welded pole connection, clamping groove) and
+**CN222927625 = 4.0**. FN rate 4%, Wilson 95% CI [1.1%, 13.5%] → **~39 champion-grade
+docs expected among the 986 unscored fetched rejects (CI 11–133)**. The earlier claim
+"discovery is sound because all 66 known champions graduated" was survivorship bias —
+champions could only be seen among docs opus had read. A mid-run transient NLM network
+error (round 6, "peer closed connection") was resumed manually; noted as a deferred
+improvement (auto-retry for network-class errors — quota pauses already self-heal).
+
+### USER: did you really understand the problem? How to choose the 349 graduates RELIABLY and be sure the ~2000 rejected contain no doc covering all MUST features completely?
+
+Answer given: the running claims audit fixes RANKING only; it cannot recover docs that
+never graduated. Discovery leaks because it is single-elimination with a noisy judge
+(one similarity top-10 judgment per doc, one appearance, no evidence). Initial proposal:
+per-MUST-feature discovery question corpus-wide + K≥2 redundant passes + acceptance
+sampling of rejects as standing QA; absolute certainty impossible without opus reading
+everything, but the miss probability becomes measurable and boundable. The running
+audit doubles as the calibration (per-pass sensitivity over the 66 known champions).
+
+### USER refinement: graded coverage IS the redundancy
+
+USER (essence): false negatives are absorbed by the per-feature grading — if NLM
+wrongly misses ONE feature the doc still stands at 6/7, high in the ranking; and with
+few good documents, lower grades simply flow into the "worth checking by opus" pool.
+Agreed and adopted: a true 7/7 doc has 7 independent-ish chances per pass; rejecting it
+requires missing all 7 (≈0.02% at sensitivity 0.7). K full passes are unnecessary —
+the remaining FN channel is doc-level correlated failure (doc never "looked at"), which
+shows up as ZERO-claim docs; only those need a cheap second pass in reshuffled batches.
+The opus pool becomes adaptive: descend the coverage ladder (7/7 → 6/7 → …) until the
+opus budget fills — the cut is relative to what exists, not a fixed rank.
+
+### USER inversion: per-FEATURE database notebook — "run once, it is not wasted"
+
+USER (essence): assess per feature, not per document — a second NLM notebook (same
+account, separate folder) where each SOURCE is one MUST feature holding all claiming
+documents + their quotations, populated as a byproduct of the same single pass; at the
+end we own a per-feature database we can pick any doc from — even rejected docs'
+evidence is preserved. Adopted with two mechanics: (1) SQLite (nlm_claims table) stays
+the source of truth, the "📚 Features" notebook is a synced VIEW rebuilt by
+delete+re-add (source ops cost no Q&A quota) — same pattern as the journal mirror;
+(2) one round answer cannot carry BOTH a top-10 judgment AND quoted claims for 39 docs
+— but the top-10 similarity judgment is obsolete anyway: graded coverage subsumes the
+ranking, so the claims sweep is the single pass. Bonus: the feature notebook directly
+answers gap-filler/combination queries ("who discloses feature 5?") — the H2 use case.
+Immediate payoff: seed the notebook for the 349 from the audit's claims table, zero
+extra NLM queries.
+
+### Early instrument reading (10/30 rounds, 120 docs audited)
+
+372 claims, **86.3% quote-verified** (164 exact + 157 fuzzy), 51 unverifiable zeroed by
+the code guard — NLM backs most claims with real text; the hallucination guard is
+earning its keep. Crown feature scarce as expected (7 claims); broad MUSTs (F6, F7)
+claim widely.
