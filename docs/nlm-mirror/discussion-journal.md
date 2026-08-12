@@ -234,3 +234,30 @@ table for the second-chance pass. Cost fork for t14: full corpus ~153 quoted rou
 **USER decision: graduates-only for t14** (full-corpus sweep deferred). t14 claims audit
 LAUNCHED on work2 (326 graduates, 28 rounds, dry-run) — first live use of the per-tab
 account parallelism: t11 on default + t14 on work2, independent quotas.
+
+### Discovery-filter recall measured (2026-08-12): survivor filter ≈ 45% (30–70%)
+
+Full accounting of t11's 1954 fetched: 66 champions among 349 graduates (complete opus
+knowledge) vs an estimated **~80 champions hiding in the 1605 rejects**: 2 confirmed in
+the 50-doc opus sample (4%, CI 1.1–13.5% → ~37 in the 936 unscored) + ~42 estimated in
+the 619 sonnet-scored rejects via calibration (sonnet 2.0 → 32% opus-champion rate,
+17/53; the rejects hold 101 docs at sonnet 2.0). Verdict per USER's decision rule: the
+survivor filter is NOT good enough as sole discovery — adaptation justified. Probes
+proposed: opus read of the 101-doc sonnet-2.0 pocket (token cost, awaiting go) + free
+NLM per-feature sweep of all 1605 rejects (queued behind quota).
+
+### Quota economics + USER's target flow (agreed on paper 2026-08-12)
+
+USER: per-feature approach makes the most sense — MUST-only sweep over ~3000 docs in
+NLM, zero Claude tokens, NO survivor mode needed in parallel long-run; graduates
+(= docs fulfilling the MUSTs) then get a second NLM round for additional features.
+Clarified: quota is charged per QUERY not per answer length — quotes just shrink
+docs-per-round (12 vs 35), so quotes-free stage 1 costs 86 rounds vs ~300 quoted for
+3000 docs. Unquoted per-feature is STILL far more precise than the similarity screen
+(absolute per-doc criterion, no top-10 cap, graded 0–10 coverage, 10 chances per doc);
+quotes add verification, applied where trust is consumed (stage 1.5 on graduates).
+Full spec + budget (~135 rounds core, 2–3 days one account) recorded in the deferred-
+features doc as TARGET ARCHITECTURE, with validation gates. Adopted parameters:
+adaptive-ladder graduation bar (not strict all-MUST) + second-chance pass included.
+T14 transient work2 auth error at round 7 (keeper cookie snapshot mid-call) resumed
+manually — auto-retry for network-class errors promoted on the deferred list.
