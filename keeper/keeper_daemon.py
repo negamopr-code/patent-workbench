@@ -33,6 +33,12 @@ PB_URL = os.environ.get("PB_URL", "http://host.docker.internal:8099")
 REFRESH_SECS = int(os.environ.get("REFRESH_SECS", "900"))
 ACCOUNTS_FILE = "/home/app/chrome-profiles/accounts.conf"
 NOVNC_HINT = "http://localhost:8106/vnc.html"
+# "bubu:default" — every snapshot of profile 'bubu' is also saved as 'default':
+# same Google account under two profile names (tabs bound to the old name keep
+# working without a separate login).
+PROFILE_ALIASES = dict(kv.split(":", 1)
+                       for kv in os.environ.get("PROFILE_ALIASES", "").split(",")
+                       if ":" in kv)
 
 
 def _graceful_exit(signum, frame):
@@ -115,15 +121,17 @@ def refresh(name, port):
         print(f"[{name}] LOGIN NEEDED (logged-out page: build={build[:40] or '?'}) — "
               f"keeping the last good snapshot; sign in once at {NOVNC_HINT}")
         return False
-    AuthManager(name).save_profile(
-        cookies=cookies,
-        csrf_token=result.get("csrf_token", ""),
-        session_id=result.get("session_id", ""),
-        email=result.get("email", ""),
-        force=True,
-        build_label=result.get("build_label", ""),
-    )
-    print(f"[{name}] refreshed: {len(cookies)} cookies, email={result.get('email')}")
+    for prof in [name] + ([PROFILE_ALIASES[name]] if name in PROFILE_ALIASES else []):
+        AuthManager(prof).save_profile(
+            cookies=cookies,
+            csrf_token=result.get("csrf_token", ""),
+            session_id=result.get("session_id", ""),
+            email=result.get("email", ""),
+            force=True,
+            build_label=result.get("build_label", ""),
+        )
+    print(f"[{name}] refreshed: {len(cookies)} cookies, email={result.get('email')}"
+          + (f" (mirrored to '{PROFILE_ALIASES[name]}')" if name in PROFILE_ALIASES else ""))
     return True
 
 
