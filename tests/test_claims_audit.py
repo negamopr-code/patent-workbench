@@ -3,7 +3,7 @@ quote-verification trust layer and the stage-2b pairs helpers. No NLM bridge,
 no Claude, no network."""
 from patentbench.web.api import (_claims_pairs_round, _claims_pairs_spec,
                                  _claims_parse, _claims_transient_error,
-                                 _quote_norm, _quote_verify)
+                                 _quote_norm, _quote_verify, _translation_suspect)
 
 
 KEY_MAP = {"CN117039286": 1, "CN118156696": 2, "US20220158279": 3, "EP4340163": 4}
@@ -123,6 +123,17 @@ def test_pairs_round_verdicts_replace_claims():
     assert out["2"]["2"][0] == "unverified"
     # roster-scoped: doc 3 was not in this round → untouched
     assert "3" not in out
+
+
+def test_pairs_translation_fallback():
+    # a failed quote on a non-English-origin doc softens to 'claimed' (uncertain),
+    # not 'unverified' — quotes across a translation can't match the stored text
+    parsed = {2: {2: "a quotation that matches nothing in the stored text at all"}}
+    out = _claims_pairs_round(parsed, PAIRS, [1, 2], {1: HAY, 2: HAY}, suspects={2})
+    assert out["2"]["2"][0] == "claimed"      # CN doc: softened
+    assert out["1"]["1"][0] == "unverified"   # non-suspect: still killed
+    assert _translation_suspect("KR102369183") and _translation_suspect("CN117039286")
+    assert not _translation_suspect("US20220158279") and not _translation_suspect("EP4340163")
 
 
 def test_transient_error_classifier():

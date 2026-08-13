@@ -4381,18 +4381,36 @@ def _claims_pairs_spec(must: list, pair_map: dict[int, list[str]], roster: list[
     return "\n".join(lines)
 
 
+# Countries whose applications are originally non-English: the stored text and
+# NLM's quotations may sit on different sides of a translation, so a failed
+# quote match proves nothing (t14: KR102369183, an opus 4.0 champion and the
+# raw-2a #1, verified to ZERO). For these docs a failed verification downgrades
+# to 'claimed' (uncertain — opus adjudicates on full text), not 'unverified'.
+_NON_EN_ORIGIN = {"CN", "KR", "JP", "TW", "DE", "FR", "RU", "ES", "IT", "AT",
+                  "CH", "SE", "FI", "DK", "NO", "NL", "BE", "PL", "BR", "MX",
+                  "AR", "SU", "UA", "CS", "DD"}
+
+
+def _translation_suspect(number: str) -> bool:
+    return (number or "")[:2].upper() in _NON_EN_ORIGIN
+
+
 def _claims_pairs_round(parsed: dict[int, dict[int, str]], pair_map: dict[int, list[str]],
-                        roster: list[int], hay: dict[int, str]) -> dict[str, dict[str, list]]:
+                        roster: list[int], hay: dict[int, str],
+                        suspects: set[int] = frozenset()) -> dict[str, dict[str, list]]:
     """Round result under pairs semantics: every ASKED pair gets a verdict — the
     quote is verified against the doc text; a missing or refused (\":: NO\") answer
-    means the 2a claim did not survive verification → 'unverified'. Documents NLM
+    means the 2a claim did not survive verification → 'unverified' (softened to
+    'claimed' for translation-suspect docs, see _NON_EN_ORIGIN). Documents NLM
     volunteers outside the asked pairs are ignored (the prompt forbids them)."""
     out: dict[str, dict[str, list]] = {}
     for did in roster:
         for k in pair_map.get(did) or ():
             quote = (parsed.get(did) or {}).get(int(k), "")
-            out.setdefault(str(did), {})[k] = [_quote_verify(quote, hay.get(did, "")),
-                                               quote]
+            status = _quote_verify(quote, hay.get(did, ""))
+            if status == "unverified" and did in suspects:
+                status = "claimed"
+            out.setdefault(str(did), {})[k] = [status, quote]
     return out
 
 
@@ -4577,7 +4595,9 @@ def _run_claims_audit(tab_id: int) -> None:
                    if quoted else {})
             rnd = int(st.get("round", 0)) + 1
             if pairs_mode:
-                round_claims = _claims_pairs_round(parsed, pair_map, roster, hay)
+                suspects = {d for d in roster
+                            if _translation_suspect(docs_by_id[d].get("number") or "")}
+                round_claims = _claims_pairs_round(parsed, pair_map, roster, hay, suspects)
             else:
                 round_claims = {}
                 for did, feats in parsed.items():
