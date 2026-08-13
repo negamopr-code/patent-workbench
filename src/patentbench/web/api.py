@@ -4211,6 +4211,26 @@ NLM_CLAIMS_FREE_PROMPT = (
     "\n\n=== FEATURES (most important first) ===\n{benchmark}"
 )
 
+# Stage-2b pairs mode: quote-verify ONLY the doc×feature pairs stage 2a claimed.
+# Each feature block lists the docs to check, so answers are bounded and a bigger
+# quoted batch fits a round. A listed doc that fails verification is DOWNGRADED
+# (claimed → unverified) — this stage exists to kill unverifiable 2a claims.
+NLM_CLAIMS_PAIRS_PROMPT = (
+    "Earlier screening claimed that specific candidate documents disclose specific "
+    "features. VERIFY those claims: for EACH numbered feature below, examine ONLY "
+    "the documents listed after \"check ONLY\", and for each one that really "
+    "discloses the feature back it with ONE EXACT VERBATIM quotation (at most "
+    "~25 words) copied from that document's text. Ignore the 🎯 BENCHMARK source. "
+    "Reply with one block per feature, one line per document, in exactly this form:\n"
+    "FEATURE <k>:\n"
+    "- <publication number> :: \"<verbatim quotation>\"\n"
+    "(if a listed document does NOT disclose the feature, write "
+    "\"- <publication number> :: NO\".)\n"
+    "Only quote text that literally appears in the document; do not invent "
+    "quotations; do not assess documents that are not listed for that feature."
+    "\n\n=== FEATURES TO VERIFY (most important first) ===\n{benchmark}"
+)
+
 _CLAIMS_FEAT_SPLIT = re.compile(r"FEATURE\s*#?\s*(\d+)\s*:", re.I)
 _claims_watchdogs: dict[int, threading.Thread] = {}
 _claims_watchdogs_mu = threading.Lock()
@@ -4285,6 +4305,7 @@ def _claims_status(tab_id: int) -> dict:
             "quota_resume_at": quota.get("resume_at"),
             "feature_kind": (st.get("params") or {}).get("feature_kind", "must"),
             "quotes": (st.get("params") or {}).get("quotes", True),
+            "pairs": (st.get("params") or {}).get("pairs", False),
             "ranking": st.get("ranking") if st.get("step") == "done" else None,
             "applied": st.get("applied", False)}
 
@@ -4343,6 +4364,54 @@ def _claims_parse(answer: str, key_map: dict[str, int], n_must: int
                 if k not in feats or (quote and not feats[k]):
                     feats[k] = quote
     return claims, unmatched
+
+
+def _claims_pairs_spec(must: list, pair_map: dict[int, list[str]], roster: list[int],
+                       docs_by_id: dict[int, dict]) -> str:
+    """Per-round FEATURES block for the 2b prompt: only the features some roster
+    doc claims in stage 2a, each listing ONLY the claiming roster docs' numbers."""
+    lines = []
+    for i, (name, w) in enumerate(must, 1):
+        nums = [docs_by_id[d]["number"] for d in roster
+                if str(i) in (pair_map.get(d) or ()) and docs_by_id.get(d)]
+        if nums:
+            lines.append(f"{i}. {name} (importance {w}/5) — check ONLY: "
+                         + ", ".join(nums))
+    return "\n".join(lines)
+
+
+def _claims_pairs_round(parsed: dict[int, dict[int, str]], pair_map: dict[int, list[str]],
+                        roster: list[int], hay: dict[int, str]) -> dict[str, dict[str, list]]:
+    """Round result under pairs semantics: every ASKED pair gets a verdict — the
+    quote is verified against the doc text; a missing or refused (\":: NO\") answer
+    means the 2a claim did not survive verification → 'unverified'. Documents NLM
+    volunteers outside the asked pairs are ignored (the prompt forbids them)."""
+    out: dict[str, dict[str, list]] = {}
+    for did in roster:
+        for k in pair_map.get(did) or ():
+            quote = (parsed.get(did) or {}).get(int(k), "")
+            out.setdefault(str(did), {})[k] = [_quote_verify(quote, hay.get(did, "")),
+                                               quote]
+    return out
+
+
+def _claims_pairs_seed(tab_id: int) -> tuple[list, dict] | None:
+    """The finished stage-2a run a 2b run verifies: (must, claims) from the newest
+    done non-pairs ADDITIONAL audit state — the live file or its archive. The 2a
+    feature list is reused verbatim so the claim indices keep their meaning."""
+    base = _claims_state_path(tab_id)
+    for path in (base, base + ".additional-free", base + ".additional"):
+        try:
+            with open(path) as f:
+                st = json.load(f)
+        except (OSError, ValueError):
+            continue
+        p = st.get("params") or {}
+        if (p.get("feature_kind") != "additional" or p.get("pairs")
+                or st.get("step") != "done" or not st.get("claims")):
+            continue
+        return st.get("must") or [], st["claims"]
+    return None
 
 
 def _claims_doc_hay(d: dict) -> str:
@@ -4454,6 +4523,9 @@ def _run_claims_audit(tab_id: int) -> None:
         params = st.get("params") or {}
         quoted = params.get("quotes", True)
         kind = params.get("feature_kind", "must")
+        pairs_mode = bool(params.get("pairs"))
+        pair_map = ({int(d): list(ks) for d, ks in (st.get("pairs") or {}).items()}
+                    if pairs_mode else {})
         question = _nlm_question(NLM_CLAIMS_PROMPT if quoted else NLM_CLAIMS_FREE_PROMPT, spec)
         batch = int(params.get("batch_size", 12))
         docs_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
@@ -4468,6 +4540,10 @@ def _run_claims_audit(tab_id: int) -> None:
             if cursor >= len(queue):
                 break
             roster = [i for i in queue[cursor:cursor + batch] if i in docs_by_id]
+            if pairs_mode:      # 2b question is per-round: only this roster's pairs
+                question = _nlm_question(
+                    NLM_CLAIMS_PAIRS_PROMPT,
+                    _claims_pairs_spec(must, pair_map, roster, docs_by_id))
             st = _claims_set(tab_id, roster=roster,
                              status_text=f"round {st.get('round', 0) + 1}: staging…")
             nb, key_map, failed = _claims_stage(tab_id, st, roster, docs_by_id)
@@ -4496,16 +4572,22 @@ def _run_claims_audit(tab_id: int) -> None:
             hay = ({did: _claims_doc_hay(docs_by_id[did]) for did in roster}
                    if quoted else {})
             rnd = int(st.get("round", 0)) + 1
-            round_claims: dict[str, dict[str, list]] = {}
-            for did, feats in parsed.items():
-                for k, quote in feats.items():
-                    status = (_quote_verify(quote, hay.get(did, ""))
-                              if quoted else "claimed")
-                    round_claims.setdefault(str(did), {})[str(k)] = [status, quote]
+            if pairs_mode:
+                round_claims = _claims_pairs_round(parsed, pair_map, roster, hay)
+            else:
+                round_claims = {}
+                for did, feats in parsed.items():
+                    for k, quote in feats.items():
+                        status = (_quote_verify(quote, hay.get(did, ""))
+                                  if quoted else "claimed")
+                        round_claims.setdefault(str(did), {})[str(k)] = [status, quote]
             db.add_nlm_claims_round(tab_id, rnd, roster, res["answer"], round_claims, kind)
             merged = st.get("claims") or {}              # keep the BEST status per feature
             for did, feats in round_claims.items():
                 cur = merged.setdefault(did, {})
+                if pairs_mode:       # 2b: the verification verdict REPLACES 'claimed'
+                    cur.update(feats)
+                    continue
                 for k, sv in feats.items():
                     if (k not in cur
                             or _CLAIM_STATUS_RANK[sv[0]] > _CLAIM_STATUS_RANK[cur[k][0]]):
@@ -4678,7 +4760,23 @@ def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
     bm = db.get_benchmark(tab_id)
     if not bm or bm.get("status") != "ready":
         raise HTTPException(400, "benchmark is not ready — set it first")
-    if body.features == "must":
+    pair_map: dict[str, list[str]] = {}
+    must_list: list = []
+    if body.pairs:               # stage 2b: verify the finished 2a run's claims
+        seed = _claims_pairs_seed(tab_id)
+        if not seed:
+            raise HTTPException(400, "pairs mode verifies a finished quotes-free "
+                                     "ADDITIONAL audit (stage 2a) — none found for "
+                                     "this tab")
+        must_list, seed_claims = seed
+        pair_map = {d: sorted((k for k, sv in fs.items() if sv[0] == "claimed"),
+                              key=int)
+                    for d, fs in seed_claims.items()}
+        pair_map = {d: ks for d, ks in pair_map.items() if ks}
+        if not pair_map:
+            raise HTTPException(400, "the stage-2a run left no 'claimed' doc×feature "
+                                     "pairs to verify")
+    elif body.features == "must":
         feats = sorted(_combi_mandatory(bm), key=lambda f: -(f.get("weight") or 0))
         if not feats:
             raise HTTPException(400, "the benchmark has no MANDATORY (M) features — the "
@@ -4693,7 +4791,9 @@ def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
         if not feats:
             raise HTTPException(400, "the benchmark has no ADDITIONAL (A) features")
     docs = [d for d in db.list_documents(tab_id) if d["status"] == "fetched"]
-    if body.doc_ids:
+    if body.pairs:
+        docs = [d for d in docs if str(d["id"]) in pair_map]
+    elif body.doc_ids:
         want = set(body.doc_ids)
         docs = [d for d in docs if d["id"] in want]
     else:
@@ -4701,30 +4801,42 @@ def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
     if not docs:
         raise HTTPException(400, "no fetched graduates to audit (run the 🔬 mega-screen "
                                  "first, or pass doc_ids)")
-    # A finished audit of ANOTHER feature kind is a result worth keeping — archive its
+    # A finished audit of a DIFFERENT mode is a result worth keeping — archive its
     # state file before this run overwrites it (all rounds also live in nlm_claims).
     prev = _claims_read(tab_id)
-    if prev and (prev.get("params") or {}).get("feature_kind", "must") != body.features:
+    pp = (prev.get("params") or {}) if prev else {}
+    if prev and (pp.get("feature_kind", "must") != body.features
+                 or pp.get("quotes", True) != body.quotes
+                 or pp.get("pairs", False) != body.pairs):
         try:
             shutil.copyfile(_claims_state_path(tab_id),
-                            _claims_state_path(tab_id) + "."
-                            + (prev.get("params") or {}).get("feature_kind", "must"))
+                            _claims_state_path(tab_id) + "." + pp.get("feature_kind", "must")
+                            + ("-pairs" if pp.get("pairs") else
+                               "" if pp.get("quotes", True) else "-free"))
         except OSError:
             pass
+    n_feats = len(must_list if body.pairs else feats)
     _claims_set(tab_id, step="round", queue=[d["id"] for d in docs], cursor=0, round=0,
-                roster=[], claims={}, unmatched=[], failed=[],
-                must=[[f["name"], f.get("weight") or 1] for f in feats],
+                roster=[],
+                claims=(seed_claims if body.pairs else {}), pairs=pair_map,
+                unmatched=[], failed=[],
+                must=(must_list if body.pairs else
+                      [[f["name"], f.get("weight") or 1] for f in feats]),
                 params={"batch_size": body.batch_size, "target": body.target,
                         "apply": body.apply, "feature_kind": body.features,
-                        "quotes": body.quotes},
+                        "quotes": body.quotes, "pairs": body.pairs},
                 started_at=db._now(), quota=None, stop=False, error=None,
                 status_text="queued…")
     rounds = -(-len(docs) // body.batch_size)
+    n_pairs = sum(len(v) for v in pair_map.values())
     db.append_message(tab_id, "s",
         f"🧾 Claims audit STARTED over {len(docs)} doc(s): ~{rounds} round(s) of "
-        f"{body.batch_size}, {len(feats)} {'MANDATORY' if body.features == 'must' else 'ADDITIONAL'} "
+        f"{body.batch_size}, {n_feats} {'MANDATORY' if body.features == 'must' else 'ADDITIONAL'} "
         "feature(s), "
-        + ("every claim must carry a verbatim quotation (verified in code — "
+        + (f"stage 2b: quote-verifying ONLY the {n_pairs} doc×feature pair(s) stage 2a "
+           "claimed — a pair whose quotation fails verification is downgraded. "
+           if body.pairs else
+           "every claim must carry a verbatim quotation (verified in code — "
            "hallucinated quotes score 0). " if body.quotes else
            "quotes-free recall mode (claims counted, verified later for whoever advances). ")
         + (f"{'Shortlist will be REWRITTEN on completion.' if body.apply else 'Dry-run: shortlist untouched.'} "

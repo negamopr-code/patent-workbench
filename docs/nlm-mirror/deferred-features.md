@@ -39,6 +39,24 @@ commit ref) · REJECTED (kept for the record with the reason).
    Claude leg for the user's OWN unpublished invention texts (keep numbers/dates, redact
    names). The NLM leg is Google-side and out of scope.
 
+## From the claims-audit runs (2026-08-12/13) — PROPOSED
+
+9. **Claims-audit auth/network self-heal.** Transient auth/network errors currently
+   park the audit as "interrupted" and wait for a manual resume; deep-compare already
+   parks + auto-resumes this class (f35e49a). Hit 3× in two days: t14 MUST round 7
+   (2026-08-12), t14 stage-2b launch + resume (2026-08-13). Quota pauses already
+   self-heal; extend the same watchdog to auth/network-class errors.
+10. **Keeper logged-out detection.** After the 2026-08-13 host restart the keeper
+    snapshotted a LOGGED-OUT work2 browser every 15 min with cheerful "refreshed"
+    logs — the saved profile's session_id was empty and build_label was a Google
+    LOGIN page's. The keeper must detect that state (empty session_id / non-tailwind
+    build_label / accounts.google.com URL), refuse to overwrite the profile, and
+    raise a loud "needs re-login via noVNC" flag (slot-manager can surface it).
+11. **Deploy gate must BLOCK on active read locks.** The 2026-08-12 deploy killed
+    the sonnet-2.0 pocket read's final ranking-compile message (scores survived in
+    the DB). serve.sh should refuse to recreate the container while
+    .claude_read_*.lock / .nlm_claims_*.lock exist, not merely report them.
+
 ## TARGET ARCHITECTURE (agreed "on paper" 2026-08-12) — the ideal flow
 
 Replaces survivor-as-discovery once validated; survivor screen remains available as a

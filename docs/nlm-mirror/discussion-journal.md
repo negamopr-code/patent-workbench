@@ -295,3 +295,75 @@ features doc as TARGET ARCHITECTURE, with validation gates. Adopted parameters:
 adaptive-ladder graduation bar (not strict all-MUST) + second-chance pass included.
 T14 transient work2 auth error at round 7 (keeper cookie snapshot mid-call) resumed
 manually — auto-retry for network-class errors promoted on the deferred list.
+
+## Session 2026-08-13 — t14 stage 2a result + stage 2b (pairs verification) built & launched
+
+### T14 STAGE 2A COMPLETED (overnight, work2, 8 rounds of 35, quotes-free)
+
+195 of 279 quote-confirmed docs claim ≥1 of the 22 A-features — 756 doc×feature
+pairs total (avg 3.9 per claimant); 84 docs claim ZERO A-features; 21 docs failed
+staging (none of them champions). Combined-ladder analysis vs the 42 opus champions:
+
+- **Recall unchanged at the cut**: MUST-ladder@49 18/42 with or without the A-scores —
+  the 29-doc max-MUST tie group (score 11, crown verified) fits inside the top 49
+  whole, so A-ordering can't change membership there. Spearman vs opus improves only
+  0.258 → 0.279.
+- **Ordering INSIDE the saturated tie group does improve**: sorted by raw A-score, the
+  tie group's top 7 hold 5 champions incl. both 5.0s (CN118475846 A=19, AU2019361447
+  A=17); but the #1 raw-A doc is a non-champion (EP3358704, opus 3.0, A=21) and three
+  tie-group champions claim ZERO A-features (CN113646652, US12313687 — plus EP3166200
+  at A=4). Conclusion: unverified 2a claims are too noisy to rank on directly — the
+  A-stage earns its keep only after verification (exactly why 2b exists), and the
+  zero-claim docs are the second-chance-pass clientele.
+
+### Stage 2b BUILT: pairs-only quote verification (per USER's two-tier refinement)
+
+New `pairs: true` mode on the claims-audit endpoint (valid only with
+features=additional + quotes=true): seeds from the finished 2a state, asks NLM to
+verify ONLY the claimed doc×feature pairs — each feature block lists "check ONLY:
+<numbers>" — so answers are bounded and 20 docs fit a quoted round. Semantics differ
+from all other modes: the verification verdict REPLACES the 2a 'claimed' status, so
+a pair whose quotation fails code-side verification (or that NLM refuses with ":: NO",
+or leaves unanswered) is DOWNGRADED to unverified — 2b exists to kill unverifiable
+claims, not to accumulate them. The 2a state is archived as .additional-free before
+the overwrite (archive logic now keys on kind+quotes+pairs, not kind alone). 334
+tests green (2 new: pairs spec builder, replacement verdicts), deployed.
+
+### Stage 2b LAUNCHED on t14 (work2): 195 docs, 756 pairs, 10 rounds of 20, dry-run
+
+Launch hit an INSTANT work2 auth error ("Authentication expired" on the
+notebook-list call); a resume 2 minutes later failed identically → NOT transient
+this time. Root cause chased to the bottom: the Docker host restarted ~06:47, the
+keeper's fresh Chrome restored its 33 saved cookies, but Google rejected the rotated
+session tokens server-side — the work2 browser is parked on the Google
+account-chooser page. The tell in the saved profile: session_id EMPTY +
+build_label = identityfrontendauthuiserver (a Google LOGIN page, healthy profiles
+show labs-tailwind-frontend) while the keeper kept logging cheerful
+"refreshed: 33 cookies" every 15 min — it happily snapshots a logged-out browser.
+A CDP probe clicked the work2 account tile on the chooser: Google answers with a
+PASSWORD challenge → passive re-auth impossible, credentials are the user's.
+
+Follow-up discovery: the DEFAULT profile is dead too — every store (patent-bench
+volume AND the canonical dev-container profile) answers "Authentication expired";
+the NLM-mirror sync of this very journal failed on all three adds (old sources
+intact — the script lists-then-deletes, and the list already failed; canonical
+copies live in the repo, which is exactly why). So BOTH Google sessions were
+invalidated the same morning — this is a Google-side session wipe (likely tied to
+the host restart timing only coincidentally), not a keeper bug per se.
+
+**⏳ BLOCKED on USER — both accounts need one interactive re-login each:**
+1. work2: keeper noVNC http://localhost:8106/vnc.html — click the account tile,
+   enter the password (chooser is already open on that page).
+2. default: `nlm login` re-auth (or better: add the default account to the keeper
+   via accounts.conf + add-account.sh so BOTH sessions are held from now on —
+   the 08-09 design supports exactly this).
+Then: resume t14 2b (POST claims-audit {resume:true}, parked at round 0/10),
+re-run scripts/sync-nlm-mirror.sh, and t11 resumes itself — but note its quota
+watchdog GIVES UP 24h after the pause (~12:23 UTC today); after that it too needs
+a manual resume.
+
+Two new deferred items from this incident: claims-audit auth/network self-heal
+(parity with deep-compare's f35e49a — this class hit 3× in two days) and keeper
+logged-out detection (refuse to snapshot a profile whose extraction comes from an
+accounts.google.com page / empty session_id, and surface a loud "needs re-login"
+flag instead of "refreshed").

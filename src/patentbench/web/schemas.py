@@ -236,11 +236,18 @@ class ClaimsAuditRequest(BaseModel):
     # layer) or run in the cheap quotes-free recall mode.
     features: Literal["must", "additional"] = "must"
     quotes: bool = True
+    # stage 2b (user's two-tier refinement 2026-08-12): quote-verify ONLY the
+    # doc×feature pairs a finished quotes-free ADDITIONAL run (stage 2a) claimed.
+    # Answers are bounded (~4 pairs/doc), so bigger quoted batches fit a round.
+    pairs: bool = False
 
     @model_validator(mode="after")
     def _claims_defaults(self):
+        if self.pairs and (self.features != "additional" or not self.quotes):
+            raise ValueError("pairs mode is stage 2b: features='additional' with "
+                             "quotes=true (it verifies a finished 2a run's claims)")
         if self.batch_size is None:
-            self.batch_size = 12 if self.quotes else 35
+            self.batch_size = 20 if self.pairs else 12 if self.quotes else 35
         elif self.quotes and self.batch_size > 20:
             raise ValueError("quoted mode: batch_size must be ≤ 20 (answers truncate)")
         return self
