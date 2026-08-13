@@ -400,3 +400,40 @@ autonomous: keeper fast-polls at 60s → snapshots on login → 2b auth-watchdog
 resumes within ~3 min. Default account still needs its keeper adoption (wizard
 :8110, name it `default` if bbubu2748@gmail.com is that account) — then t11 +
 mirror sync heal the same way.
+
+### Late evening — injection DELETED (killed a session twice), aliasing, 2b COMPLETED
+
+The probe-first injection still killed the work2 session family on the next keeper
+restart (injection into a logged-out restarted browser → Google invalidates the
+FAMILY, including the CLI's still-valid copy). Lesson finalized: NEVER inject
+snapshots into the browser — boot is probe-and-report only; the snapshot's sole
+consumer is the CLI (7e922d3). Restart survival addressed at the real root:
+Chromiums now get SIGTERM + flush time on container stop (they were SIGKILLed,
+losing final cookie writes → logged out on every boot). Account `bubu`
+(bbubu2748@gmail.com = the default account) added to keeper + slot-manager
+registry; PROFILE_ALIASES=bubu:default mirrors every bubu snapshot into the
+`default` profile. USER re-logged work2 (3rd time — the first two were killed by
+the keeper deploys, owned and explained); 2b self-resumed via the new auth
+watchdog and COMPLETED 195/195 in 10 rounds. Standing rule adopted: no keeper
+restarts while a session is live.
+
+### T14 STAGE 2B RESULT (completed 2026-08-13 late evening)
+
+756 asked pairs → 161 verified + 359 fuzzy = **68.8% survive; 236 (31.2%)
+KILLED** — nearly a third of the quotes-free 2a claims were unverifiable.
+
+- **Recall vs the 42 opus champions: unchanged** (@25 11, @49 18; @66 19→20;
+  spearman 0.258→0.278). On t14 the A-ladder — even verified — does not recover
+  more champions than the MUST ladder; its value is ORDERING the saturated top.
+- **Tie-group ordering is the win**: the 29-doc max-MUST tie group sorted by
+  verified A-score now opens with 4 champions in the top 5 (CN111049204 4.0,
+  AU1321292 4.0, CN118475846 5.0, AU2019361447 5.0) — the raw-2a impostor
+  EP3358704 (opus 3.0, raw A=21) collapsed to 8 after verification. For choosing
+  the opus deep-read ORDER at the saturated top, the verified ladder works.
+- **⚠ Translation blind spot confirmed**: KR102369183 — raw-2a's #1 (A=32) and
+  an opus 4.0 champion — verified to ZERO (all its quotes unmatchable against
+  the stored text, likely quoting across a translation). US20220209563 (4.0)
+  fell 20→7 the same way. Quote verification punishes non-English corpora;
+  candidate fix for the deferred list: verify against BOTH original and
+  translated text layers, or count a killed pair at half-weight when the doc's
+  stored text is non-English.
