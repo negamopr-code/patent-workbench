@@ -4287,7 +4287,7 @@ def _claims_status(tab_id: int) -> dict:
     if st.get("step") == "done":
         phase = "done"
     elif quota.get("paused"):
-        phase = "quota_paused"
+        phase = "auth_paused" if quota.get("kind") == "auth" else "quota_paused"
     elif st.get("error"):
         phase = "error"
     elif os.path.exists(_claims_pause_path(tab_id)) and not running:
@@ -4297,7 +4297,8 @@ def _claims_status(tab_id: int) -> dict:
     else:
         phase = "interrupted"
     return {"present": True, "phase": phase, "running": phase == "running",
-            "resumable": phase in ("error", "interrupted", "paused", "quota_paused"),
+            "resumable": phase in ("error", "interrupted", "paused", "quota_paused",
+                                   "auth_paused"),
             "round": st.get("round", 0), "audited": st.get("cursor", 0),
             "total": len(st.get("queue") or []),
             "claimants": len(st.get("claims") or {}),
@@ -4563,6 +4564,9 @@ def _run_claims_audit(tab_id: int) -> None:
                     "batch_size may be needed).")
                 return
             if "error" in res:
+                if _claims_transient_error(res["error"]):
+                    _claims_auth_pause(tab_id, res["error"])
+                    return
                 _claims_set(tab_id, error=res["error"][:300], status_text="⚠️ query failed")
                 db.append_message(tab_id, "s",
                     f"🧾 Claims audit round {st.get('round', 0) + 1} query failed: "
@@ -4601,6 +4605,9 @@ def _run_claims_audit(tab_id: int) -> None:
             _claims_heartbeat(tab_id)
         _claims_finalize(tab_id, _claims_set(tab_id, step="finalize"))
     except Exception as exc:                             # keep the state file → resumable
+        if _claims_transient_error(str(exc)):            # staging/auth failures self-heal
+            _claims_auth_pause(tab_id, str(exc))
+            return
         _claims_set(tab_id, error=str(exc)[:300], status_text=f"interrupted: {str(exc)[:120]}")
         db.append_message(tab_id, "s",
                           f"🧾 Claims audit interrupted: {str(exc)[:200]} — resume to continue.")
@@ -4680,6 +4687,34 @@ def _claims_quota_pause(tab_id: int, err: str) -> None:
     _spawn_claims_watchdog(tab_id)
 
 
+# Auth/network-class errors are transient from the audit's point of view: the
+# keeper re-establishes cookies, the network comes back. Park + auto-resume like
+# quota pauses instead of demanding a manual resume (this class hit 3× in two
+# days: keeper cookie snapshots mid-call, a Google session wipe, a peer reset).
+CLAIMS_AUTH_PROBE_EVERY = float(os.environ.get("PB_CLAIMS_AUTH_PROBE", "180"))
+_CLAIMS_TRANSIENT_MARKS = ("authentication expired", "not logged in", "auth",
+                           "login", "peer closed", "connection", "network",
+                           "timed out", "timeout", "temporarily", "unavailable")
+
+
+def _claims_transient_error(err: str) -> bool:
+    low = (err or "").lower()
+    return any(m in low for m in _CLAIMS_TRANSIENT_MARKS)
+
+
+def _claims_auth_pause(tab_id: int, err: str) -> None:
+    _claims_set(tab_id, error=None,
+                quota={"paused": True, "kind": "auth",
+                       "resume_at": time.time() + CLAIMS_AUTH_PROBE_EVERY,
+                       "paused_at": time.time(), "err": (err or "")[:300]},
+                status_text="🔑 NLM auth/network error — parked, auto-resume armed")
+    db.append_message(tab_id, "s",
+        "🔑 Claims audit: transient NLM auth/network error — PARKED, probing every "
+        f"{int(CLAIMS_AUTH_PROBE_EVERY // 60)} min, auto-resumes when the profile is "
+        f"back. ({(err or '')[:160]})")
+    _spawn_claims_watchdog(tab_id)
+
+
 def _spawn_claims_watchdog(tab_id: int) -> None:
     with _claims_watchdogs_mu:
         t = _claims_watchdogs.get(tab_id)
@@ -4696,26 +4731,36 @@ def _claims_watchdog_loop(tab_id: int) -> None:
         quota = (st or {}).get("quota") or {}
         if not st or not quota.get("paused") or st.get("step") == "done":
             return
+        auth = quota.get("kind") == "auth"
+        probe_every = CLAIMS_AUTH_PROBE_EVERY if auth else SCREEN_QUOTA_PROBE_EVERY
         if time.time() - (quota.get("paused_at") or 0) > SCREEN_QUOTA_GIVE_UP:
             _claims_set(tab_id, quota=None,
-                        error="NLM quota still exhausted after 24h of probing",
+                        error=("NLM auth/network still down after 24h of probing"
+                               if auth else "NLM quota still exhausted after 24h of probing"),
                         status_text="⚠️ gave up probing — resume manually")
             return
         wait_s = (quota.get("resume_at") or 0) - time.time()
         if wait_s > 0:
-            time.sleep(min(wait_s, 300))
+            time.sleep(min(wait_s, 300 if not auth else probe_every))
             continue
         if _claims_running(tab_id):
             time.sleep(300)
             continue
-        nb = st.get("notebook_id")
-        probe = (nlm_bridge.query(nb, "Reply with exactly: OK", profile=_tab_profile(tab_id))
-                 if nb else {"error": "no notebook"})
+        if auth:      # free probe — a real API listing, no Q&A quota consumed
+            r = nlm_bridge.list_notebooks(force=True, profile=_tab_profile(tab_id))
+            probe = {"error": r["error"]} if r.get("error") else {"ok": True}
+        else:
+            nb = st.get("notebook_id")
+            probe = (nlm_bridge.query(nb, "Reply with exactly: OK", profile=_tab_profile(tab_id))
+                     if nb else {"error": "no notebook"})
         if nlm_bridge.is_quota_error(probe) or "error" in probe:
-            _claims_set(tab_id, quota={**quota, "resume_at": time.time() + SCREEN_QUOTA_PROBE_EVERY})
+            _claims_set(tab_id, quota={**quota, "resume_at": time.time() + probe_every})
             continue
-        _claims_set(tab_id, quota=None, error=None, status_text="▶️ quota back — resuming…")
-        db.append_message(tab_id, "s", "😴→▶️ Claims audit: quota is back — resuming.")
+        _claims_set(tab_id, quota=None, error=None,
+                    status_text="▶️ auth back — resuming…" if auth
+                                else "▶️ quota back — resuming…")
+        db.append_message(tab_id, "s", "🔑→▶️ Claims audit: auth/network is back — resuming."
+                          if auth else "😴→▶️ Claims audit: quota is back — resuming.")
         _claims_launch(tab_id)
         return
 

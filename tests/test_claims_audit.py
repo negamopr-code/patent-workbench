@@ -2,7 +2,8 @@
 quote-verification trust layer and the stage-2b pairs helpers. No NLM bridge,
 no Claude, no network."""
 from patentbench.web.api import (_claims_pairs_round, _claims_pairs_spec,
-                                 _claims_parse, _quote_norm, _quote_verify)
+                                 _claims_parse, _claims_transient_error,
+                                 _quote_norm, _quote_verify)
 
 
 KEY_MAP = {"CN117039286": 1, "CN118156696": 2, "US20220158279": 3, "EP4340163": 4}
@@ -122,3 +123,15 @@ def test_pairs_round_verdicts_replace_claims():
     assert out["2"]["2"][0] == "unverified"
     # roster-scoped: doc 3 was not in this round → untouched
     assert "3" not in out
+
+
+def test_transient_error_classifier():
+    # the three real-world occurrences (2026-08-12/13) must all classify transient
+    assert _claims_transient_error(
+        "Failed to create notebook: Authentication expired. Run 'nlm login'…")
+    assert _claims_transient_error("peer closed connection without sending reply")
+    assert _claims_transient_error("Not logged in")
+    # quota and hard content errors stay manual paths
+    assert not _claims_transient_error("RESOURCE_EXHAUSTED (error code 8)")
+    assert not _claims_transient_error("round answer truncated twice")
+    assert not _claims_transient_error("")

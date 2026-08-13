@@ -80,6 +80,16 @@ def refresh(name, port):
         print(f"[{name}] LOGIN NEEDED (nlm_osid={has_nlm_osid} central={has_central}) — "
               f"sign in once at {NOVNC_HINT}")
         return False
+    # A logged-out browser still yields a cookie dump that passes the layer checks
+    # (stale-but-present OSID/SAPISID) — the reliable tell is the page itself: only
+    # the real app serves the labs-tailwind frontend. Snapshotting a sign-in page
+    # would overwrite the last-known-good profile with dead state (bit 2026-08-13:
+    # a whole day of cheerful "refreshed" logs while the session was gone).
+    build = result.get("build_label") or ""
+    if "tailwind" not in build:
+        print(f"[{name}] LOGIN NEEDED (logged-out page: build={build[:40] or '?'}) — "
+              f"keeping the last good snapshot; sign in once at {NOVNC_HINT}")
+        return False
     AuthManager(name).save_profile(
         cookies=cookies,
         csrf_token=result.get("csrf_token", ""),
@@ -92,11 +102,42 @@ def refresh(name, port):
     return True
 
 
+def probe_logged_in(name, port):
+    """Ride to the app and see where the browser lands. True only when the page
+    settles on the app itself (not accounts.google.com / a signin interstitial)."""
+    try:
+        page = cdp.find_or_create_notebooklm_page_by_cdp_url(f"http://127.0.0.1:{port}")
+        ws = cdp._normalize_ws_url(page.get("webSocketDebuggerUrl"))
+        cdp.navigate_to_url(ws, "https://notebook.google.com")
+        time.sleep(8)
+        url = cdp.get_current_url(ws) or ""
+        return ("accounts.google" not in url and "signin" not in url
+                and ("notebook.google.com" in url or "notebooklm.google.com" in url))
+    except Exception as e:
+        print(f"[{name}] logged-in probe failed: {type(e).__name__}: {e}")
+        return False
+
+
+def boot_restore(name, port):
+    """Chrome's own disk profile is the source of truth after a restart. If the
+    session survived, injecting the (older) snapshot would DOWNGRADE rotated
+    tokens and make Google invalidate the whole session family — that poisoning
+    killed two live sessions on 2026-08-13 alone. Inject ONLY as a recovery
+    attempt when the browser is actually logged out."""
+    if probe_logged_in(name, port):
+        print(f"[{name}] session survived the restart — snapshot injection skipped")
+        return
+    inject_profile_cookies(name, port)
+    if probe_logged_in(name, port):
+        print(f"[{name}] session recovered from the saved snapshot")
+    else:
+        print(f"[{name}] LOGIN NEEDED after restart — sign in once at {NOVNC_HINT}")
+
+
 def inject_profile_cookies(name, port):
-    """Boot-time restore: push the last-saved cookie set back into the freshly
-    started Chromium. Some central Google cookies are session-scoped in this
-    browser, so a bare container restart would silently drop them and demand a
-    new human login; restoring from the volume makes restarts lossless."""
+    """Recovery-only restore (see boot_restore): push the last-saved cookie set
+    into the freshly started Chromium. Some central Google cookies are
+    session-scoped in this browser, so they don't survive a restart on disk."""
     from pathlib import Path
     f = Path.home() / ".notebooklm-mcp-cli" / "profiles" / name / "cookies.json"
     if not f.exists():
@@ -171,7 +212,7 @@ print(f"keeper daemon up: accounts={[a for a, _ in accounts()]} "
       f"refresh every {REFRESH_SECS}s, patent-bench at {PB_URL}")
 time.sleep(25)  # let the chromiums finish first paint
 for _name, _port in accounts():
-    inject_profile_cookies(_name, _port)
+    boot_restore(_name, _port)
 ever_ok = set()
 while True:
     any_ok = False

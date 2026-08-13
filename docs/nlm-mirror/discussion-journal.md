@@ -367,3 +367,36 @@ Two new deferred items from this incident: claims-audit auth/network self-heal
 logged-out detection (refuse to snapshot a profile whose extraction comes from an
 accounts.google.com page / empty session_id, and surface a loud "needs re-login"
 flag instead of "refreshed").
+
+### Evening 2026-08-13 — auth-resilience stack BUILT (user: "I do not want to do it each time")
+
+USER re-logged work2 (two steps: the rebranded app login, then one more password
+for the old notebooklm.google.com domain — Google refuses to mint the old-domain
+session passively). 2b resumed and completed round 1 (20/195). Then a keeper
+restart (deploying the snapshot gate) KILLED the fresh session — root cause found:
+the keeper's boot restore unconditionally injected the older snapshot cookies over
+Chrome's own rotated ones; Google sees downgraded tokens and invalidates the whole
+session family server-side. That poisoning, not cookie loss, is why sessions never
+survived restarts.
+
+Deferred items 9+10 built, deployed, live-verified (user's explicit go:
+"I do not want to do it each time" / "you should stay logged in even if pc is
+shut down"):
+1. **Claims-audit auth/network self-heal** — transient-class errors (auth expired,
+   not logged in, peer closed, timeout…) now PARK the audit as auth_paused with a
+   FREE list-notebooks probe every 3 min (quota probes stay hourly), auto-resume,
+   24h give-up. Live-verified: 2b parked itself and sits armed.
+2. **Keeper snapshot gate** — refresh refuses to save when the extraction comes
+   from a non-tailwind page (login frontend); logs LOGIN NEEDED (slot manager
+   already surfaces that flag) and keeps the last good snapshot. Live-verified on
+   the first post-restart cycle.
+3. **Keeper probe-first boot restore** — after a restart the daemon first checks
+   whether Chrome's own disk session survived; snapshot injection happens ONLY as
+   recovery when actually logged out (stops the poisoning). Live-verified: probe →
+   inject → still out → loud LOGIN NEEDED, snapshot kept.
+
+State: ONE more work2 login needed (the restart casualty); after it, the chain is
+autonomous: keeper fast-polls at 60s → snapshots on login → 2b auth-watchdog
+resumes within ~3 min. Default account still needs its keeper adoption (wizard
+:8110, name it `default` if bbubu2748@gmail.com is that account) — then t11 +
+mirror sync heal the same way.
