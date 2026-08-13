@@ -21,6 +21,8 @@ stock URL check would misread as "not logged in".
 """
 import json
 import os
+import signal
+import sys
 import time
 import urllib.request
 
@@ -31,6 +33,29 @@ PB_URL = os.environ.get("PB_URL", "http://host.docker.internal:8099")
 REFRESH_SECS = int(os.environ.get("REFRESH_SECS", "900"))
 ACCOUNTS_FILE = "/home/app/chrome-profiles/accounts.conf"
 NOVNC_HINT = "http://localhost:8106/vnc.html"
+
+
+def _graceful_exit(signum, frame):
+    """A SIGKILLed Chromium loses its final cookie-DB flushes, so the next boot
+    starts logged out — the root of the login-after-every-restart pain. On
+    container stop, SIGTERM every Chromium (this daemon is PID 1, they are its
+    children) and give them a moment to flush before exiting."""
+    print("keeper: SIGTERM — shutting Chromiums down cleanly for cookie flush…")
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                comm = f.read().strip()
+            if "chrom" in comm:
+                os.kill(int(pid), signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+    time.sleep(5)
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, _graceful_exit)
 
 _orig = cdp._is_notebooklm_url
 cdp._is_notebooklm_url = lambda url: _orig(url) or "notebook.google.com" in (url or "")
@@ -119,19 +144,18 @@ def probe_logged_in(name, port):
 
 
 def boot_restore(name, port):
-    """Chrome's own disk profile is the source of truth after a restart. If the
-    session survived, injecting the (older) snapshot would DOWNGRADE rotated
-    tokens and make Google invalidate the whole session family — that poisoning
-    killed two live sessions on 2026-08-13 alone. Inject ONLY as a recovery
-    attempt when the browser is actually logged out."""
+    """Chrome's own disk profile is the ONLY source of a browser session after a
+    restart. NEVER inject the saved snapshot into the browser: presenting
+    restored rotating tokens from a restarted browser makes Google invalidate
+    the whole session FAMILY — killing the still-valid CLI profile too (bit
+    2026-08-13 twice: over a live session AND over a logged-out one). The
+    snapshot's only safe consumer is the CLI; a logged-out browser needs a
+    human login, and until then the untouched snapshot keeps serving the CLI."""
     if probe_logged_in(name, port):
-        print(f"[{name}] session survived the restart — snapshot injection skipped")
+        print(f"[{name}] session survived the restart")
         return
-    inject_profile_cookies(name, port)
-    if probe_logged_in(name, port):
-        print(f"[{name}] session recovered from the saved snapshot")
-    else:
-        print(f"[{name}] LOGIN NEEDED after restart — sign in once at {NOVNC_HINT}")
+    print(f"[{name}] LOGIN NEEDED after restart — sign in once at {NOVNC_HINT} "
+          f"(saved profile untouched and still serving the CLI)")
 
 
 def inject_profile_cookies(name, port):

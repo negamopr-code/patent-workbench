@@ -17,6 +17,9 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 docker build -t nlm-keeper "$ROOT/keeper"
+# stop (SIGTERM + grace) BEFORE rm: a straight `rm -f` SIGKILLs the Chromiums,
+# losing their final cookie flushes → every deploy would demand a re-login.
+docker stop -t 15 nlm-keeper 2>/dev/null || true
 docker rm -f nlm-keeper 2>/dev/null || true
 # noVNC is an unauthenticated remote-control surface over a logged-in Google
 # session — bind it to loopback only, never LAN-reachable.
