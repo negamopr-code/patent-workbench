@@ -39,23 +39,28 @@ commit ref) · REJECTED (kept for the record with the reason).
    Claude leg for the user's OWN unpublished invention texts (keep numbers/dates, redact
    names). The NLM leg is Google-side and out of scope.
 
-## From the claims-audit runs (2026-08-12/13) — PROPOSED
+## From the claims-audit runs (2026-08-12/13)
 
-9. **Claims-audit auth/network self-heal.** Transient auth/network errors currently
-   park the audit as "interrupted" and wait for a manual resume; deep-compare already
-   parks + auto-resumes this class (f35e49a). Hit 3× in two days: t14 MUST round 7
-   (2026-08-12), t14 stage-2b launch + resume (2026-08-13). Quota pauses already
-   self-heal; extend the same watchdog to auth/network-class errors.
-10. **Keeper logged-out detection.** After the 2026-08-13 host restart the keeper
-    snapshotted a LOGGED-OUT work2 browser every 15 min with cheerful "refreshed"
-    logs — the saved profile's session_id was empty and build_label was a Google
-    LOGIN page's. The keeper must detect that state (empty session_id / non-tailwind
-    build_label / accounts.google.com URL), refuse to overwrite the profile, and
-    raise a loud "needs re-login via noVNC" flag (slot-manager can surface it).
-11. **Deploy gate must BLOCK on active read locks.** The 2026-08-12 deploy killed
-    the sonnet-2.0 pocket read's final ranking-compile message (scores survived in
-    the DB). serve.sh should refuse to recreate the container while
+9. **Claims-audit auth/network self-heal.** ✅ DONE 2026-08-13 (164e030): transient
+   errors park as auth_paused, FREE list-notebooks probe every 3 min (quota probes
+   hourly), 24h give-up, boot re-arm. Live-verified twice on launch day.
+10. **Keeper logged-out detection.** ✅ DONE 2026-08-13 (96313ac + 7e922d3), extended
+    beyond the proposal after live failures: (a) snapshot gate — refresh refuses to
+    save unless the page's build label is the real app frontend (labs-tailwind);
+    (b) boot injection DELETED — injecting saved cookies into a restarted browser
+    made Google invalidate the whole session family, killing the CLI profile too
+    (bit twice); (c) graceful Chromium SIGTERM on container stop so sessions survive
+    restarts; (d) PROFILE_ALIASES (bubu:default) — one account serving two profile
+    names from one login. Standing rule: no keeper restarts while a session is live.
+11. **Deploy gate must BLOCK on active read locks.** PROPOSED. The 2026-08-12 deploy
+    killed the sonnet-2.0 pocket read's final ranking-compile message (scores
+    survived in the DB). serve.sh should refuse to recreate the container while
     .claude_read_*.lock / .nlm_claims_*.lock exist, not merely report them.
+12. **Dual-layer quote verification for translated docs.** Partially addressed
+    2026-08-13 (a4c4658): failed quotes on non-English-origin docs soften to
+    'claimed' instead of being killed. The fuller idea — verifying against BOTH the
+    original-language and translated text layers — stays PROPOSED (needs storing the
+    original text, which the fetcher currently doesn't).
 
 ## TARGET ARCHITECTURE (agreed "on paper" 2026-08-12) — the ideal flow
 

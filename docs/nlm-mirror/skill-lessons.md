@@ -62,3 +62,26 @@ into the NotebookLM notebook "patent benchmark match project".
 - **NLM ranks by overall similarity, not MUST coverage (t11 H1)**: of 21 crown-feature
   YES-holders, NLM shortlisted 6. If MUST coverage is what matters, the cut must be
   MUST-aware (deferred feature #2).
+- **Quotes-free recall claims are ~1/3 noise (t14 2b, 2026-08-13)**: of 756 stage-2a
+  claims, 31.2% died under quote verification. Never rank directly on unverified
+  claims; the two-tier 2a→2b design is load-bearing, not polish.
+- **Quote verification has a translation blind spot**: a KR champion (opus 4.0, raw-2a
+  #1) verified to ZERO — NLM quotes across a translation can't match the stored text.
+  Fallback shipped (a4c4658): failed quotes on non-English-origin docs soften to
+  'claimed' (uncertain), opus adjudicates on full text.
+- **NEVER inject saved cookies into a restarted browser** (2026-08-13, killed two live
+  sessions): Google sees downgraded/rotated-back tokens and invalidates the whole
+  session FAMILY — including the CLI's still-valid copy. The snapshot's only safe
+  consumer is the CLI. Boot = probe-and-report; a logged-out browser waits for a human.
+- **A session-keeper must refuse to snapshot a logged-out browser**: the reliable tell
+  is the page's build label (only the real app serves labs-tailwind; login pages serve
+  identityfrontend). File freshness and cookie counts LIE — a dead session snapshots
+  "successfully" every 15 min while everything is broken.
+- **Chromium needs a clean SIGTERM on container stop** — `docker rm -f` SIGKILLs it and
+  loses the final cookie flush, which is why sessions never survived restarts. serve.sh
+  stops with grace first; the daemon TERMs its Chromiums and waits before exiting.
+- **Auth/network errors are transient for a resume-safe job**: the claims audit now
+  parks (auth_paused) and probes with a FREE list call every 3 min instead of demanding
+  a manual resume. Proved live twice on launch day.
+- **No keeper restarts while a session is live** (standing rule, user-confirmed): deploys
+  wait for a logged-out window or explicit approval.

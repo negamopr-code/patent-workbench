@@ -437,3 +437,39 @@ KILLED** — nearly a third of the quotes-free 2a claims were unverifiable.
   candidate fix for the deferred list: verify against BOTH original and
   translated text layers, or count a killed pair at half-weight when the doc's
   stored text is non-English.
+
+### USER: "of course, do all of this" — t14 completion program approved
+
+All four open t14 items approved: (1) apply the combined verified ladder to the
+tab's shortlist; (2) second-chance pass for the 84 zero-A-claim docs; (3)
+translation-fallback fix; (4) full-corpus MUST sweep over the ~1000 non-graduates.
+Executed same evening: translation fallback BUILT (a4c4658, 336 tests: failed
+quotes on non-English-origin docs soften to 'claimed'); second-chance pass
+LAUNCHED (84 docs, 3 rounds, work2). USER then logged into bubu — keeper
+snapshotted (61 cookies) and mirrored to `default`; BOTH profiles live (94
+notebooks = the default account, identity confirmed). t11 MUST audit RESUMED
+(252→288/349) and the journal mirror re-synced successfully.
+
+### SESSION CLOSE 2026-08-13 (late night) — pause-all per USER; shutdown test next
+
+USER: "pause properly all processes, we will continue in the next session and we
+will check if your logins survived the pc shutdown at the same time."
+
+Paused via /claims-audit/pause (graceful, resume-safe at round boundary):
+- t14 second-chance pass: paused mid-run (~35+/84 audited; rounds persisted in
+  nlm_claims; resume continues, nothing lost).
+- t11 MUST audit: paused (~288+/349).
+
+NEXT SESSION checklist:
+1. **Shutdown-survival test** (the point of the exercise): after the PC restart,
+   check `docker logs nlm-keeper` for "[work2/bubu] session survived the restart"
+   vs "LOGIN NEEDED after restart". Survival = the graceful-SIGTERM fix works;
+   LOGIN NEEDED = investigate whether Docker Desktop's shutdown gave the container
+   its grace period (the saved profiles stay valid either way — the CLI keeps
+   working and paused audits resume regardless of the browser state).
+2. Resume both audits: POST /api/tabs/{14,11}/claims-audit {"resume":true}.
+3. When t14's second-chance completes → 2b-2 pairs verification of its claimants
+   → apply the combined verified ladder to the shortlist (script ready) → launch
+   the full-corpus MUST sweep (~1000 non-graduates, ~30 rounds).
+4. When t11's MUST audit completes → its recall@49 vs the 66 champions = the
+   final funnel-validation number; then the free NLM sweep of t11's 1605 rejects.
