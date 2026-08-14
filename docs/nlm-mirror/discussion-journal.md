@@ -560,3 +560,28 @@ Chain advanced same morning (all pre-approved gates):
   batch 35, ~44 rounds, work2) — parallel to t11's 1605-reject sweep (default).
   Both are the last validation gates: how many champions did the mega-screen
   reject outright?
+
+### 2026-08-14 (evening) — t14 reject sweep DONE; t11 sweep quota-paused at 1400/1605
+
+**t14 full-corpus MUST sweep (1509 rejects, 44 rounds) finished.** Raw result:
+1289/1509 rejects (85%) claim >=1 MUST feature; **264 claim the full weight
+(11/11)**; 342 claim the crown; **341 claim >= the applied top-49's floor (>=8)**.
+Graduates' verified ladder for scale: max 11, median 5, top-49 floor 8.
+Interpretation is deliberately conservative: these are UNVERIFIED quotes-free
+claims from the instrument whose claims died 31-34% under quote verification and
+which claims *something* for nearly every doc it reads (cf. second-chance 80/84).
+The sweep therefore does NOT establish hundreds of missed champions — it
+establishes that quotes-free claiming saturates on this corpus and CANNOT rank
+rejects by itself. Proposed next gate (awaiting user): quoted MUST verification
+of the 341 above-floor rejects (~28 rounds, batch 12, free, dry-run) to get a
+survivor count comparable with the graduates' verified ladder.
+
+**Ops pattern of the day:** ~7 transient auth_paused blips during the sweeps
+(t11 x6, t14 x1), every one self-healed within minutes once the keeper's next
+refresh re-mirrored fresh cookies. Root shape: CLI snapshot staleness between
+15-min keeper refreshes vs Google's server-side rotation under heavy API load.
+Data point for deferred #13: shortening REFRESH_SECS (900 → ~300) would shrink
+the blip window; the self-heal already absorbs the rest.
+
+t11 sweep: quota_paused at 1400/1605 (~6 rounds left) — the default account's
+daily NLM quota ran out; hourly probes will resume it when quota returns.
