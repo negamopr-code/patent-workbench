@@ -473,3 +473,45 @@ NEXT SESSION checklist:
    the full-corpus MUST sweep (~1000 non-graduates, ~30 rounds).
 4. When t11's MUST audit completes → its recall@49 vs the 66 champions = the
    final funnel-validation number; then the free NLM sweep of t11's 1605 rejects.
+
+### 2026-08-14 — shutdown-survival test: FAILED; the CLI-stays-valid assumption was wrong
+
+Host restarted overnight (containers back up 06:14 UTC). Result of the test the
+session was paused for:
+
+- **The graceful-SIGTERM handler never ran.** No "keeper: SIGTERM — shutting
+  Chromiums down cleanly" line anywhere before the restart boundary (last log
+  21:36:56, clean boot 06:14:34). Docker Desktop / WSL2 hard-killed the container
+  at Windows shutdown — the fix's code path is untested by this event, because it
+  was never invoked.
+- **Both browser sessions dead** at boot: work2 and bubu probe LOGIN NEEDED
+  (nlm_osid=True central=False). Boot-restore correctly left snapshots untouched.
+- **Both CLI snapshots dead too** — this is the surprise. Yesterday's assumption
+  ("the saved profiles stay valid either way — the CLI keeps working") is
+  FALSIFIED: resuming both audits auth-paused within one round, quota.err =
+  "Failed to create notebook: Authentication expired" on both tabs. The freshest
+  snapshots (21:36, minutes before shutdown) were rejected server-side.
+
+Root-cause model (updated): the browser's on-disk profile lags the live cookie
+rotation (SIGKILL loses final flushes; some central cookies are session-scoped and
+never reach disk at all). At next boot the keeper's Chromium navigates to Google
+presenting that stale generation → Google invalidates the whole session FAMILY —
+including the still-fresh CLI snapshot. Same family-kill mechanism as the deleted
+injection path, but triggered by Chrome's own stale disk state. Consequence: ANY
+hard host stop kills both consumers, graceful-SIGTERM only helps when Docker
+actually delivers SIGTERM (it didn't).
+
+State now: both audits auth_paused with self-heal probing every 3 min for 24h
+(gives up ~06:21 UTC 08-15). One user login per account at
+http://localhost:8106/vnc.html auto-resumes everything.
+
+Candidate fixes (deferred — user to pick; none built):
+a) Windows-side graceful stop: a shutdown task running `docker stop nlm-keeper`
+   before WSL dies (timing at Windows shutdown is unreliable, needs testing).
+b) Chromium prefs `restore_on_startup` ("continue where you left off") so
+   session-scoped cookies persist to disk — may make graceful stops survivable;
+   does nothing for hard kills mid-rotation.
+c) Boot-quarantine: at boot do NOT let Chromium touch google.com until the CLI
+   snapshot has been probed; if CLI is alive, keep the browser off Google to avoid
+   the family kill (browser then needs a human login before it can serve again).
+d) Accept the cost: one noVNC login per account after each host restart.

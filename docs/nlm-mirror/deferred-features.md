@@ -61,6 +61,15 @@ commit ref) · REJECTED (kept for the record with the reason).
     'claimed' instead of being killed. The fuller idea — verifying against BOTH the
     original-language and translated text layers — stays PROPOSED (needs storing the
     original text, which the fetcher currently doesn't).
+13. **Host-restart session survival.** PROPOSED 2026-08-14 after the shutdown test
+    FAILED: Docker Desktop/WSL2 hard-kills the keeper at Windows shutdown (SIGTERM
+    handler never ran), the stale-cookied Chromium at next boot triggers a Google
+    session-FAMILY kill that takes the fresh CLI snapshots down too. Options (user
+    to pick): a) Windows shutdown task `docker stop nlm-keeper`; b) Chromium
+    `restore_on_startup` pref so session cookies persist to disk; c) boot-quarantine
+    — browser stays off google.com until the CLI snapshot is probed alive; d) accept
+    one noVNC login per account per host restart. Details: discussion-journal
+    2026-08-14 entry.
 
 ## TARGET ARCHITECTURE (agreed "on paper" 2026-08-12) — the ideal flow
 
