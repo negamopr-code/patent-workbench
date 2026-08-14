@@ -541,3 +541,22 @@ Chain advanced same morning (all pre-approved gates):
 - **Free MUST sweep of t11's 1605 rejects launched** (quotes-free, batch 35, ~46
   rounds, default acct) — the last validation gate: do the mega-screen's rejects
   hide champions?
+
+### 2026-08-14 — t14 chain COMPLETE through apply: shortlist REWRITTEN; both reject-sweeps running
+
+- **2b-2 pairs verification DONE** (80 docs, 368 second-chance claims, 4 rounds):
+  108 verified + 135 fuzzy = **66.0% ok**, 59 killed, 66 kept as unverified claims
+  (staging failures). Second-chance claims verify at a higher rate than the 2a set
+  (66% vs 68.8% — comparable), so the "nobody looked" holes were real signal.
+- **Combined verified ladder APPLIED to t14's shortlist** (user go 2026-08-13,
+  /data/.t14_apply_ladder.py --apply): verified MUST → crown → verified A (with
+  translation softening), pairs-replace merge of ALL additional rounds. **New top-49
+  holds 18/42 champions vs the OLD similarity shortlist's 10/42** — near-doubled
+  recall at the same cut; overlap with the old shortlist only 11 docs. Top-10
+  includes both 5.0s (CN118475846 #3, AU2019361447 #8). Old shortlist state
+  recoverable from DB history; archives backed up (.additional-pairs.2b1-orig,
+  .2b2-done-backup, .must-done-backup).
+- **Full-corpus MUST sweep launched on t14's 1509 fetched rejects** (quotes-free,
+  batch 35, ~44 rounds, work2) — parallel to t11's 1605-reject sweep (default).
+  Both are the last validation gates: how many champions did the mega-screen
+  reject outright?
