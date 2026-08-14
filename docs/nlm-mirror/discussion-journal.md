@@ -585,3 +585,25 @@ the blip window; the self-heal already absorbs the rest.
 
 t11 sweep: quota_paused at 1400/1605 (~6 rounds left) — the default account's
 daily NLM quota ran out; hourly probes will resume it when quota returns.
+
+### SESSION CLOSE 2026-08-14 (evening) — pause-all per USER
+
+Both runs paused gracefully (pause flag set; the auth watchdog may relaunch after
+a blip clears but the runner parks on the flag immediately — verified in code):
+- **t14 quoted MUST verify of 341 above-floor rejects: paused at 276/341**
+  (round 23, 271 claimants so far). One hard 400-error mid-run (round 20) was
+  resumed manually — remember: phase=error does NOT auto-resume, auth/quota do.
+- **t11 reject sweep: paused at 1540/1605** (round 44, 885 claimants — vs t14's
+  85% claim-rate, t11's rejects claim at ~57% so far).
+
+NEXT SESSION:
+1. Resume both: POST /api/tabs/{14,11}/claims-audit {"resume":true}. If the PC
+   was restarted: FIRST re-login BOTH accounts at http://localhost:8106/vnc.html
+   (bubu's window sits UNDER work2's on the noVNC desktop), then audits self-heal.
+2. t14 verify done → survivor count (verified/fuzzy MUST >= 8) = mega-screen FN
+   verdict; survivors = new-graduate candidates → discuss promotions + opus reads.
+3. t11 sweep done → same reject analysis as t14 (claimed-MUST dist vs graduates'
+   ladder) → likely same quoted-verify follow-up (user gave the principle: without
+   verification a sweep is not truly finished).
+4. Then: the funnel-fix decisions (t11's 4 proposals + deferred #13 restart
+   survival) with all validation numbers on the table.
