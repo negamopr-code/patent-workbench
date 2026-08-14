@@ -515,3 +515,29 @@ c) Boot-quarantine: at boot do NOT let Chromium touch google.com until the CLI
    snapshot has been probed; if CLI is alive, keep the browser off Google to avoid
    the family kill (browser then needs a human login before it can serve again).
 d) Accept the cost: one noVNC login per account after each host restart.
+
+### 2026-08-14 — t11 MUST audit DONE (349/349): the final funnel-validation number
+
+Recall of the 66 opus champions (>=4.0) among the 344 audited+opus-scored docs:
+- OLD similarity shortlist@49: **18/66**
+- verified-MUST claims ladder@49: **20/66** · @66: 26 · @80: 30 · @100: 34
+- quote verification: 887 claims, 601 verified + 179 fuzzy = **87.9% ok**
+- spearman(claims score, opus score) = **0.308**
+
+Reading: the verified-MUST ladder beats the similarity shortlist only marginally at
+the same cut (20 vs 18), and even a 2x-wider cut holds barely half the champions.
+Its TOP is excellent — top 8 are all crown-MUST holders, 7 of 8 opus>=4.0, the solo
+7/7-MUST full-coverer CN117039286 #1 — same shape as t14 2b: verified claims order
+the head of the ladder well, but mid-ladder discrimination vs opus is weak (0.308).
+MUST-coverage recall is not a sufficient recall gate on its own; it is a good
+head-ordering tool. (Numbers: /data/.claims_compare.py 11; state archived
+.nlm_claims_11.json.must + .must-done-backup.)
+
+Chain advanced same morning (all pre-approved gates):
+- t14 second-chance DONE 84/84: **80/84 zero-claim docs now claim** >=1 A-feature
+  (368 pairs) — near-universal claiming, i.e. 2a "nobody looked" holes were real but
+  unverified claims stay noisy → **2b-2 pairs verification launched** (80 docs, 368
+  pairs, 4 rounds, work2; original 2a archive backed up .additional-free.2a-orig).
+- **Free MUST sweep of t11's 1605 rejects launched** (quotes-free, batch 35, ~46
+  rounds, default acct) — the last validation gate: do the mega-screen's rejects
+  hide champions?
