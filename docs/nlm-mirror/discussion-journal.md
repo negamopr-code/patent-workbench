@@ -935,3 +935,21 @@ t14 is closed. Open: t12 (work3 login + reword 2 numeral-less MUSTs + user go).
   3/16 weight — low pseudo-survivor exposure; reword offer stands). Will
   quota-park and self-resume; on done the pipeline posts the histogram +
   three-tier next step.
+
+### 2026-08-15 — both combination modes shipped as one-click buttons; t14 anchored verdict
+
+USER's two-mode doctrine implemented end to end (f691d16, deployed):
+- **Option 1 — ⚓ anchored**: among 100%-MUST coverers, rank is decided by each
+  one's BEST combination (partner shares the MUST core, maximises weighted
+  ADDITIONAL union) — the strongest achievable pair promotes its anchor, not
+  the solo score. Panel block "Full-MUST coverers ranked by their BEST
+  combination" + ⚓🏆 chat-grade button (A pinned to the shortlist's #1).
+- **Option 2 — 🏆 global**: unchanged — two individually low-ranked docs whose
+  union first completes the benchmark.
+
+t14 live result: anchored chat verdict **EP4152472 (A) + CN103457003 (B)** —
+5/5 MUST, combinable (CC-stage SOC/voltage-curve monitoring + inflection-point
+degradation detection / CV limit reduction), both full-read + pinned.
+Mechanical ranking: the two 6.0s are EACH OTHER's best partners (union 59/72
+additional); CN103457003 #1 by solo tie-break (53.5 vs 33.0). EP4152472's
+solo-vs-combo gap (33 → 59) is exactly what the old view hid.
