@@ -764,3 +764,14 @@ Two doctrine consequences:
 
 OPEN (user): promote AU2022460007 into t11's shortlist (currently rejected /
 unlisted)? Also still open: the 163 t14 survivors (options a–d) + work3 login.
+
+### 2026-08-15 — USER decisions executed: option (a) + promotion
+
+1. **AU2022460007 promoted into t11's shortlist** at rank 50 (appended — nobody
+   displaced; its opus 5.0 is the credential) + screen state → graduate, so combi
+   and future audits see it. Shortlist now 50.
+2. **t14 option (a) launched**: stage 2a quotes-free ADDITIONAL audit (22
+   A-features) over the 163 quote-verified survivors — 5 rounds on work2;
+   on completion 2b pairs-verify launches automatically. Prior archives
+   protected first: .reject-verify-done-backup, .must-graduates-orig,
+   .additional-free.graduates-orig.
