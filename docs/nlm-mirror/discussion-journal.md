@@ -775,3 +775,17 @@ unlisted)? Also still open: the 163 t14 survivors (options a–d) + work3 login.
    on completion 2b pairs-verify launches automatically. Prior archives
    protected first: .reject-verify-done-backup, .must-graduates-orig,
    .additional-free.graduates-orig.
+
+### 2026-08-15 — t11 middle band verified: EMPTY. t11 graduate-recall fully closed
+
+Quoted verify of the 8 middle-band rejects (claimed 3–9): only CN115275463
+verified anything at all — weight 2 (noise); the other 7 verified zero. So the
+t11 sweep's bimodal shape was real: above the noise there was exactly ONE
+missed doc of consequence (AU2022460007, opus 5.0, promoted). **t11 final
+accounting over 1954 screened docs: 1 graduate missed by the old pipeline,
+recovered; nothing else above noise. Chapter closed.**
+
+Pipeline-improvement discussion recorded with user (proposals 2+3 superseded by
+the claims ladder; #4 validated by AU2022460007; open builds: A specificity
+gate · #1 persist round answers · B/C/D codify full-corpus sweep + three-tier
+evidence + middle-band verify as defaults; build order after t12 reports).
