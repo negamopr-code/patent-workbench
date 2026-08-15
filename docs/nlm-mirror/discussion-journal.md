@@ -639,3 +639,38 @@ STILL WAITING ON USER: one login per account (work2 + bubu, bubu's window UNDER
 work2's) at http://localhost:8106/vnc.html → both audits self-heal, no API call
 needed. Monitor armed (2-min polls, confirmed-twice logic after a false positive
 on an empty poll). Mirror sync of this entry PENDING auth.
+
+### 2026-08-15 — USER rejected the login groundhog day → deferred #13 BUILT (b+c)
+
+User («again log in???? we solved it thousands times») rejected option d. Honest
+accounting: the keeper + self-heal DID solve the in-flight blips; the one case
+never solved was the host restart, parked as deferred #13. Built now, options
+b+c combined (commit pending deploy):
+
+- **Root mechanism confirmed in code**: keeper/entrypoint.sh launched every boot
+  Chromium straight at https://notebooklm.google.com — presenting stale on-disk
+  cookies to Google BEFORE the daemon even started. That navigation IS the
+  family kill. No daemon logic could have saved it.
+- **Boot-quarantine (c)**: browsers now boot on about:blank with
+  --host-resolver-rules="MAP *.google.com 127.0.0.1" + a .quarantine marker.
+  The daemon probes `nlm notebook list` (free, no browser) per account: CLI
+  alive → parked, audits run with ZERO logins; CLI dead (auth error or 3
+  straight failures) → lift = relaunch unblocked → auto-recovery or LOGIN
+  NEEDED. `.wake` file lifts on demand, wiping the browser's Google cookies
+  first (stale rotating cookies next to a live CLI = family kill).
+- **Session-cookie persistence (b)**: restore_on_startup=1 + exit_type=Normal
+  written into Preferences at boot, so a gracefully-stopped browser has a real
+  chance of still being logged in at lift time.
+- REFRESH_SECS default 900→300 (blip-window data point from 08-14).
+- Open question the design self-balances: if Google's ~40-45-min no-rotation
+  kill (Dockerfile WHY, 2026-08-08/09) applies to CLI-alone sessions, the
+  keeper lifts on CLI death and converges back to a rotating browser; if not
+  (nlm-quota log shows other projects' profiles living 80+ days browser-less),
+  quarantine holds and restarts stay login-free. Either way ≥ status quo.
+- **DEPLOY DELIBERATELY DEFERRED to the next idle window** (both runs finished):
+  work2 logged in mid-build and t14 is resuming — redeploying the keeper now
+  would restart a live session mid-run (the 08-13 ⛔ rule). Image test-built OK.
+
+Morning ops meanwhile: work2 login landed → t14 auth_paused → quota_paused
+(daily quota from yesterday; hourly probes resume it, reset ~07:00 UTC).
+t11 waits for the bubu login (default = alias of bubu).

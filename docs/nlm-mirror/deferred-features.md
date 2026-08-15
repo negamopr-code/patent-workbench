@@ -70,6 +70,16 @@ commit ref) · REJECTED (kept for the record with the reason).
     — browser stays off google.com until the CLI snapshot is probed alive; d) accept
     one noVNC login per account per host restart. Details: discussion-journal
     2026-08-14 entry.
+    **BUILT 2026-08-15 (options b + c combined)** after the user rejected d
+    («again log in????»): entrypoint boots every Chromium blocked from
+    *.google.com (resolver rule, about:blank, .quarantine marker) + persists
+    session cookies (`restore_on_startup=1`, exit_type Normal); daemon probes the
+    CLI profile (`nlm notebook list`, free) instead of driving the browser, and
+    only wakes it (relaunch unblocked) when the CLI is dead or a `.wake` file
+    asks (wake wipes the browser's Google cookies first — stale rotating cookies
+    next to a live CLI = family kill). REFRESH_SECS default 900→300.
+    ⏳ DEPLOY PENDING: rebuild via keeper/serve.sh at the next idle window (runs
+    finished / sessions already dead) — NOT while a live session carries a run.
 
 ## TARGET ARCHITECTURE (agreed "on paper" 2026-08-12) — the ideal flow
 

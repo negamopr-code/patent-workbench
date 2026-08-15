@@ -15,6 +15,17 @@ Not logged in yet (fresh account, or Google forced a re-login) is not an
 error: the daemon logs a LOGIN NEEDED line pointing at the noVNC URL and
 retries next cycle.
 
+BOOT-QUARANTINE (deferred #13, shutdown test 2026-08-14): at boot the
+entrypoint launches every Chromium blocked from *.google.com with a
+<name>.quarantine marker. While the marker exists the daemon does NOT drive
+the browser at all — it probes the saved CLI profile (`nlm notebook list`,
+free) instead. CLI alive → nothing to do, audits run login-free. CLI dead
+(auth-class error, or 3 straight probe failures) → lift_quarantine: relaunch
+the browser unblocked so it can auto-recover from gracefully-flushed cookies
+or serve a human login. A <name>.wake file lifts quarantine on demand — with
+the browser's Google cookies WIPED first, because presenting stale rotating
+cookies next to a LIVE CLI session kills the whole session family.
+
 The notebook.google.com rebrand widening mirrors scripts/nlm-login-via-cdp.py
 (f8e9a66): Google redirects some accounts off notebooklm.google.com, which the
 stock URL check would misread as "not logged in".
@@ -22,6 +33,7 @@ stock URL check would misread as "not logged in".
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 import urllib.request
@@ -31,8 +43,10 @@ from notebooklm_tools.core.auth import AuthManager
 
 PB_URL = os.environ.get("PB_URL", "http://host.docker.internal:8099")
 REFRESH_SECS = int(os.environ.get("REFRESH_SECS", "900"))
-ACCOUNTS_FILE = "/home/app/chrome-profiles/accounts.conf"
+PROFILES_DIR = "/home/app/chrome-profiles"
+ACCOUNTS_FILE = PROFILES_DIR + "/accounts.conf"
 NOVNC_HINT = "http://localhost:8106/vnc.html"
+NLM_BIN = "/opt/venv/bin/nlm"
 # "bubu:default" — every snapshot of profile 'bubu' is also saved as 'default':
 # same Google account under two profile names (tabs bound to the old name keep
 # working without a separate login).
@@ -198,6 +212,96 @@ def inject_profile_cookies(name, port):
         print(f"[{name}] cookie restore failed: {type(e).__name__}: {e}")
 
 
+def _quar_path(name):
+    return f"{PROFILES_DIR}/{name}.quarantine"
+
+
+def _wake_path(name):
+    return f"{PROFILES_DIR}/{name}.wake"
+
+
+def cli_probe(name):
+    """(ok, err): a real notebook listing against the SAVED CLI profile — no
+    browser involved, no Q&A quota consumed. This is the quarantine health
+    check: while it passes, patent-bench keeps working and no login is needed."""
+    cmd = [NLM_BIN, "notebook", "list"]
+    # mirror patent-bench's _with_profile: 'default' means no --profile flag
+    if name != "default":
+        cmd += ["--profile", name]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except OSError as e:
+        return False, f"{type(e).__name__}: {e}"
+    if p.returncode == 0:
+        return True, ""
+    return False, ((p.stderr or p.stdout) or "").strip()[:200]
+
+
+def _chromium_pid(port):
+    """Main Chromium process for this account (owns the CDP port; renderers
+    carry --type= and are torn down with it)."""
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmd = f.read().decode(errors="replace")
+        except OSError:
+            continue
+        if f"--remote-debugging-port={port}" in cmd and "--type=" not in cmd \
+                and "chrom" in cmd:
+            return int(pid)
+    return None
+
+
+def lift_quarantine(name, port, wipe_google_cookies=False):
+    """Wake a quarantined browser: relaunch it WITHOUT the Google block so it can
+    serve a human login (or, after a graceful stop with fresh on-disk cookies,
+    auto-recover). wipe_google_cookies=True is for waking while the CLI session
+    is still ALIVE (.wake): presenting stale rotating cookies to Google would
+    kill the live session family, so the browser must arrive empty-handed."""
+    pid = _chromium_pid(port)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        for _ in range(24):
+            if _chromium_pid(port) is None:
+                break
+            time.sleep(0.5)
+    prof = f"{PROFILES_DIR}/{name}"
+    if wipe_google_cookies:
+        for rel in ("Default/Cookies", "Default/Cookies-journal",
+                    "Default/Network/Cookies", "Default/Network/Cookies-journal"):
+            try:
+                os.unlink(os.path.join(prof, rel))
+            except OSError:
+                pass
+    for lockf in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try:
+            os.unlink(os.path.join(prof, lockf))
+        except OSError:
+            pass
+    subprocess.Popen(
+        ["chromium", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+         f"--user-data-dir={prof}", f"--remote-debugging-port={port}",
+         "--no-first-run", "--no-default-browser-check", "--start-maximized",
+         "https://notebooklm.google.com"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for f in (_quar_path(name), _wake_path(name)):
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
+    print(f"[{name}] browser WOKEN (Google unblocked"
+          + (", cookies wiped" if wipe_google_cookies else "")
+          + ") — next cycle refreshes or asks for a login")
+    time.sleep(15)  # let it paint before the next probe/refresh touches CDP
+
+
 def bring_to_front(port):
     """Focus this account's Chrome window so the noVNC page shows the right
     sign-in screen without the user hunting through stacked windows."""
@@ -244,12 +348,42 @@ print(f"keeper daemon up: accounts={[a for a, _ in accounts()]} "
       f"refresh every {REFRESH_SECS}s, patent-bench at {PB_URL}")
 time.sleep(25)  # let the chromiums finish first paint
 for _name, _port in accounts():
-    boot_restore(_name, _port)
+    if os.path.exists(_quar_path(_name)):
+        print(f"[{_name}] BOOT: browser quarantined (Google blocked) — probing "
+              f"the CLI snapshot instead; login NOT needed while it lives")
+    else:
+        boot_restore(_name, _port)
 ever_ok = set()
+quar_fails = {}
 while True:
     any_ok = False
     pending_ports = []
     for name, port in accounts():
+        if os.path.exists(_quar_path(name)):
+            if os.path.exists(_wake_path(name)):
+                # human asked for the browser back while the CLI may be alive:
+                # arrive at Google empty-handed so the live family is safe
+                lift_quarantine(name, port, wipe_google_cookies=True)
+                continue
+            ok, err = cli_probe(name)
+            if ok:
+                quar_fails[name] = 0
+                any_ok = True
+                ever_ok.add(name)
+                print(f"[{name}] quarantined: CLI session ALIVE, browser parked "
+                      f"off Google — running login-free")
+            else:
+                quar_fails[name] = quar_fails.get(name, 0) + 1
+                authish = any(w in err.lower()
+                              for w in ("auth", "expired", "login", "sign in"))
+                if authish or quar_fails[name] >= 3:
+                    print(f"[{name}] quarantine LIFT: CLI snapshot dead "
+                          f"({err[:100] or 'no error text'}) — waking the browser")
+                    lift_quarantine(name, port, wipe_google_cookies=False)
+                else:
+                    print(f"[{name}] quarantine probe hiccup "
+                          f"({quar_fails[name]}/3: {err[:100]}) — staying parked")
+            continue
         try:
             if refresh(name, port):
                 any_ok = True
