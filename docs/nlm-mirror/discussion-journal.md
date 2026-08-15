@@ -953,3 +953,15 @@ degradation detection / CV limit reduction), both full-read + pinned.
 Mechanical ranking: the two 6.0s are EACH OTHER's best partners (union 59/72
 additional); CN103457003 #1 by solo tie-break (53.5 vs 33.0). EP4152472's
 solo-vs-combo gap (33 → 59) is exactly what the old view hid.
+
+### 2026-08-15 — t13 reject sweep LAUNCHED (default/bubu); t12 continues
+
+USER: continue t12 as defined; run t13 on the default (bubu) account. t13:
+1648 fetched rejects of 2058 (410 graduates already ALL opus-read — the
+champion threshold is directly known, no claims ladder needed for them).
+Sweep: quotes-free MUST, 48 rounds, profile default. ⚠ Expectation set BEFORE
+the run (specificity doctrine): ALL 9 of t13's MUST features are generic —
+zero reference numerals, worse than t14 — so saturation is the base case and
+the quoted-verify tier will carry the discrimination. Both sweeps now run in
+parallel on separate accounts (t12/work2 · t13/default), stall-aware watchers
+on each.
