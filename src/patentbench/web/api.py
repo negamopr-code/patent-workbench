@@ -6263,6 +6263,26 @@ def combi_ideal_ep(tab_id: int, body: schemas.CombiIdealRequest, bg: BackgroundT
     # along as its stored verdict card, exactly like the chat roster.
     matrix = _combi_matrix(elements, pool)
     anchor_id = (matrix["rows"][0]["id"] if matrix.get("rows") else None)
+    pinned = None
+    if body.anchored:
+        # Anchored mode: document A = the tab's best reference — the applied
+        # shortlist's #1 when it exists (opus-arbitrated), else the matrix anchor.
+        # A globally-optimal pair of weaker docs is not the combination anyone
+        # argues while a stronger primary reference exists (user, 2026-08-15).
+        if body.anchor_doc_id:
+            pinned = next((d for d in pool if d["id"] == body.anchor_doc_id), None)
+            if not pinned:
+                raise HTTPException(400, "anchor_doc_id is not a fetched candidate of this tab")
+        else:
+            pinned = next((d for d in sorted(
+                (d for d in pool if d.get("shortlisted")),
+                key=lambda d: d.get("nlm_rank") or 999)), None)
+            if not pinned and anchor_id:
+                pinned = next((d for d in pool if d["id"] == anchor_id), None)
+            if not pinned:
+                raise HTTPException(400, "no shortlist/matrix anchor to pin — run a "
+                                         "ranking first or pass anchor_doc_id")
+        anchor_id = pinned["id"]
     focus = [d for d in pool if d["id"] == anchor_id] or None
     roster = [d for d in pool if not focus or d["id"] != focus[0]["id"]]
     # STATELESS on purpose — no chat history. The first version passed the tab's
@@ -6271,7 +6291,19 @@ def combi_ideal_ep(tab_id: int, body: schemas.CombiIdealRequest, bg: BackgroundT
     # (bit 2026-07-27: opus re-reads flipped the anchor, the button still answered
     # the old pair). Each run must be grounded ONLY on the current stored data.
     question = claude_bridge.IDEAL_COMBI_QUESTION
-    db.append_message(tab_id, "q", f"🏆 Ideal pair (chat-grade, {model}, "
+    if pinned:
+        question = (
+            f"Document A is FIXED: {pinned.get('number')} — the tab's best reference; "
+            "do NOT replace it. Choose ONLY the single best partner document B such "
+            "that A + B covers the most ADDITIONAL / dependent-claim features (A "
+            "already carries the mandatory core; some stretch is allowed). B must "
+            "itself disclose at least part of the mandatory core — a document sharing "
+            "no mandatory element has no combinable common ground with A. Judge ONLY "
+            "from the material in THIS request and re-derive from scratch. Name B, "
+            "say which additional features it supplies with citations, and name any "
+            "element A + B still leaves open.")
+    db.append_message(tab_id, "q", f"🏆 {'Anchored pair' if pinned else 'Ideal pair'} "
+                                   f"(chat-grade, {model}, "
                                    f"stateless re-run on current data): {question}")
     res = claude_bridge.chat(question + claude_bridge._IDEAL_PAIR_TRAILER,
                              history=None, documents=roster, model=model,
@@ -6308,6 +6340,10 @@ def combi_ideal_ep(tab_id: int, body: schemas.CombiIdealRequest, bg: BackgroundT
                      f"{', '.join(missing)} is not among this tab's fetched candidates — "
                      "the matrix was NOT updated. Fetch it into the tab and re-run.")
     doc_a, doc_b = docs_ab
+    if pinned and pinned["id"] not in (doc_a["id"], doc_b["id"]):
+        return _fail(f"🏆 Anchored mode pinned {pinned.get('number')} as document A, but "
+                     f"the answer chose {doc_a['number']} + {doc_b['number']} — the "
+                     "matrix was NOT updated. Re-run (the anchor must stay in the pair).")
     # PHASE 2 — convert the prose verdict into per-element, per-document cells against
     # both FULL texts (the affirmative, stretch-allowed read the analysis argued for).
     ver = claude_bridge.combi_ideal_verify(elements, doc_a, doc_b, prose, model=model)

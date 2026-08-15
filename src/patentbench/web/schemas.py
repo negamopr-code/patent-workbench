@@ -337,8 +337,16 @@ class CombiIdealRequest(BaseModel):
     """🏆 Chat-grade ideal pair: answer the canonical 'ideal combination of two documents
     covering the whole benchmark (dependent claims included, stretch allowed)' question
     through the CHAT pipeline (same grounding, same model choice as the 💬 chat), then
-    re-read the chosen pair's full texts so the coverage matrix reflects that answer."""
+    re-read the chosen pair's full texts so the coverage matrix reflects that answer.
+
+    anchored=True pins document A to the tab's BEST reference (the shortlist's #1,
+    else the matrix anchor) and asks only for the complement B that adds the most
+    ADDITIONAL-feature coverage — the primary-reference logic (user, 2026-08-15):
+    a globally-optimal pair of weaker documents is not the combination you argue
+    when a stronger single reference exists. anchor_doc_id overrides the pin."""
     model: str | None = None
+    anchored: bool = False
+    anchor_doc_id: int | None = None
 
 
 class CombiPair(BaseModel):
