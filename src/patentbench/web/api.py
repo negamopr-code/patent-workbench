@@ -2417,6 +2417,17 @@ def _pipeline_path(tab_id: int) -> str:
     return os.path.join(os.path.dirname(db.DB_PATH) or ".", f".pipeline_{tab_id}.json")
 
 
+def _json_write_atomic(path: str, obj: dict) -> None:
+    # Two gunicorn workers can hold watchdogs for the same tab (each process runs
+    # the module-level re-arm loop), so plain open(path, "w") interleaves and left
+    # .nlm_claims_11.json with a trailing stray byte on 2026-08-15. os.replace is
+    # atomic on POSIX: a reader/loser sees the old or new doc, never a mix.
+    tmp = f"{path}.tmp-{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
+
 def _pipeline_read(tab_id: int) -> dict | None:
     try:
         with open(_pipeline_path(tab_id)) as f:
@@ -2428,8 +2439,7 @@ def _pipeline_read(tab_id: int) -> dict | None:
 def _pipeline_set(tab_id: int, **kw) -> dict:
     st = _pipeline_read(tab_id) or {}
     st.update(kw)
-    with open(_pipeline_path(tab_id), "w") as f:
-        json.dump(st, f)
+    _json_write_atomic(_pipeline_path(tab_id), st)
     return st
 
 
@@ -3685,8 +3695,7 @@ def _screen_read(tab_id: int) -> dict | None:
 def _screen_set(tab_id: int, **kw) -> dict:
     st = _screen_read(tab_id) or {}
     st.update(kw)
-    with open(_screen_state_path(tab_id), "w") as f:
-        json.dump(st, f)
+    _json_write_atomic(_screen_state_path(tab_id), st)
     return st
 
 
@@ -4259,8 +4268,7 @@ def _claims_read(tab_id: int) -> dict | None:
 def _claims_set(tab_id: int, **kw) -> dict:
     st = _claims_read(tab_id) or {}
     st.update(kw)
-    with open(_claims_state_path(tab_id), "w") as f:
-        json.dump(st, f)
+    _json_write_atomic(_claims_state_path(tab_id), st)
     return st
 
 
