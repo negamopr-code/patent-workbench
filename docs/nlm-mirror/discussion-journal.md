@@ -975,3 +975,27 @@ scope=corpus: 2058 docs, 59 rounds, default/bubu, blind**. t12 unchanged
 (1824 docs, work2, round 2+). The two tabs now form the doctrine's validation
 pair: specific features (t12) vs all-generic (t13, prediction: saturation),
 both scored against known opus ground truth on completion.
+
+### SESSION CLOSE 2026-08-15 — pause-all per user; continue next session
+
+Both blind validation sweeps paused gracefully (flag set; they park at the
+round boundary): **t12 at 280/1824** (~round 8, work2) · **t13 at 210/2058**
+(~round 6, default/bubu). Watchers stopped.
+
+NEXT SESSION:
+1. Resume both: POST /api/tabs/{12,13}/claims-audit {"resume":true}. After a
+   host restart, the quarantine keeper keeps CLI sessions alive — logins only
+   if the keeper says LOGIN NEEDED (a manual pause never auto-resumes; the
+   POST is always needed).
+2. On each sweep's completion: the pipeline posts the claimed-weight histogram
+   + above-noise count → quoted verify (three-tier) → survivors → 2a/2b →
+   combined ladder → ⚓/🏆 combination views → ONLY THEN unseal opus ground
+   truth and score the blind run (t13's 410 opus-read graduates = answer key;
+   t12 compare vs its old shortlist).
+3. Doctrine test: t13 (all-generic MUSTs) predicted to saturate; t12 (numeral
+   MUSTs) predicted t11-like. Divergences = next improvements.
+4. Day's shipped state: three-tier pipeline + 4 guards deployed · both combi
+   modes as buttons (⚓ anchored rank + 🏆 global) · t14 CLOSED (49/49
+   champions, capture 24%→94%, winner EP4152472; anchored pair EP4152472+
+   CN103457003) · t11 CLOSED (FN 1/1605 recovered, AU2022460007 5.0 at rank
+   50) · keeper quarantine (restart-survival, proven 3×) · atomic state writes.
