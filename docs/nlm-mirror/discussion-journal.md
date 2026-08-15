@@ -810,3 +810,29 @@ stored; the corpus-sweep mode retires the mega-screen where it was missing.)
 DEPLOY at the t14-done window (2a in flight). **t12 auto-launch DISARMED**: on
 work3 login the tab only gets pinned; the sweep starts only after the user
 confirms the crystal-clear plan (to be presented with t14's 2a/2b results).
+
+### 2026-08-15 — t14 2a/2b DONE: combined ladder says the top-9 are ALL former rejects
+
+2a: 150/163 survivors claimed >=1 A-feature (825 pairs) → 2b quote-verified all
+825 (8 rounds). Combined M+A ladder over the union (317 graduates + 336
+reject-survivors with any MUST evidence), same ordering as the applied ladder:
+
+- **35 reject-survivors enter the top-49 — including the ENTIRE top-9** (all
+  11/11👑 MUST; #1 US20200136173 verified A=39 across 13 A-features).
+- The graduates' best (CN118475846, opus 5.0) sits at #12; only 14 current
+  shortlist members keep a top-49 seat.
+- All 35 entrants lack opus-tier reads (they were rejects — nobody ever read
+  them). NOTHING APPLIED — analysis only (/data/.t14_combined_analysis.py);
+  per the new border doctrine an apply without opus at the cut is exactly what
+  the pipeline now warns against.
+
+Verdict on the t14 mega-screen: catastrophically leaky (generic-MUST pathology
+end to end) — but the three-tier chain recovered the leak for ~13 free rounds
++ 8 quoted rounds. Pipeline improvements DEPLOYED to patent-bench during this
+idle window (specificity gate, scope=corpus, three-tier done-message, border
+check) — t12 will run fully on the new pipeline.
+
+PROPOSED to user: opus-read the 35 top-49 entrants (each one decides a
+shortlist seat), then re-run the combined ladder with opus arbitration and
+apply. Alternative: top-9 first (~1/4 spend) to sample the entrants' real
+champion rate before committing to all 35.
