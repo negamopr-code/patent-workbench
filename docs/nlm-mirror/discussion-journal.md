@@ -965,3 +965,13 @@ zero reference numerals, worse than t14 — so saturation is the base case and
 the quoted-verify tier will carry the discrimination. Both sweeps now run in
 parallel on separate accounts (t12/work2 · t13/default), stall-aware watchers
 on each.
+
+### 2026-08-15 — CORRECTION per user: t13 = FULL-CORPUS blind run (not rejects-only)
+
+USER: the new pipeline runs over ALL documents on both tabs, as if from
+scratch — stored opus scores are the ANSWER KEY at the end, never an input.
+Reject-only start stopped at its round boundary; **t13 relaunched
+scope=corpus: 2058 docs, 59 rounds, default/bubu, blind**. t12 unchanged
+(1824 docs, work2, round 2+). The two tabs now form the doctrine's validation
+pair: specific features (t12) vs all-generic (t13, prediction: saturation),
+both scored against known opus ground truth on completion.
