@@ -697,3 +697,25 @@ also explains the morning's t14 quota_paused: NLM's quota day resets at
 midnight Pacific, so yesterday's 67-round marathon still counted at 06:12).
 Reject-sweep state auto-archived as .nlm_claims_11.json.must-free; analysis
 script /data/.t11_rejects_analysis.py.
+
+### 2026-08-15 — t11 FN question CLOSED: 2/1605 borderline (0.12%), quote-verify kills 10/12
+
+Quoted MUST verify of the 12 above-floor rejects (floor 13): only **AU2022460007**
+(9 verified + 4 fuzzy = 13) and **CN219350430** (13 all-verified) hold the floor —
+both exactly AT it, neither claims the crown. The other 10 collapse under quote
+verification (CN218299978 16→0, KR101675622 15→0 — pure over-claiming; pattern
+matches the ~34% 2b kill-rate, harsher here at the tail). **Verdict: t11
+mega-screen is effectively FN-proof; 2 borderline docs = optional opus reads.**
+
+t14 stall diagnosed: hourly quota probes failing since 07:12 with the same
+RESOURCE_EXHAUSTED — so work2's limit is NOT midnight-PT-reset (or not only):
+rolling 24h window or extended programmatic-access throttle after ~90 rounds in
+two days. Hourly probes continue; ~5 rounds left; give-up 06:12 tomorrow.
+
+Keeper quarantine DEPLOYED early (user added account work3 for tab 12's fresh
+new-setup run — the required keeper restart was safest ON the new image):
+work2+bubu came through the restart parked login-free with both audits running —
+first live proof of the restart-survival design. Tab 12 prepped: old survivor
+screen archived (.nlm_screen_12.json.survivor-mode-archive-2026-08-15),
+benchmark ready (6 M / 11 A), 1825 fetched docs; awaiting work3 login → pin →
+stage-1 MUST sweep (~53 rounds).
