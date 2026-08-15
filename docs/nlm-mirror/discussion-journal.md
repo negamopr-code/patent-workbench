@@ -745,3 +745,22 @@ OPEN DECISION (user): what to do with the 163 survivors —
 (c) sample-audit to size the champion rate first (t11 rejected-pocket precedent:
     22.8% champions in a 101-doc opus pocket);
 (d) leave as documented FN-bound (the ladder top-10 already holds both 5.0s).
+
+### 2026-08-15 — t11 FN opus verdict: AU2022460007 = 5.0. The reject chain caught a real champion
+
+Opus on the 2 quote-verified floor-holders: **AU2022460007 → 5.0** (top grade —
+same tier as t14's two best) · CN219350430 → 3.0 (correctly cut). So the t11
+mega-screen DID miss one top-tier reference among 1605 rejects (0.06%); the new
+chain (quotes-free sweep → quoted verify → opus) recovered it for the cost of
+~46 free NLM rounds + 1 quoted round + 2 opus reads.
+
+Two doctrine consequences:
+1. The reject sweep is not paranoia — it is a NECESSARY funnel stage; it just
+   paid for itself with a 5.0.
+2. Mid-ladder claims weight ≠ champion signal, again: AU2022460007 verified only
+   13/21 MUST weight (rank ~tied-1st of rejects but nowhere near graduates' top),
+   yet opus grades it 5.0 — quote-verified MUST coverage finds WHO to check, opus
+   decides WHO matters.
+
+OPEN (user): promote AU2022460007 into t11's shortlist (currently rejected /
+unlisted)? Also still open: the 163 t14 survivors (options a–d) + work3 login.
