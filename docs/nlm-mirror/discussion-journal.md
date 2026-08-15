@@ -719,3 +719,29 @@ first live proof of the restart-survival design. Tab 12 prepped: old survivor
 screen archived (.nlm_screen_12.json.survivor-mode-archive-2026-08-15),
 benchmark ready (6 M / 11 A), 1825 fetched docs; awaiting work3 login → pin →
 stage-1 MUST sweep (~53 rounds).
+
+### 2026-08-15 — t14 quoted-verify DONE (341/341): 163 real-quote survivors — the FN verdict is structural
+
+Google's throttle lifted ~10:12 UTC; run finished 10:34. Of the 341 above-floor
+quotes-free claimants: **163 verify at >= floor(8) with real quotations — 64 at
+full 11/11 verified MUST weight — all 163 crown-verified.** Distribution:
+11:64 · 10:42 · 9:37 · 8:20 · then a long tail; only 8 docs verified 0.
+
+READING (the t11 contrast is the lesson): t11's FN rate was 2/1605 because its
+MUST features are reference-numeral-specific; t14's MUSTs (processor, memory,
+charging-jig class) are GENERIC, so ~11% of the whole reject pool carries
+genuinely quotable coverage of them. The quoted verify proves the claims are
+real — it does NOT mint 163 champions; it proves t14's MUST gate has weak
+discriminative power and the tab's real signal lives in its ADDITIONAL features
+(the inflection-angle instructions). Implication for the funnel doctrine:
+MUST-gate strength = feature specificity; write MUSTs with reference numerals /
+concrete structure wherever possible (t12's fresh run has them — 6 M incl. w5
+crown with numerals — and should behave like t11).
+
+OPEN DECISION (user): what to do with the 163 survivors —
+(a) run stage 2a/2b ADDITIONAL audit on them (~5 rounds 2a + pairs 2b, cheap,
+    ranks them on the discriminative dimension);
+(b) opus deep-read the 64 full-11/11 (real Claude spend);
+(c) sample-audit to size the champion rate first (t11 rejected-pocket precedent:
+    22.8% champions in a 101-doc opus pocket);
+(d) leave as documented FN-bound (the ladder top-10 already holds both 5.0s).
