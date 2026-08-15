@@ -5777,6 +5777,14 @@ def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> di
     # (a ~ can't be filled by a partner), Must gap-filling is exhausted and the additional
     # dimension differentiates. The strict all-✓ test only gates the "alone" badge/tier.
     pivot = bool(rows) and rows[0]["no_absent"] and bool(bonus)
+    if pivot:
+        # Combination doctrine (user, 2026-08-15): a partner must itself cover the
+        # MUST core at least partially — a document sharing no mandatory element has
+        # no combinable common ground with the anchor, whatever additionals it
+        # brings. An A-gap only such documents could fill is reported as uncovered,
+        # which is the honest verdict: no COMBINABLE document in the pool brings it.
+        rows = [rows[0]] + [r for r in rows[1:]
+                            if r["mand_full"] + r["mand_partial"] > 0]
     active = bonus if pivot else mand
     mode = "additional" if pivot else "must"
     columns = [{"name": e["name"], "weight": int(e.get("weight", 1)), "kind": _kind(e)}

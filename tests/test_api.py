@@ -2948,9 +2948,10 @@ def test_effective_coverage_surfaces_full_text_conflict():
 
 def test_combi_matrix_pivots_to_additional_when_must_is_saturated():
     """When the best document already covers every Must element and additional features exist,
-    the grid switches its columns to the ADDITIONAL features and the partners become documents
-    that bring the additional features the anchor lacks — even ones that don't cover Must (they
-    combine with the anchor, which does)."""
+    the grid switches its columns to the ADDITIONAL features. Partners must themselves cover
+    the MUST core at least partially (user doctrine 2026-08-15): a document sharing no
+    mandatory element has no combinable common ground with the anchor — an A-gap only such
+    documents could fill is reported as UNCOVERED, the honest verdict."""
     from patentbench.web import api
     import json
     els = [{"name": "M1", "weight": 5, "kind": "M"}, {"name": "M2", "weight": 5, "kind": "M"},
@@ -2963,7 +2964,8 @@ def test_combi_matrix_pivots_to_additional_when_must_is_saturated():
     docs = [
         doc(1, "AAA", {"M1": "yes", "M2": "yes", "A1": "yes", "A2": "no"}),   # all Must, missing A2
         doc(2, "BBB", {"M1": "yes", "M2": "yes", "A1": "no", "A2": "no"}),    # all Must, no additional
-        doc(3, "CCC", {"M1": "no", "M2": "no", "A1": "no", "A2": "yes"}),     # NO Must, brings A2
+        doc(3, "CCC", {"M1": "no", "M2": "no", "A1": "no", "A2": "yes"}),     # NO Must common ground
+        doc(4, "DDD", {"M1": "partial", "M2": "no", "A1": "no", "A2": "yes"}),  # partial Must + A2
     ]
     mx = api._combi_matrix(els, docs)
     assert mx["mode"] == "additional"                       # Must saturated → pivot
@@ -2971,10 +2973,15 @@ def test_combi_matrix_pivots_to_additional_when_must_is_saturated():
     assert mx["anchor"] == "AAA" and mx["gap_names"] == ["A2"]
     nums = [r["number"] for r in mx["rows"]]
     assert nums[0] == "AAA"
-    assert "CCC" in nums                                    # non-Must partner that brings A2
+    assert "DDD" in nums                                    # partial-Must partner IS combinable
+    assert "CCC" not in nums                                # zero Must → no common ground, dropped
     assert "BBB" not in nums                                # brings no additional the anchor lacks
-    ccc = next(r for r in mx["rows"] if r["number"] == "CCC")
-    assert ccc["fills"] == ["A2"] and ccc["covers_all"] is False
+    ddd = next(r for r in mx["rows"] if r["number"] == "DDD")
+    assert ddd["fills"] == ["A2"]
+    # and when ONLY a zero-Must doc could fill the gap, it surfaces as uncovered:
+    mx2 = api._combi_matrix(els, docs[:3])
+    assert "CCC" not in [r["number"] for r in mx2["rows"]]
+    assert mx2["uncovered_gaps"] == ["A2"]
 
 
 def test_focus_combination_set_covers_every_coverable_gap_and_flags_absent():
