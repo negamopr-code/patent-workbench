@@ -674,3 +674,26 @@ b+c combined (commit pending deploy):
 Morning ops meanwhile: work2 login landed → t14 auth_paused → quota_paused
 (daily quota from yesterday; hourly probes resume it, reset ~07:00 UTC).
 t11 waits for the bubu login (default = alias of bubu).
+
+### 2026-08-15 — t11 reject sweep DONE (1605/1605): OPPOSITE verdict from t14
+
+Claimed-MUST distribution of the 905 claimants (56% claim-rate) vs the
+graduates' verified ladder (max weight 21, top-49 floor 13):
+
+- weight ≤2: 885 of 905 (488×w1 + 397×w2) — noise-level claiming
+- full-weight 21/21: **0** · crown-feature claimers: **0** · ≥ floor(13): **12**
+  (2×16, 1×15, 9×13; top: AU2022460007, CN218299978, KR101675622)
+
+Where t14's quotes-free sweep SATURATED (85% claim, 341 above floor — no FN
+signal), t11's is genuinely discriminative — likely because t11's MUST features
+carry reference-numeral-specific language NLM can't loosely claim. Verdict:
+**t11 mega-screen FN exposure is bounded to 12 docs of 1605**; the sweep itself
+is near-FN-proof, pending quoted verification of those 12.
+
+Launched immediately (user principle 08-14: no sweep is truly finished without
+quoted verification): 1-round quoted MUST verify of the 12 above-floor rejects
+on the default account (fresh daily quota after the 07:00 UTC reset — which
+also explains the morning's t14 quota_paused: NLM's quota day resets at
+midnight Pacific, so yesterday's 67-round marathon still counted at 06:12).
+Reject-sweep state auto-archived as .nlm_claims_11.json.must-free; analysis
+script /data/.t11_rejects_analysis.py.
