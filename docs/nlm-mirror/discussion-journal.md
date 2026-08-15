@@ -896,3 +896,21 @@ REFRESH 300s, translation fallback, auth self-heal end to end.
 
 **Open:** opus-35 → re-ladder → apply (in flight) · t12: work3 login + reword/
 demote 2 numeral-less MUSTs + explicit user go · deferred list unchanged.
+
+### 2026-08-15 — t14 CLOSED: opus-35 verdict + final apply (49/49 champions)
+
+Opus on the 35 ladder entrants: **CN105823988 = 5.0** (new top-tier champion,
+was a reject) + nine 4.0s → 10 champions recovered from the reject pile
+(28.6% of the batch); ladder-#1 US20200136173 (A=39) = only 3.0 — coverage
+finds, opus decides, once more. t14 champions: 42 → **52**.
+
+**Final apply (user-approved flow):** top-49 by opus score, combined evidence
+ladder as tie-break, over all 361 opus-scored docs. Result: **all 49 seats are
+champions (>=4.0)**; only 3 tie-break 4.0s dropped (EP2465576, KR100402309,
+KR102904406 — documented, not lost). Top-10: three 6.0s (EP4152472,
+CN103457003, CN118318177), six 5.0s incl. the recovered CN105823988.
+Champion-capture@49: 24% (old rank-cut) → 43% (evidence ladder) → **94%
+(full three-tier chain + opus arbitration)** — the ceiling is seats, not
+recall. Previous shortlist saved: /data/.t14_shortlist_pre_opus35.json.
+
+t14 is closed. Open: t12 (work3 login + reword 2 numeral-less MUSTs + user go).
