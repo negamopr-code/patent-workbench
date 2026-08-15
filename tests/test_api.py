@@ -4870,3 +4870,34 @@ def test_claims_audit_scope_corpus_sweeps_all_fetched(client, monkeypatch):
     r2 = client.post(f"/api/tabs/{tid}/claims-audit",
                      json={"features": "must", "quotes": False})
     assert r2.status_code == 400
+
+
+def test_combi_anchored_rank_promotes_best_combination():
+    """Option-1 ranking (2026-08-15): among full-MUST coverers, the one whose BEST
+    partner pushes ADDITIONAL coverage highest ranks first — even if solo it trails.
+    Partners must share the MUST core; a zero-MUST doc cannot be the complement."""
+    import json
+    els = [{"name": "M1", "weight": 5, "kind": "M"}, {"name": "M2", "weight": 5, "kind": "M"},
+           {"name": "A1", "weight": 4, "kind": "A"}, {"name": "A2", "weight": 4, "kind": "A"},
+           {"name": "A3", "weight": 2, "kind": "A"}]
+
+    def doc(i, num, cov):
+        return {"id": i, "number": num, "status": "fetched",
+                "combi_coverage": json.dumps([{"name": k, "status": v, "depth": "digest"}
+                                              for k, v in cov.items()])}
+    docs = [
+        # X: full MUST; A1 only PARTIAL (2) + A2 (4) = solo 6; best union with Z = 2+4+2 = 8
+        doc(1, "XXX", {"M1": "yes", "M2": "yes", "A1": "partial", "A2": "yes", "A3": "no"}),
+        # Y: full MUST; A1 full (4) = solo 4; union with Z = 4+4+2 = 10 → strongest combo
+        doc(2, "YYY", {"M1": "yes", "M2": "yes", "A1": "yes", "A2": "no", "A3": "no"}),
+        # Z: M2 absent → NOT an anchor; M1 partial → combinable partner, brings A2+A3
+        doc(3, "ZZZ", {"M1": "partial", "M2": "no", "A1": "no", "A2": "yes", "A3": "yes"}),
+        # Q: zero MUST with every additional — must NOT be usable as a complement
+        doc(4, "QQQ", {"M1": "no", "M2": "no", "A1": "yes", "A2": "yes", "A3": "yes"}),
+    ]
+    rank = api._combi_anchored_rank(els, docs)
+    assert [r["number"] for r in rank] == ["YYY", "XXX"]     # best combo beats better solo
+    assert rank[0]["best"]["partner"] == "ZZZ"               # doctrine: never the zero-MUST QQQ
+    assert rank[1]["best"]["partner"] in ("ZZZ", "YYY")      # tie at 8.0 — either is valid
+    assert rank[0]["combo_w"] == 10.0 and rank[1]["combo_w"] == 8.0
+    assert rank[0]["solo_add_w"] == 4.0 and rank[1]["solo_add_w"] == 6.0

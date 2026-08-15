@@ -1187,22 +1187,31 @@ async function runCombiVerify({ ids: explicitIds = null } = {}) {
 // chat pipeline (same grounding + model as 💬 chat), phase 2 = full-text element read of the
 // two chosen documents following that verdict; server rewrites their combi cells + pins the
 // verdict, so the matrix reflects exactly what the chat concludes.
-async function runCombiIdeal() {
+async function runCombiIdeal(anchored) {
   if (!activeTab) return;
   const model = $('model').value;
-  if (!await safeConfirm(`🏆 CHAT-GRADE IDEAL PAIR — model: ${model}\n\n`
+  const intro = anchored
+    ? `⚓🏆 ANCHORED PAIR — model: ${model}\n\n`
+      + `Document A is PINNED to this tab's best reference (the shortlist's #1). Phase 1 `
+      + `asks only for the single best partner B that adds the most ADDITIONAL / `
+      + `dependent-claim coverage — B must itself share part of the MUST core to be `
+      + `combinable. This is the combination you actually argue while a strong primary `
+      + `reference exists (the global "ideal pair" can crown two weaker documents).\n\n`
+    : `🏆 CHAT-GRADE IDEAL PAIR — model: ${model}\n\n`
       + `Phase 1 answers the chat question "what is the ideal combination of TWO documents `
       + `covering the whole benchmark (dependent claims included, some stretch allowed)" with `
       + `the SAME grounding the chat uses: benchmark, anchor full text, every stored verdict `
-      + `card, this tab's conversation.\n\n`
+      + `card, this tab's conversation.\n\n`;
+  if (!await safeConfirm(intro
       + `Phase 2 re-reads BOTH chosen documents on FULL text following that verdict and `
       + `rewrites their matrix cells, pins the pair above the matrix, and posts the full `
       + `answer to the chat.\n\n`
       + `2 model calls on ${model} (the second reads two full documents — pick opus/fable in `
       + `the 💬 selector for chat-grade quality). Continue?`)) return;
-  setBusy(true, '🏆 Ideal pair: chat-grade assessment (2 model calls, may take minutes)');
+  setBusy(true, (anchored ? '⚓🏆 Anchored pair' : '🏆 Ideal pair')
+                + ': chat-grade assessment (2 model calls, may take minutes)');
   const res = await api(`/api/tabs/${activeTab}/combi/ideal`,
-    { method: 'POST', body: JSON.stringify({ model }) });
+    { method: 'POST', body: JSON.stringify({ model, anchored: !!anchored }) });
   setBusy(false);
   if (res.error) { appendMsg({ role: 's', text: `Error: ${res.error}` }); await reloadChat(); return; }
   if (res.matrix) combiScan = { ...(combiScan || {}), ...res };
@@ -1315,8 +1324,16 @@ function renderCombiScanPanel() {
   ib.className = 'btn small';
   ib.textContent = r.ideal ? '🏆 Re-run ideal pair (chat-grade)' : '🏆 Ideal pair (chat-grade)';
   ib.title = 'Answers the canonical chat question — "what is the ideal combination of TWO documents covering the whole benchmark, dependent claims included, some stretch allowed" — with the SAME grounding the chat uses (benchmark + anchor full text + every stored verdict card + this tab\'s conversation), on the 💬 chat model. Then re-reads BOTH chosen documents on FULL text following that verdict and rewrites their cells here, pins the pair above the matrix, and posts the full prose answer to the chat. Pick the model in the 💬 selector (opus/fable for chat-grade quality).';
-  ib.onclick = () => runCombiIdeal();
+  ib.onclick = () => runCombiIdeal(false);
   actions.appendChild(ib);
+  // ⚓🏆 Anchored variant — document A pinned to the tab's best reference; the model only
+  // chooses the ADDITIONAL-coverage complement B (primary-reference logic, 2026-08-15).
+  const ab = document.createElement('button');
+  ab.className = 'btn small';
+  ab.textContent = '⚓🏆 Anchored pair (best ref + complement)';
+  ab.title = 'Pins document A to this tab\'s BEST reference (the shortlist\'s #1) and asks only for the partner B that, combined with A, covers the most ADDITIONAL / dependent-claim features — B must itself share part of the MUST core to be combinable. The combination you actually argue while a strong primary reference exists; the plain 🏆 button stays the global search where two individually weaker documents may form the completing pair.';
+  ab.onclick = () => runCombiIdeal(true);
+  actions.appendChild(ab);
   panel.appendChild(actions);
   // Group-explicit column codes: ME# = Must, AE# = Additional, WE# = Whole-document, numbered
   // within their own group so the group each element belongs to is always unambiguous.
@@ -1349,6 +1366,26 @@ function renderCombiScanPanel() {
       + ` <span class="muted">· ${esc(iv.model || '')} · ${esc(when)}</span>`
       + (chips ? `<div class="mx-ideal-cells">${chips}</div>` : '')
       + `<div class="muted">This is the chat's own conclusion (full prose in the 💬 chat). Both documents' cells below were re-read on full text following it — the grid and the chat now show ONE verdict.</div>`;
+    panel.appendChild(div);
+  }
+  // ⚓ OPTION-1 RANKING — full-MUST coverers ordered by their BEST combination: the
+  // coverer whose best partner pushes ADDITIONAL coverage highest ranks first, even if
+  // solo it sits mid-list (user doctrine 2026-08-15). Pure code from stored coverage.
+  if ((r.anchored_rank || []).length) {
+    const div = document.createElement('div');
+    div.className = 'combi-ideal';
+    const rowsHtml = r.anchored_rank.map((a, i) => {
+      const b = a.best;
+      return `<div title="${b ? esc('adds: ' + (b.adds || []).join('; ')) : 'no partner adds anything'}">`
+        + `#${i + 1} <b>${esc(a.number)}</b>`
+        + (b ? ` + ${esc(b.partner)} → additional <b>${b.union_add_w}</b>/${a.add_total_w}`
+             + ` <span class="muted">(solo ${a.solo_add_w}, partner +${b.gain})</span>`
+             : ` → additional ${a.solo_add_w}/${a.add_total_w} <span class="muted">(no gaining partner)</span>`)
+        + `</div>`;
+    }).join('');
+    div.innerHTML = `⚓ <b>Full-MUST coverers ranked by their BEST combination</b> `
+      + `<span class="muted">(anticipation anchor + additional-coverage complement; partners share the MUST core — `
+      + `the strongest achievable pair decides the rank, not the solo score)</span>${rowsHtml}`;
     panel.appendChild(div);
   }
   if (!cols.length || !rows.length) {

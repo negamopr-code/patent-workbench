@@ -5726,6 +5726,57 @@ def _combi_pairs(elements: list[dict], docs: list[dict], limit: int) -> list[dic
     return out[:limit]
 
 
+def _combi_anchored_rank(elements: list[dict], docs: list[dict], limit: int = 10) -> list[dict]:
+    """Option-1 ranking (user, 2026-08-15): among documents that FULLY cover the
+    mandatory core (yes/partial on every M element — the anticipation standard),
+    each one's rank is decided by its BEST 2-doc combination: the partner that
+    maximises the pair's weighted ADDITIONAL(+W) coverage, the partner itself
+    sharing at least part of the MUST core (combinability doctrine). A full
+    coverer that looks mid-list solo but forms the strongest combination ranks
+    FIRST. Distinct from _combi_pairs (option 2), where two individually
+    incomplete docs complete the MUST union. Pure code — no model call; the
+    anchored 🏆 button argues the winning pair chat-grade."""
+    mand = [e for e in elements if _kind(e) == "M"]
+    add = [e for e in elements if _kind(e) in ("A", "W")]
+    if not mand or not add or not docs:
+        return []
+    cov = {d["id"]: _cov_map(d) for d in docs}
+
+    def has(did, name):
+        return cov[did].get(name, "no") in ("yes", "partial")
+
+    def aw(did, name):
+        s = cov[did].get(name, "no")
+        return 1.0 if s == "yes" else 0.5 if s == "partial" else 0.0
+
+    add_total_w = sum(int(e.get("weight", 1)) for e in add)
+    full = [d for d in docs if all(has(d["id"], e["name"]) for e in mand)]
+    partners = [d for d in docs if any(has(d["id"], e["name"]) for e in mand)]
+    out = []
+    for anc in full:
+        solo_w = sum(int(e.get("weight", 1)) * aw(anc["id"], e["name"]) for e in add)
+        best = None
+        for p in partners:
+            if p["id"] == anc["id"]:
+                continue
+            gain_feats = [e["name"] for e in add
+                          if aw(p["id"], e["name"]) > aw(anc["id"], e["name"])]
+            if not gain_feats:
+                continue
+            u = sum(int(e.get("weight", 1)) * max(aw(anc["id"], e["name"]),
+                                                  aw(p["id"], e["name"])) for e in add)
+            if best is None or u > best["union_add_w"]:
+                best = {"partner_id": p["id"], "partner": p.get("number"),
+                        "union_add_w": round(u, 1), "gain": round(u - solo_w, 1),
+                        "adds": gain_feats[:12]}
+        out.append({"id": anc["id"], "number": anc.get("number"),
+                    "solo_add_w": round(solo_w, 1),
+                    "combo_w": best["union_add_w"] if best else round(solo_w, 1),
+                    "add_total_w": add_total_w, "best": best})
+    out.sort(key=lambda r: (-r["combo_w"], -r["solo_add_w"], r["id"]))
+    return out[:limit]
+
+
 def _combi_matrix(elements: list[dict], docs: list[dict], limit: int = 10) -> dict:
     """Element × document coverage GRID over the MANDATORY elements — the raw material the
     user reads to judge combinations by eye (the pair list is no longer shown; this replaces
@@ -5890,6 +5941,7 @@ def combi_results_ep(tab_id: int, top_pairs: int = 20):
     return {"ok": True, "has_results": True, "assessed": len(fresh),
             "elements": len(elements), "complete": len([p for p in pairs if p["complete"]]),
             "pairs": pairs, "solo": solo, "matrix": _combi_matrix(elements, _drop_benchmark([d for d in db.list_documents(tab_id, full=True) if d['status'] == 'fetched'], bm)), "depth": depth,
+            "anchored_rank": _combi_anchored_rank(elements, fresh),
             "ideal": _combi_ideal_payload(tab_id)}
 
 
