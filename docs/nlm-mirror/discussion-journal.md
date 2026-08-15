@@ -836,3 +836,63 @@ PROPOSED to user: opus-read the 35 top-49 entrants (each one decides a
 shortlist seat), then re-run the combined ladder with opus arbitration and
 apply. Alternative: top-9 first (~1/4 spend) to sample the entrants' real
 champion rate before committing to all 35.
+
+## 2026-08-15 — FINAL DEBRIEF: the NLM claims-funnel experiment (t11 + t14)
+
+**Goal (user, 2026-08-11):** an NLM-based, Claude-token-free method producing a
+~49-doc shortlist good enough that opus is only the FINAL check.
+
+**What was built.** The three-tier claims funnel, fully automated and deployed:
+(1) quotes-free MUST sweep — recall, ~35 docs/round, zero Claude;
+(2) quoted verification of everything above noise — precision, hallucinated
+    quotes die in code;
+(3) opus only for verified survivors — judgment.
+Plus: ADDITIONAL stages 2a/2b (recall → bounded quote-verify), combined M+A
+ladder, per-round raw-answer persistence, and four pipeline guards born from
+measurement: specificity gate, scope=corpus primary screen, automated
+three-tier done-message, border-zone opus check.
+
+**Validation, t11 (specific numeral-bearing MUSTs).** Old screen's recall was
+excellent: reject sweep of 1605 → quoted verify → exactly ONE real miss
+(AU2022460007, opus 5.0, promoted to shortlist rank 50); middle band empty.
+FN 0.06–0.12%. But ordering@49 remains the weak link: verified ladder holds
+20/66 champions vs old 18/66; spearman 0.308. Head ordering excellent (top-8
+all crown; #1 = solo 7/7 coverer).
+
+**Validation, t14 (generic MUSTs).** The screen was catastrophically leaky:
+163/1509 rejects carry quote-verified MUST >= floor (64 at full 11/11); after
+2a/2b, the combined ladder's ENTIRE top-9 are former rejects; 35 ex-rejects
+enter the top-49, only 14 old members keep seats. Opus arbitration of the 35
+in flight (user: "opus 35"); nothing applied until it lands.
+
+**Doctrine distilled (measured, not opined):**
+1. MUST-gate strength = feature specificity. Numerals → 0.12% FN; generic →
+   11% pseudo-survivors and a leaky screen. Gate now enforced at accept time.
+2. Never trust an unverified claim: quote verification killed 50–85% of claims
+   everywhere it ran; saturation without it (t14 sweep, 85% claim-rate) proves
+   nothing.
+3. Coverage finds WHO to check; opus decides WHO matters. AU2022460007 (5.0 at
+   mid-band weight 13) is the canonical example — no coverage score would have
+   shortlisted it.
+4. Rank-cut survivor screens lose champions to round bias; the full-corpus
+   claims sweep replaces them (scope=corpus is now the primary-screen mode).
+5. Verify the WHOLE above-noise band, not just a champion floor.
+
+**Cost.** Everything above ran on NLM quota (~200+ rounds over 3 accounts) +
+exactly 2 opus reads for t11 closure; the 35-doc t14 batch is the first real
+Claude spend, and every one of the 35 decides a shortlist seat.
+
+**Target verdict.** Infrastructure: arrived. "Best references surface for opus
+to confirm": arrived on both tabs. "All champions inside 49": not yet — t11
+caps at ~30% with clean features (ordering, not recall); t14's number comes
+after opus arbitration. t12 = the first clean end-to-end run of the improved
+pipeline (specific features + corpus sweep from scratch) and the real test of
+the stronger target.
+
+**Also hardened today (ops):** atomic state-file writes (gunicorn -w 2 race),
+keeper boot-quarantine + session-cookie persistence (host restarts no longer
+demand logins while the CLI snapshot lives — proven live twice today),
+REFRESH 300s, translation fallback, auth self-heal end to end.
+
+**Open:** opus-35 → re-ladder → apply (in flight) · t12: work3 login + reword/
+demote 2 numeral-less MUSTs + explicit user go · deferred list unchanged.
