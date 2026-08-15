@@ -789,3 +789,24 @@ Pipeline-improvement discussion recorded with user (proposals 2+3 superseded by
 the claims ladder; #4 validated by AU2022460007; open builds: A specificity
 gate · #1 persist round answers · B/C/D codify full-corpus sweep + three-tier
 evidence + middle-band verify as defaults; build order after t12 reports).
+
+### 2026-08-15 — ALL pipeline improvements BUILT (e6f57e1); t12 launch gated on user go
+
+USER: «do all improvements and modifications once t14 is done… we need to be
+crystal clear before starting t12». Honest state first: only ops fixes were
+built before; the funnel proposals awaited the recorded discuss-first gate —
+this was the go. Built and tested (339 green, 3 new):
+1. **Specificity gate** — accepting numeral-less MANDATORY features posts the
+   measured warning (t14 11% pseudo-survivors vs t11 0.12% FN).
+2. **scope='corpus'** on the claims audit — full-corpus MUST sweep as primary
+   screen, graduate filter gone.
+3. **Three-tier doctrine automated** — quotes-free MUST completion posts the
+   claimed-weight histogram + above-noise count + quoted-round estimate.
+4. **Border-zone check on apply** — cut-adjacent docs without opus-tier reads
+   are named in a warning.
+(#1 round-answer persistence: already present in nlm_claims.answer — 205 rounds
+stored; the corpus-sweep mode retires the mega-screen where it was missing.)
+
+DEPLOY at the t14-done window (2a in flight). **t12 auto-launch DISARMED**: on
+work3 login the tab only gets pinned; the sweep starts only after the user
+confirms the crystal-clear plan (to be presented with t14's 2a/2b results).
