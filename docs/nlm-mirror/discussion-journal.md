@@ -914,3 +914,24 @@ Champion-capture@49: 24% (old rank-cut) → 43% (evidence ladder) → **94%
 recall. Previous shortlist saved: /data/.t14_shortlist_pre_opus35.json.
 
 t14 is closed. Open: t12 (work3 login + reword 2 numeral-less MUSTs + user go).
+
+### 2026-08-15 — combi doctrine gate shipped; t12 LAUNCHED on the new pipeline (work2)
+
+- t14 winner unchanged: **EP4152472 (6.0)** stays #1 — the recovered rejects
+  enriched the field, nothing dethroned it.
+- **Combi gate built+deployed (88fad19)**: additional-mode partners must share
+  the MUST core at least partially (user doctrine); zero-MUST "partners" are
+  dropped and gaps only they could fill report as uncovered.
+- work3 abandoned (captcha loop, expired logins — user: "it is a mess"):
+  removed from accounts.conf; keeper restarted — work2+bubu survived parked,
+  third live proof of quarantine.
+- t13 status checked (user asked): OLD pipeline only — survivor screen over
+  2058 docs (410 graduates, ALL opus-read, shortlist 49); claims funnel never
+  ran; 1648 rejects unswept → same reject-sweep treatment as t11/t14 is the
+  natural follow-up after t12.
+- **t12 LAUNCHED**: pinned to work2; scope=corpus quotes-free MUST sweep over
+  1824 fetched docs, ~53 rounds — the first tab on the new pipeline end to
+  end. Features kept AS ACCEPTED by the user (2 numeral-less MUSTs, w1+w2 =
+  3/16 weight — low pseudo-survivor exposure; reword offer stands). Will
+  quota-park and self-resume; on done the pipeline posts the histogram +
+  three-tier next step.
