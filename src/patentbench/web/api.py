@@ -696,6 +696,21 @@ def benchmark_set_features(tab_id: int, body: schemas.BenchmarkFeatures):
     features = [{"name": f.name.strip(), "weight": f.weight,
                  "kind": (f.kind if f.kind in ("M", "A", "W") else "M"), "sl": f.sl}
                 for f in body.features if f.name.strip()]
+    # Specificity gate (measured 2026-08-15): MUST-gate discriminative power tracks
+    # feature wording. Reference-numeral-specific MUSTs → 0.12% reject-sweep FN
+    # (t11); generic MUSTs ("at least one processor") → 11% pseudo-survivors (t14).
+    # A numeral like "(30)"/"(112a)" is the proven specificity signal; warn on
+    # MUSTs without one so the user rewords or demotes them to A before any sweep.
+    generic_must = [f["name"] for f in features
+                    if f["kind"] == "M" and not re.search(r"\(\d+[a-z]?\)", f["name"])]
+    if generic_must:
+        db.append_message(tab_id, "s",
+            f"⚠️ Specificity gate: {len(generic_must)} MANDATORY feature(s) carry no "
+            "reference numeral — generic MUSTs measurably weaken the sweep "
+            "(t14: 11% pseudo-survivors vs t11: 0.12% FN with numeral-specific ones): "
+            + " · ".join(f"“{n[:70]}”" for n in generic_must[:5])
+            + ("…" if len(generic_must) > 5 else "")
+            + " Consider rewording with concrete structure or demoting to ADDITIONAL.")
     # Re-weighting/editing the features of a DOCUMENT benchmark annotates it — it must
     # not silently replace the fetched document with a spec. To swap a document out for
     # a feature combination, remove the document first (or write a free-form spec).
@@ -4683,6 +4698,18 @@ def _claims_finalize(tab_id: int, st: dict) -> None:
     if params.get("apply") and kind == "must" and top:
         db.set_shortlisted(tab_id, [r["id"] for r in top])
         applied = True
+        # Border-zone evidence check (t11 lesson: AU2022460007 was a 5.0 hiding at
+        # the cut — never let sub-opus evidence decide a shortlist boundary).
+        border = top[-10:] + rows[target:target + 10]
+        weak = [r["number"] for r in border
+                if _model_rank((docs.get(r["id"]) or {}).get("score_model"))
+                > _model_rank("claude-opus-5")]
+        if weak:
+            db.append_message(tab_id, "s",
+                f"⚠️ Border check: {len(weak)} of the {len(border)} doc(s) around the "
+                f"applied cut lack an opus-tier read ({', '.join(weak[:8])}"
+                + ("…" if len(weak) > 8 else "") + ") — the boundary is currently "
+                "decided by weaker evidence. Opus-read them before trusting the cut.")
     n_claims = sum(len(f) for f in claims.values())
     n_ver = sum(1 for f in claims.values() for sv in f.values() if sv[0] == "verified")
     n_fuz = sum(1 for f in claims.values() for sv in f.values() if sv[0] == "fuzzy")
@@ -4691,6 +4718,21 @@ def _claims_finalize(tab_id: int, st: dict) -> None:
                   f"{n_claims - n_ver - n_fuz} rejected (hallucination guard). "
                   if params.get("quotes", True) else
                   f"{n_claims} claim(s), quotes-free recall mode (unverified by design). ")
+    if kind == "must" and not params.get("quotes", True) and rows:
+        # Three-tier doctrine (t11/t14 measured): a quotes-free sweep only finds WHO
+        # to check — quote verification decides, and it must cover EVERYTHING above
+        # noise, not just a champion floor (t11's one real 5.0 sat mid-band). Weight
+        # ≤2 measured as noise on both sweeps (t11: 885/905 claimants ≤2, all dead).
+        hist: dict[int, int] = {}
+        for r in rows:
+            hist[r["score"]] = hist.get(r["score"], 0) + 1
+        above = [r for r in rows if r["score"] >= 3]
+        dist = " ".join(f"w{w}:{n}" for w, n in sorted(hist.items(), reverse=True))
+        quote_line += (
+            f"Claimed-weight distribution: {dist}. NEXT (three-tier doctrine): "
+            f"quoted verify of the {len(above)} above-noise doc(s) (weight ≥3, "
+            f"~{-(-len(above) // 12)} quoted round(s)), then opus for the verified "
+            "survivors only. ")
     db.append_message(tab_id, "s",
         f"🧾 Claims audit ({label}) DONE: {len(st.get('queue') or [])} doc(s) audited in "
         f"{st.get('round', 0)} round(s); {len(rows)} made ≥1 counted {label} claim. "
@@ -4869,6 +4911,8 @@ def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
     elif body.doc_ids:
         want = set(body.doc_ids)
         docs = [d for d in docs if d["id"] in want]
+    elif body.scope == "corpus":
+        pass                       # primary-screen mode: every fetched doc stays in
     else:
         docs = [d for d in docs if d.get("nlm_screen_state") == "graduate"]
     if not docs:

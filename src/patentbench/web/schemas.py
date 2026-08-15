@@ -226,6 +226,10 @@ class ClaimsAuditRequest(BaseModel):
     Dry-run by default — shortlisted/nlm_rank are only rewritten with apply=true."""
     resume: bool = False
     doc_ids: list[int] | None = None       # None = every 'graduate' of the mega-screen
+    # scope='corpus' sweeps EVERY fetched doc instead of the graduate subset — the
+    # primary-screen mode (t11/t14 reject sweeps proved survivor-mode rank-cuts
+    # lose champions; a full-corpus MUST sweep is FN-proof and costs ~1 round/35 docs)
+    scope: str | None = Field(default=None, pattern="^(graduates|corpus)$")
     # quoted answers are long: ~12 docs/round keeps the reply under NLM's cut-off;
     # quotes-free replies are numbers-only, so ~35 docs/round fit (stage-1/2a mode)
     batch_size: int | None = Field(default=None, ge=5, le=45)  # None = 12 quoted / 35 free

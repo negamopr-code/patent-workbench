@@ -4812,3 +4812,54 @@ def test_limit_watchdog_resumes_when_window_opens(client, monkeypatch):
     assert all(d["score"] is not None for d in docs)               # the read ran
     msgs = [m["text"] for m in client.get(f"/api/tabs/{tid}/state").json()["messages"]]
     assert any("window is open again" in m for m in msgs)
+
+
+def test_features_specificity_gate_warns_on_generic_musts(client):
+    """A MANDATORY feature without a reference numeral gets flagged at accept time —
+    generic MUSTs measurably weaken the sweep (t14: 11% pseudo-survivors vs t11's
+    0.12% FN with numeral-specific features)."""
+    tid = client.post("/api/tabs", json={"name": "Gate"}).json()["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"features": [
+        {"name": "at least one processor", "weight": 3, "kind": "M"},
+        {"name": "water-cooled power supply part (30)", "weight": 5, "kind": "M"},
+        {"name": "a memory storing instructions", "weight": 2, "kind": "A"},  # A: exempt
+    ]})
+    texts = [m["text"] for m in db.list_messages(tid)]
+    warn = [t for t in texts if "Specificity gate" in t]
+    assert len(warn) == 1
+    assert "at least one processor" in warn[0]
+    assert "water-cooled" not in warn[0]          # numeral-specific M not flagged
+    assert "memory storing" not in warn[0]        # ADDITIONAL features exempt
+
+
+def test_features_specificity_gate_silent_when_all_specific(client):
+    tid = client.post("/api/tabs", json={"name": "GateOK"}).json()["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"features": [
+        {"name": "first fan (36) disposed inside the part (30)", "weight": 5, "kind": "M"},
+    ]})
+    assert not [m for m in db.list_messages(tid) if "Specificity gate" in m["text"]]
+
+
+def test_claims_audit_scope_corpus_sweeps_all_fetched(client, monkeypatch):
+    """scope='corpus' is the primary-screen mode: every fetched doc joins the sweep,
+    graduate state is irrelevant (survivor-mode rank-cuts lose champions — t11)."""
+    tid = client.post("/api/tabs", json={"name": "Corpus"}).json()["id"]
+    client.post(f"/api/tabs/{tid}/benchmark/features", json={"features": [
+        {"name": "outer pole (112) injection-molded", "weight": 5, "kind": "M"},
+    ]})
+    client.post(f"/api/tabs/{tid}/documents",
+                json={"numbers": ["EP4340163A1", "CN117241689"], "source": "image"})
+    for d in db.list_documents(tid):
+        db.update_document(d["id"], status="fetched", description="full text")
+        # NOT graduates: nlm_screen_state stays NULL
+    monkeypatch.setattr(nlm_bridge, "available", lambda profile=None: (True, ""))
+    monkeypatch.setattr(api, "_claims_launch", lambda tab_id: True)
+    r = client.post(f"/api/tabs/{tid}/claims-audit",
+                    json={"features": "must", "quotes": False, "scope": "corpus"})
+    assert r.status_code == 200
+    st = api._claims_read(tid)
+    assert len(st["queue"]) == 2                  # both fetched docs, no graduate filter
+    # default (no scope) refuses: there are no graduates
+    r2 = client.post(f"/api/tabs/{tid}/claims-audit",
+                     json={"features": "must", "quotes": False})
+    assert r2.status_code == 400
