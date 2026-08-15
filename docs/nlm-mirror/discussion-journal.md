@@ -607,3 +607,35 @@ NEXT SESSION:
    verification a sweep is not truly finished).
 4. Then: the funnel-fix decisions (t11's 4 proposals + deferred #13 restart
    survival) with all validation numbers on the table.
+
+## 2026-08-15 — post-restart recovery: state-file corruption found & fixed; awaiting logins
+
+Host restarted overnight (as planned). On session start both audits were parked
+`auth_paused` (t14 276/341, t11 1540/1605), keeper looping LOGIN NEEDED for both
+accounts — the expected shutdown-test signature. But a NEW failure surfaced:
+
+**`.nlm_claims_11.json` got corrupted at ~05:59 UTC** — one stray trailing byte
+after an otherwise complete JSON doc. Root cause: gunicorn runs `-w 2`; BOTH
+worker processes execute the module-level watchdog re-arm loop on startup, so two
+processes were doing unlocked read-modify-write on the same state file every auth
+probe. The corrupt file made `_claims_read` return None, which silently KILLED
+t11's watchdog loops in both workers — t11 would never have auto-resumed after
+login, and status showed `present:false` (looks like "no audit exists": scary
+but recoverable, the data was intact).
+
+Fix shipped (commit 98f2897, pushed): `_json_write_atomic` (tmp-<pid> +
+os.replace) for all three state writers (`_pipeline_set`, `_screen_set`,
+`_claims_set`). State file repaired byte-exact (cursor 1540 / 885 claims
+verified), patched api.py docker-cp'd into the live container (image is baked;
+serve.sh builds from the repo so any future rebuild bakes the fix), container
+restarted → startup loop re-armed watchdogs for BOTH tabs, both parked
+`auth_paused` / resumable:true again.
+
+Lesson for the corruption class: `phase:"idle", present:false` on a tab that
+should have a parked audit = read-side JSON failure, NOT lost data — check the
+state file's tail before assuming the run is gone.
+
+STILL WAITING ON USER: one login per account (work2 + bubu, bubu's window UNDER
+work2's) at http://localhost:8106/vnc.html → both audits self-heal, no API call
+needed. Monitor armed (2-min polls, confirmed-twice logic after a false positive
+on an empty poll). Mirror sync of this entry PENDING auth.
