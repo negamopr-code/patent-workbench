@@ -1039,3 +1039,20 @@ on translated CN/KR/JP texts (KR-fallback lesson).
 Cross-strategy tier-1 result recorded: 478 above-noise = 372 old rejects (78%)
 + 106 old graduates; 2 of 3 full-6/6 claimants are old REJECTS; leak reversed
 too — 60/195 old graduates silent, 12/47 old shortlist below noise.
+
+### SESSION CLOSE 2026-08-16 — pause-all; opus probes landed 3 recovered champions
+
+w≥9 old-reject band fully opus-read (census, 46 docs): the old screen dropped
+**3 champions — KR20260033205 = 8.0 (highest on the tab), CN219576664 = 4.0,
+CN222146326 = 4.0** — plus 5 borderline 3.0s. WO2025161800, the other 6/6-MUST
+claimant, scored only 2.0 (NLM over-claim; quote gate expected to catch it).
+Sampled w6–8 and w3–5 bands: nothing above 3.0 → noise, as doctrine predicted.
+False-kill crossing runs when t12 tier-2 delivers verdicts on the 32
+pre-registered docs.
+
+PARKED: **t12 tier-2 quoted verify at 204/478 (round 17, 144 claimants)** ·
+**t13 at 2030/2058 (round 58 — ONE round from completion; claimants 5 = 0.24%,
+saturation prediction fully inverted)**. NEXT SESSION: resume both via POST
+{"resume":true}; t13 completes in one round → raw-answer spot-check + unseal
+the 410-graduate answer key; t12 tier-2 → FN crossing → survivors → 2a/2b →
+ladder → combi views → compare vs old shortlist.
