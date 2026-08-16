@@ -1019,3 +1019,23 @@ plan on t13 completion: (1) raw-answer spot-check (parse bug vs real NLM
 silence), (2) unseal the 410-graduate opus answer key → tier-1 recall. Full
 2058-doc opus read discussed as the complete-truth option; decision deferred
 until recall numbers are in. Answer key stays sealed until then.
+
+### 2026-08-16 — t12 tier-2 FN-measurement: pre-registered opus-32 launched (user-approved)
+
+USER: run the 2+30 opus probe in parallel; more opus afterwards if needed —
+"we need to figure out and improve at best our pipeline".
+
+Design (saved /data/.t12_fn_sample.json, seed 20260816, selection uses ONLY
+tier-1 weights — never tier-2 outcomes): among t12's 372 old-reject above-noise
+claimants — (a) BOTH 6/6-MUST rejects WO2025161800 + KR20260033205, (b) 10
+random per band w≥9 (of 44) · w6–8 (of 75) · w3–5 (of 251). All 32 read FRESH
+by claude-opus-5 against the current benchmark (skip_scored=false; t12's 47 old
+opus reads predate the from-scratch rebuild). Purpose: first-ever measurement
+of the quoted-verify tier's FALSE-KILL rate per band (opus reads a doc
+independently BEFORE its tier-2 verdict is consulted; crossing happens when
+tier-2 finishes). Known risk being probed: verbatim-quote matching fragility
+on translated CN/KR/JP texts (KR-fallback lesson).
+
+Cross-strategy tier-1 result recorded: 478 above-noise = 372 old rejects (78%)
++ 106 old graduates; 2 of 3 full-6/6 claimants are old REJECTS; leak reversed
+too — 60/195 old graduates silent, 12/47 old shortlist below noise.
