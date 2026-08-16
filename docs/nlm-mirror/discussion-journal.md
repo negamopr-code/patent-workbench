@@ -999,3 +999,23 @@ NEXT SESSION:
    champions, capture 24%→94%, winner EP4152472; anchored pair EP4152472+
    CN103457003) · t11 CLOSED (FN 1/1605 recovered, AU2022460007 5.0 at rank
    50) · keeper quarantine (restart-survival, proven 3×) · atomic state writes.
+
+### 2026-08-16 — both blind sweeps resumed post-restart; t12 tier-1 DONE → quoted verify launched
+
+Host restart survived login-free (quarantine keeper, 4th proof). Both audits
+resumed via POST {"resume":true}; zero stalls or quota pauses the whole day.
+
+**t12 tier-1 DONE: 1824/1824, 53 rounds, 763 claimants (41.8%)** — numeral-MUST
+prediction confirmed (t11-like, vs t14's 85%). Weight histogram: 16×3 · 13×1 ·
+11×28 · 9×41 · 8×32 · 7×13 · 6×51 · 5×65 · 4×28 · 3×216 | noise ≤2: 285
+(57+228). Top: WO2025161800, KR20260033205, KR20260043552 (all 6/6 MUSTs, w16).
+**Tier-2 launched: quoted MUST verify on ALL 478 above-noise claimants (w≥3),
+40 rounds of 12, dry-run** — per the verify-everything-above-noise doctrine
+(C+D). Tier-1 state archived (.must-free) + rounds in nlm_claims.
+
+**t13 anomaly HARDENED: claimants frozen at 3 of ~1750 audited (0.2%)** — the
+saturation prediction for 9/9 generic MUSTs is fully INVERTED. User-approved
+plan on t13 completion: (1) raw-answer spot-check (parse bug vs real NLM
+silence), (2) unseal the 410-graduate opus answer key → tier-1 recall. Full
+2058-doc opus read discussed as the complete-truth option; decision deferred
+until recall numbers are in. Answer key stays sealed until then.
