@@ -1288,3 +1288,25 @@ t13's rand20). Launches automatically when the 215-doc haiku reread frees the
 per-tab read lock. t13 batch-3 (next lexical band) launches after batch-2
 verdicts are mined per the standing token-knowledge rule.
 Progress at write time: t10 142/215 · t13 batch-2 91/100.
+
+### 2026-08-17 — batch-2 mined: +2 champions (7 total recovered); all-4.0s = mode B; batch-3 launched with v3 ranking
+
+Batch-2 (lex ranks 31–130) results, all 100 scored: **CN224152886 = 4.0,
+CN117692268 = 4.0** (recovered-champion tally now 7), 7× 3.0, rest ≤2.
+Band curve NOT monotone: lex 24–25 → 0/8 ≥3; champions sat at lex 20–21 —
+the description-stuffed top of the ranking was noise.
+
+Verdict mining (standing rule): BOTH new 4.0s are **mode B structural
+analogues** (MCU + CAN transceiver + buck chain + wireless, but no
+input-device→target-message→trigger-battery functional chain; one commands a
+BMS but lacks the paired input device). Both sit in v2's unaudited tail
+(queue pos 1420/2035) — when swept, tier-1 silence on them will be CORRECT.
+Consolidated pattern: t13's whole 4.0 band = structural analogues (3/3),
+invisible to functional MUSTs BY DESIGN; the only true tier-1 FN is the
+mode-A synonym-gap 5.0 (CN116508192).
+
+Improvements fed back into **batch-3 ranking (v3)**: description dropped from
+the lexical hay (title+abstract+claims only), trigger-synonym cluster added
+(activat-/start-up/starting device/wake — the mode-A vocabulary). Batch 3 =
+top-100 of the 1,494 remaining by v3 (range 22..15), launched (opus-5), watcher
+on. t10: 212/215, sonnet batch (110, pre-registered) fires when the lock frees.
