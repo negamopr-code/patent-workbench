@@ -1188,3 +1188,28 @@ selection uses NO v2 outcomes):
 All 50 launched as one deep-compare (claude-opus-5, skip_scored=false) in
 parallel with the v2 sweep (Claude API vs NLM quota — independent, proven
 08-16). Watcher on. v2 itself: round ~5, 1 claimant (the canary at 33/33).
+
+### 2026-08-17 — 50-doc probe results: 5th recovered champion; tier-1 cross-family recall ~zero regardless of wording. Tab-10 haiku→opus re-read launched
+
+**Pre-registered 30+20 probe landed (all 50 opus-scored):**
+- top30 (lexical): **CN204215539 = 4.0 — the 5th champion recovered from old
+  rejects** (ties the 4.0 graduate band); US20170144562 + CN223333138 = 3.0
+  borderline; rest ≤2.0. Hit rate ≥4: 1/30 in the lexically DENSEST slice.
+- rand20 (control, seed 20260817): zero ≥4, one 3.0 (EP3054553). Champion
+  density in the unenriched silent mass: point estimate ~0 (n=20).
+
+**Decisive cross-check:** CN204215539 sat at queue position 12 — v2 ROUND 1,
+swept with the reworded numeral features — and stayed SILENT. Both known
+cross-family champions (CN116508192 5.0, CN204215539 4.0) are silent in v2
+while the same-family canary claims 33/33. Emerging doctrine verdict for
+generic-domain tabs: NLM tier-1 is a PRECISION instrument (what it claims is
+real) with near-zero cross-family recall REGARDLESS of feature wording; the
+cheap lexical prefilter (1 champion / 30 reads) beat the NLM sweep (0 new
+champions / 665 docs) on recall-per-cost. Full v2 completion will finalize
+the numbers; step-4 decision (full 1,594-doc opus read) now has its density
+estimate: expected remaining champions ≈ low single digits.
+
+**Tab 10 (Exam_2_478_2026) upgrade per user:** the 215 haiku-4-5-read docs
+(205 scored + 10 score-less) relaunched as one opus-5 deep-compare
+(skip_scored=false); tab-10's 1490 sonnet reads untouched for now. Runs in
+parallel with t13 v2 (quota-parked 665/2058) and after t13's finished probe.
