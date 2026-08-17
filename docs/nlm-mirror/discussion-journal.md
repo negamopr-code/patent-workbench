@@ -1310,3 +1310,31 @@ the lexical hay (title+abstract+claims only), trigger-synonym cluster added
 (activat-/start-up/starting device/wake — the mode-A vocabulary). Batch 3 =
 top-100 of the 1,494 remaining by v3 (range 22..15), launched (opus-5), watcher
 on. t10: 212/215, sonnet batch (110, pre-registered) fires when the lock frees.
+
+### 2026-08-17 — t12 tier-2 DONE (478/478, 332 claimants); FN-crossing: tier-2 FALSE-KILLED the top champion; 2a + opus-44 launched
+
+**Tier-2 quoted verify complete**: 40 rounds, 332/478 claimants, ranking
+written. Survivors w≥3 = 177 (w≥5 = 60, w≥4 = 80).
+
+**Pre-registered FN crossing (66 probed docs: opus-32 + w≥9 census, all
+scored BEFORE tier-2 verdicts):**
+- **FALSE-KILL CONFIRMED: KR20260033205 — opus 8.0, the tab's highest score —
+  survived tier-2 with verified weight 1** (one feature). The pre-registered
+  risk (verbatim-quote fragility on translated KR text) materialized exactly.
+  Champion false-kill rate in the probe: 1/3.
+- CN219576664 (4.0) → w=11, rank #3 — handled well. CN222146326 (4.0) → w=4 —
+  marginal. Over-claim control WO2025161800 (2.0) → deflated to w=3 as hoped.
+- **Top-band contamination the other way: 10 probed docs with opus ≤2 hold
+  tier-2 w≥5**, incl. EP3780316 (w=11, joint TOP rank, opus 2.0) and
+  KR20230056811 (w=10, opus 2.0). Verifiable-but-shallow quotes inflate.
+**Doctrine: quoted tier-2 weight is a candidate-generator, NOT a ranker —
+it false-kills translated champions and over-survives shallow quoters. Opus
+stays the deciding tier; the funnel's KPI is recall into the opus queue.**
+
+Launched per the agreed flow + knowledge rule:
+- **Stage 2a** (quotes-free ADDITIONAL audit): 178 docs = survivors w≥3 + the
+  KR20260033205 false-kill patch (documented /data/.t12_2a_docset.json);
+  ~6 rounds, work2 profile, quota-parks welcome.
+- **t12 opus batch 1**: all 44 w≥4 survivors without opus scores
+  (/data/.t12_opus_batch1.json) — the top band must be truth-checked before
+  the ladder/⚓/🏆 build on it. Watchers on both.
