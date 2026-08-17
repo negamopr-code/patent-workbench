@@ -1238,3 +1238,30 @@ where to stop. Launched as opus-5 deep-compare in parallel with tab-10's
 215-doc re-read (token-limit watchdog arbitrates the shared window).
 In flight now: t10 215 opus · t13 batch-2 100 opus · t13 v2 sweep
 (quota-parked 665/2058) · t12 tier-2 (quota-paused 240/478).
+
+### 2026-08-17 — USER STANDING RULE: every opus token must accumulate pattern knowledge
+
+USER: "with each opus token spent, use it wisely in order to accumulate
+knowledge on pattern and improvements." Saved as standing memory; procedure:
+after EVERY opus batch — cross verdicts vs the cheaper instruments on the same
+docs, record error patterns here, feed improvements back (TERMS/wording/
+gates/model-tier doctrine), stop batches when marginal knowledge ≈ 0.
+
+First application, zero extra tokens — the two recovered champions' verdicts
+explain t13 tier-1 silence as TWO DISTINCT MISS MODES:
+- **Mode A — synonym gap (CN116508192, 5.0)**: the doc discloses the same
+  FUNCTION in different words ("starting device applies activation signal
+  ACT → battery starts and outputs power" vs our "trigger… output electric
+  energy"). A genuine tier-1 false negative. Improvement: MUST wording and
+  lexical TERMS should carry synonym clusters (trigger/activate/start-up,
+  triggering device/starting device/activation-signal generator).
+- **Mode B — structural analogue, function inverted (CN204215539, 4.0)**:
+  MCU + Zigbee + CAN-to-BMS + multi-rail step-down = the benchmark's hardware
+  skeleton, but data flows the OTHER way (collects telemetry FROM BMS; no
+  target message triggering output). Tier-1 silence here is CORRECT — the
+  reworded functional MUSTs are genuinely not disclosed. The 3.0–4.0
+  structural band is intrinsically invisible to a functional MUST sweep;
+  its designated recall channel is lexical-prefilter → opus.
+Doctrine refinement: don't blame tier-1 recall for mode B; do fix mode A with
+synonym-widened wording. Batch-2 verdicts will be mined the same way (does
+the 25..20 lex band contain mode-A docs tier-1 should have caught?).
