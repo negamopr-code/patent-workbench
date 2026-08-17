@@ -1056,3 +1056,32 @@ saturation prediction fully inverted)**. NEXT SESSION: resume both via POST
 {"resume":true}; t13 completes in one round → raw-answer spot-check + unseal
 the 410-graduate answer key; t12 tier-2 → FN crossing → survivors → 2a/2b →
 ladder → combi views → compare vs old shortlist.
+
+### 2026-08-17 — t13 blind sweep COMPLETE (2058/2058); answer key unsealed — recall catastrophic, saturation prediction doubly wrong
+
+Both sweeps resumed login-free after a container restart (quarantine keeper,
+5th proof). **t13 finished: 59 rounds, 2058/2058, final claimants 5 (0.24%).**
+
+Step 1 — raw-answer spot-check: NOT a parse bug. Stored round answers are
+well-formed ("FEATURE n: NONE" for 57 of 60 rounds); in the 3 claimant rounds
+the parser extracted the cited numbers correctly. NLM genuinely refuses to
+claim generic features — real silence.
+
+Step 2 — 410-graduate opus answer key UNSEALED. Key: 1× 10.0 (CN223926581,
+the benchmark's own priority family), 3× 5.0, 7× 4.0, 43× 3.0; old shortlist
+49. Blind tier-1 claimants vs key:
+- **Recall vs champions w≥4: 1/11. Vs ≥5: 1/4. Vs old shortlist-49: 1/49.**
+- The one hit IS the 10.0 — CN223926581 — but it claimed only FEATURE 9
+  (weight 1/33), while opus finds 15+/24 features disclosed verbatim.
+- The other 4 claimants (KR102808807 f8, CN116508192 f9, US20260030964 f5,
+  CN101848010 f8) are old REJECTS, never opus-read → opus probe launched
+  (4 docs, claude-opus-5, per the t12 "more opus if needed" mandate).
+
+DOCTRINE VERDICT (validation pair, generic half): the pre-registered
+prediction for all-generic MUSTs was saturation → it inverted to near-total
+silence, AND recall vs known ground truth is ~9% of champions. Quotes-free
+tier-1 over generic-MUST features is not merely non-discriminative — it is
+blind in BOTH directions. t12 (numeral MUSTs, 763/1824 = 41.8% claimants)
+remains the working half of the pair; discrimination on generic tabs must
+come from a different tier-1 formulation (per-doc reformulation, quoted
+tier-1, or feature rewording before sweep).
