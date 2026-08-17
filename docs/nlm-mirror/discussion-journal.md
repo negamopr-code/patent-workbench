@@ -1137,3 +1137,28 @@ claimant rate should move from 0.24% toward t12's regime (~tens of %), and
 the known champions (CN223926581 10.0, CN116508192 5.0, the 3× 5.0/4.0
 graduates band) should claim multiple heavy features, not just the w1
 category feature. Quota-aware watcher on.
+
+### 2026-08-17 — USER doctrine + build: calibration gates shipped (deploy deferred to a safe window)
+
+USER: the v1 waste must be spottable early — verify the sweep behaves
+according to statistics BEFORE committing the full corpus; approved building
+it in "if it will not interrupt the current processing".
+
+Shipped (4295200), NOT yet deployed — patent-bench bakes code into the image
+(no /app bind), so editing /workspace cannot disturb the running sweeps, and
+the rebuild+restart waits for a parked/done window:
+- **Canary gate**: a fresh MUST sweep stages up to 3 opus champions (score≥4)
+  into round 1; if the best claims <50% of the MUST weight → park after ONE
+  round (t13 v1 would have parked at round 1: its canary claimed 3%).
+- **Corridor gate**: quotes-free corpus sweeps park outside 1%–80% claimant
+  rate after 5 rounds (blind-silence floor from t13 v1's 0.24%; saturation
+  ceiling from t14). Corridor = warning-tier: thresholds calibrated on n=4
+  sweeps only.
+- Parks use the normal pause file (resumable); fired gates are recorded in
+  state and never re-judged — one deliberate resume overrides. Pre-gate runs
+  (params without gates_v) are exempt, so the in-flight t12/t13-v2 states are
+  untouched by the deploy whenever it happens. Gates visible in
+  /claims-audit/status. Tests: 7 new pure-function cases; full suite 347 pass.
+
+DEPLOY PENDING: run scripts/serve.sh at the next window when both sweeps are
+parked (quota) or done; after the restart both need POST {"resume":true}.
