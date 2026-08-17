@@ -85,3 +85,66 @@ into the NotebookLM notebook "patent benchmark match project".
   a manual resume. Proved live twice on launch day.
 - **No keeper restarts while a session is live** (standing rule, user-confirmed): deploys
   wait for a logged-out window or explicit approval.
+
+## 2026-08-17 — Validation-pair conclusions (t12 numeral / t13 generic) + improvement plan
+
+The blind re-runs of t12/t13 against sealed opus ground truth, plus the
+pre-registered probes (opus-32, w≥9 census, 30+20 lexical/random, batches 2–3,
+opus-44), settle the instrument doctrine:
+
+**CONCLUSIONS**
+
+1. **The NLM tiers are candidate-generators, never rankers.** Tier-1 quotes-free
+   MUST sweep = precision instrument (claims are real) with two measured miss
+   modes: (A) synonym gap — same function, different vocabulary (CN116508192:
+   "starting device/activation signal" vs "trigger"; a true FN, fixable by
+   wording); (B) structural analogue — hardware skeleton without the functional
+   chain (t13's entire 4.0 band, 3/3; silence CORRECT by design, unfixable by
+   wording). Tier-2 quoted verify both false-kills translated champions
+   (KR20260033205 opus 8.0 → verified w=1; the pre-registered KR-fragility
+   risk, confirmed) and over-survives shallow quoters (28 of 32 measured
+   top-band survivors = opus ≤2, incl. a joint-top w=11 at opus 2.0).
+2. **Feature wording fixes same-family blindness only.** Reword from OCR-corrupt
+   to real vocabulary + numerals: canary went 1/33 → 33/33 of MUST weight, yet
+   both known cross-family champions stayed silent in v2. Cross-family recall
+   does not come from tier-1, however worded.
+3. **The old mega-screen rank-cut loses champions systematically**: 10+
+   recovered across t11–t13 from "rejected" pools (8.0, 5.0s, 4.0s). Blind
+   full-corpus re-sweeps + targeted opus probes are the recovery mechanism.
+4. **A cheap lexical prefilter is a legitimate recall lane** for the structural
+   band NLM cannot see: 3 champions from 130 lexically-ranked reads vs 0 new
+   champions from 665 NLM-swept docs — but it is coarse (bands non-monotone,
+   description text = noise) and decays fast (3.3% → 2% → 0%). Random controls
+   are mandatory to know when to stop (rand20 ≈ 0 killed the blanket-read idea).
+5. **Pre-opus model tiers under-score near the cut** (established t11, extended
+   today: t10's 1490 sonnet reads max out at 3.0 on a tab whose opus-era top is
+   8.0). Any old haiku/sonnet score deciding a boundary must be opus-verified.
+6. **Process discipline that paid off today**: pre-registration before outcomes;
+   canary staged into round 1 (would have caught t13-v1 in ONE round instead of
+   59); per-doc score SNAPSHOT before any re-read (haiku profile lost for lack
+   of it — paid lesson); every opus verdict mined for patterns before the next
+   batch (mode A/B taxonomy came from exactly this).
+
+**IMPROVEMENT PLAN (priority order)**
+
+- P1 (built, deploy pending): calibration gates — canary round-1 gate (hard) +
+  claimant-rate corridor 1–80% after 5 rounds (soft) — deploy serve.sh at the
+  next all-parked window; both audits need POST resume after restart.
+- P2 tier-2 translation rescue: for translation-suspect docs, a failed verbatim
+  quote must FLAG (route to opus queue), not kill — the KR 8.0 false-kill is
+  the proof case. Candidate impl: _translation_suspect × high tier-1 weight →
+  auto-opus-probe list in the finalize message.
+- P3 tier-1 synonym widening: MUST wording carries synonym clusters (mode-A
+  vocabulary from opus verdicts); consider an "implicit matches count"
+  instruction in the sweep prompt.
+- P4 funnel re-plumbing: ladder/⚓/🏆 build ONLY on opus-verified docs; tier-2
+  weight selects WHO gets opus-read (recall KPI), never final rank — formalize
+  "opus-verify the top band" as a pipeline step (done manually on t12 today).
+- P5 lexical recall lane as a standard step per tab: rank unread rejects by
+  benchmark-vocabulary regex (title+abstract+claims, no description), opus-read
+  top-N + seeded random control, stop at marginal ≈ 0.
+- P6 model-tier hygiene: inventory pre-opus scores per tab; re-read top bands
+  with opus (t10 in progress: haiku-215 done, sonnet ≥2-band + 1.0-control
+  running); ALWAYS snapshot scores first (now standing).
+- P7 full-corpus opus reads stay gated on measured density (t13's rand20 says
+  no; the t10 sonnet-1.0 control will say for t10).

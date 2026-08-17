@@ -1366,3 +1366,38 @@ ADDITIONAL coverage survives even though MUST quotes died. **Stage 2b
 (quoted pairs verify) LAUNCHED**: 78 docs, ~4 rounds.
 t13 v2 sweep still quota-parked 665/2058 (next probe 20:23 UTC). Combined
 resume-aware watcher now covers all five processes.
+
+### 2026-08-17 (night) — session freeze recovery; t12 opus-44 COMPLETE (4 champions, 86% contamination); 4 NEW t10 champions from the sonnet band; batch-3 stopped at marginal≈0
+
+The Claude terminal session froze (wedged relay — the known 08-13 pattern);
+work in patent-bench was UNAFFECTED. On reconnect every process was accounted
+for: t13 v2 sweep quota-parked 665/2058 (auto-resume armed), 2b auth-parked
+(auto-retry armed), t12 opus tail running. Only the /tmp monitor scripts died;
+no server-side state was lost — the park-and-resume design passed an
+unplanned host-side crash test.
+
+**t12 opus-44 COMPLETE (44/44)**: champions CN119833811 5.0 · CN218472047
+4.0 · KR102897392 4.0 · **CN121906003 4.0 (new, found in the final tail)**;
+3.0 = EP4350327, WO2026047565 (w=12). Full-band contamination: **38/44
+(86%) of w≥4 tier-2 survivors = opus ≤2** — the candidate-generator-not-
+ranker doctrine now carries a measured full-band number.
+
+**t10 sonnet-band batch (48/110 read before the stall): 4 NEW champions —
+US20220221016 = 6.0 (pre-batch sonnet 3.0), US10996236 = 4.0 (3.0),
+EP3849091 = 4.0 (3.0), TW201717523 = 4.0 (sonnet 2.0)**. All four from the
+≥2 band, none from rand-20 so far. Lesson 5 (pre-opus tiers under-score
+near the cut) reconfirmed on a second tab: the sonnet 3.0 ceiling was
+hiding a 6.0. Remaining 62 relaunched on opus (Continue-equivalent: unread
+ids only).
+
+**t13 lexical batch-3 STOPPED at 53/100** per the standing marginal≈0 rule:
+0 champions, 3× 3.0, after batch-2's 2 champions — the v3 lexical band's
+yield decayed to zero exactly as the 3.3%→2%→0% curve predicted. The
+remaining silent mass stays with the density argument (rand20 ≈ 0). The
+stall itself: both stalled reads (t13 b3, t10-110) had no resume file —
+their last watchdog relaunch died without re-arming; relaunch-by-hand was
+the fix. Watchdog hardening noted as a candidate P4.
+
+Queue unchanged: 2b pairs → ladder → ⚓/🏆 → vs old 47-shortlist; calibration
+gates deploy still waits for an all-parked window (both sweeps parked AND no
+Claude reads in flight), then POST resume to both audits.
