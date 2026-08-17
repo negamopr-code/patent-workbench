@@ -1103,3 +1103,37 @@ so far has found at least one champion the old screen rejected.
 
 t12 tier-2: quota-paused at 240/478 (round 20, 174 claimants), auto-resume
 armed 07:08 UTC; quota-aware watcher holds.
+
+### 2026-08-17 — USER approved the instrument-fix sequence: t13 MUSTs reworded, v2 blind sweep launched
+
+USER (on the unseal result): confirmed t13's silence = correct pipeline
+mechanics, NLM judgment wrong; approved "reword features and re-sweep t13"
+(step 1 of the sequence: reword → re-sweep → opus-probe claimants → stratified
+opus sample of silent rejects → full opus read only if density warrants).
+
+Reword executed: the opus verdict of CN223926581 (10.0, the benchmark's own
+priority family) used as the translation table from the benchmark's
+OCR-corrupted vocabulary to real document terms:
+- "expansion module" → control module (122); "expansion function ports" →
+  wired communication interface / CAN·LIN port for the battery management
+  equipment (BMS/BMU); "target identification number → target identification
+  device → target electrical messages" → target message/signal to the BMS
+  triggering the battery to start and output electric energy; "converts analog
+  to digital" → transceiver (1222) converts the target message into the target
+  signal (CANH/CANL).
+- All 9 M features now carry the family's reference numerals (110/120/121/
+  122/1221/1222) per the specificity doctrine (t11: numeral MUSTs → 0.12% FN);
+  weights and kinds unchanged; the 15 A features untouched.
+- v1 artifacts archived: /data/.t13_features_v1_generic.json +
+  /data/.nlm_claims_13.json.must-free-v1-genericwording (the auto-archive
+  would not fire — v2 runs the same must/quotes-free mode).
+- Side effect accepted: benchmark updated_at bumped → the 414 stored opus
+  reads count as stale for Continue-mode; scores/verdicts remain valid.
+
+**t13 v2 sweep RUNNING**: scope=corpus, 2058 docs, quotes-free MUST,
+batch 35, ~59 rounds, dry-run, default/bubu profile. Prediction registered
+BEFORE results (doctrine discipline): if wording was the root cause, v2
+claimant rate should move from 0.24% toward t12's regime (~tens of %), and
+the known champions (CN223926581 10.0, CN116508192 5.0, the 3× 5.0/4.0
+graduates band) should claim multiple heavy features, not just the w1
+category feature. Quota-aware watcher on.
