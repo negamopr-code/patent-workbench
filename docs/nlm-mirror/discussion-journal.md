@@ -1338,3 +1338,31 @@ Launched per the agreed flow + knowledge rule:
 - **t12 opus batch 1**: all 44 w≥4 survivors without opus scores
   (/data/.t12_opus_batch1.json) — the top band must be truth-checked before
   the ladder/⚓/🏆 build on it. Watchers on both.
+
+### 2026-08-17 (evening) — token window tripped mid-batch (watchdogs armed & verified); +3 t12 champions; 2a done; 2b launched; t10 haiku re-read done
+
+Session token limit hit ~19:23 UTC mid-reads — the built-in watchdogs armed
+exactly as designed (resume files present, re-probe 19:38/19:39, Continue
+mode). LIVE VERIFICATION of the mechanism the user asked for.
+
+**t12 opus-44 (32/44 before the limit): 3 MORE champions recovered —
+CN119833811 = 5.0 (tier-2 w=9), KR102897392 = 4.0 (w=6), CN218472047 = 4.0
+(w=3)** · WO2026047565 3.0 at w=12; but 28 of 32 top-band survivors = opus
+≤2 — top-band contamination now measured, not suspected.
+**t13 batch-3 (53/100): 0 champions, 3× 3.0** — v3-band yield falling;
+if the remaining 47 stay dry, the lexical lane stops (marginal ≈ 0), leaving
+the silent mass to the density argument (rand20 ≈ 0).
+**t10: all 215 haiku docs re-read by opus-5** (0 haiku-labeled remain; 502
+opus-scored on tab). ⚠ LESSON (cost paid): per-doc haiku scores were
+OVERWRITTEN un-snapshotted — the haiku-vs-opus error profile is lost except
+in aggregate. Rule applied immediately: full per-doc score snapshot written
+BEFORE the sonnet batch (/data/.t10_scores_snapshot_pre_sonnet_batch.json,
+2047 docs) — snapshot-before-reread is now standing procedure.
+**t10 sonnet batch (110 = ≥2-band 90 + rand-20 of 1.0-band) LAUNCHED** —
+will park on the limit and auto-resume.
+**t12 stage 2a DONE**: 6 rounds, 178/178, 78 claimants; additional-coverage
+top: KR20240099963 w17, KR20260033205 (the false-killed 8.0) high — its
+ADDITIONAL coverage survives even though MUST quotes died. **Stage 2b
+(quoted pairs verify) LAUNCHED**: 78 docs, ~4 rounds.
+t13 v2 sweep still quota-parked 665/2058 (next probe 20:23 UTC). Combined
+resume-aware watcher now covers all five processes.
