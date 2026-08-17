@@ -1162,3 +1162,29 @@ the rebuild+restart waits for a parked/done window:
 
 DEPLOY PENDING: run scripts/serve.sh at the next window when both sweeps are
 parked (quota) or done; after the restart both need POST {"resume":true}.
+
+### 2026-08-17 — USER: parallel opus material for the phenomenon; pre-registered 30+20 launched
+
+USER (on v2 staying at 1 claimant/140): launch opus reads in parallel for the
+most promising docs so we have materials to understand the phenomenon
+regardless of what v2 shows.
+
+Signal audit first: the 1644 unread t13 docs are ALL old rejects with zero
+stored promise signals (no nlm_score, no shortlist, 10 digests) — "promising"
+had to be constructed. Pre-registered design (/data/.t13_promise_sample.json,
+selection uses NO v2 outcomes):
+- **Lexical top-30**: weighted regex proxy over the reworded MUST vocabulary
+  (control module w5, BMS/battery-management w5, CAN/LIN w5, wireless comm
+  module w4, transceiver w3, target message/signal w3, trigger w3,
+  step-down/buck w3, input device/keyboard w2, message generat- w2,
+  battery w5) against title+abstract+claims+description[:20k]. Range 30..25
+  of 42 max; top: CN110325929 (30), CN106973460/CN207011032/CN115623437/
+  CN210091371/CN116667491/CN219919177/CN108749607/US20170144562 (28).
+- **Random-20 control**: seed 20260817 from the remaining 1614 — the density
+  baseline that makes top-30 hit-rates interpretable (and feeds the
+  full-read-worthwhile decision, step 4 of the approved sequence).
+- Plus standing: every NEW v2 claimant gets an opus read as it appears.
+
+All 50 launched as one deep-compare (claude-opus-5, skip_scored=false) in
+parallel with the v2 sweep (Claude API vs NLM quota — independent, proven
+08-16). Watcher on. v2 itself: round ~5, 1 claimant (the canary at 33/33).
