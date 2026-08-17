@@ -1085,3 +1085,21 @@ blind in BOTH directions. t12 (numeral MUSTs, 763/1824 = 41.8% claimants)
 remains the working half of the pair; discrimination on generic tabs must
 come from a different tier-1 formulation (per-doc reformulation, quoted
 tier-1, or feature rewording before sweep).
+
+### 2026-08-17 — t13 claimant opus probe landed: 4th recovered champion (CN116508192 = 5.0)
+
+The 4 unscored t13 reject-claimants opus-read: **CN116508192 = 5.0 — the old
+screen dropped another champion**; it ties the 3× 5.0 band, i.e. joint #2 on
+the tab behind the 10.0. Its blind claim was FEATURE 9 only (weight 1/33) —
+same pattern as the 10.0: real champions surface in the generic-MUST sweep at
+noise-level claimed weight. The other three (KR102808807, US20260030964,
+CN101848010) scored 1.0 — noise, as their single-feature claims suggested.
+
+Updated t13 scorecard: blind claimants 5 = 2 champions (10.0 + 5.0) + 3 noise.
+Precision 2/5; recall vs champions w≥4 (now 12 with the recovery) = 2/12.
+Recovered-champion tally across the validation pair: t12 gave 3 (KR20260033205
+8.0 · CN219576664 4.0 · CN222146326 4.0), t13 gives a 4th — every blind sweep
+so far has found at least one champion the old screen rejected.
+
+t12 tier-2: quota-paused at 240/478 (round 20, 174 claimants), auto-resume
+armed 07:08 UTC; quota-aware watcher holds.
