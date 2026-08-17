@@ -146,3 +146,95 @@ def test_transient_error_classifier():
     assert not _claims_transient_error("RESOURCE_EXHAUSTED (error code 8)")
     assert not _claims_transient_error("round answer truncated twice")
     assert not _claims_transient_error("")
+
+
+# ---------- instrument-calibration gates (t13-v1 lesson, 2026-08-17) ----------
+from patentbench.web.api import _claims_gates_check
+
+MUST9 = [["f1", 5], ["f2", 5], ["f3", 5], ["f4", 4], ["f5", 4],
+         ["f6", 3], ["f7", 3], ["f8", 3], ["f9", 1]]          # total weight 33
+
+
+def _gate_state(**kw):
+    st = {"params": {"gates_v": 1, "feature_kind": "must", "quotes": False,
+                     "scope": "corpus", "canary_ids": [8108],
+                     "pairs": False},
+          "must": MUST9, "claims": {}, "round": 1, "cursor": 35, "gates": {}}
+    params = kw.pop("params", None)
+    if params:
+        st["params"].update(params)
+    st.update(kw)
+    return st
+
+
+def test_canary_fires_on_blind_instrument():
+    # t13 v1 replica: the 10.0 champion claimed ONLY feature 9 (weight 1/33)
+    st = _gate_state(claims={"8108": {"9": ["claimed", ""]}})
+    new, park = _claims_gates_check(st)
+    assert park and park[0] == "canary"
+    assert new["canary"].startswith("FIRED")
+
+
+def test_canary_passes_on_healthy_instrument():
+    # t13 v2 replica: the champion claims all nine MUSTs
+    st = _gate_state(claims={"8108": {str(i): ["claimed", ""] for i in range(1, 10)}})
+    new, park = _claims_gates_check(st)
+    assert park is None
+    assert new["canary"].startswith("passed")
+
+
+def test_canary_counts_weight_not_features():
+    # heavy features only (5+5+5+4 = 19/33 = 58%) → passes the 50% bar
+    st = _gate_state(claims={"8108": {"1": ["claimed", ""], "2": ["claimed", ""],
+                                      "3": ["claimed", ""], "4": ["claimed", ""]}})
+    new, park = _claims_gates_check(st)
+    assert park is None and new["canary"].startswith("passed")
+
+
+def test_corridor_fires_on_silence_and_saturation():
+    # canary passed earlier; round 5, 1 claimant / 175 audited = 0.57% → blind
+    st = _gate_state(round=5, cursor=175,
+                     claims={"8108": {"1": ["claimed", ""]}},
+                     gates={"canary": "passed"})
+    new, park = _claims_gates_check(st)
+    assert park and park[0] == "corridor" and "below" in park[1]
+    # saturation: 160/175 = 91% claimants
+    st = _gate_state(round=5, cursor=175,
+                     claims={str(i): {"1": ["claimed", ""]} for i in range(160)},
+                     gates={"canary": "passed"})
+    new, park = _claims_gates_check(st)
+    assert park and park[0] == "corridor" and "above" in park[1]
+
+
+def test_corridor_passes_healthy_rate_and_fires_once():
+    st = _gate_state(round=5, cursor=175,
+                     claims={str(i): {"1": ["claimed", ""]} for i in range(70)},
+                     gates={"canary": "passed"})
+    new, park = _claims_gates_check(st)
+    assert park is None and new["corridor"].startswith("passed")
+    # a fired/recorded gate is never re-judged (resume overrides once)
+    st["gates"]["corridor"] = "FIRED — claimant rate 0.57%"
+    st["claims"] = {"8108": {"1": ["claimed", ""]}}
+    new, park = _claims_gates_check(st)
+    assert park is None and "corridor" not in new
+
+
+def test_gates_skip_legacy_tier2_and_pairs_runs():
+    # legacy state (no gates_v) — e.g. a sweep resumed across the deploy
+    st = _gate_state(claims={"8108": {"9": ["claimed", ""]}})
+    del st["params"]["gates_v"]
+    assert _claims_gates_check(st) == ({}, None)
+    # pairs/2b runs and ADDITIONAL audits are exempt
+    assert _claims_gates_check(_gate_state(params={"pairs": True})) == ({}, None)
+    assert _claims_gates_check(_gate_state(params={"feature_kind": "additional"})) == ({}, None)
+    # quoted tier-2 style run: canary still judged, corridor exempt
+    st = _gate_state(params={"quotes": True}, round=5, cursor=175,
+                     claims={"8108": {str(i): ["claimed", ""] for i in range(1, 10)}})
+    new, park = _claims_gates_check(st)
+    assert park is None and new["canary"].startswith("passed") and "corridor" not in new
+
+
+def test_canary_skipped_without_champions():
+    st = _gate_state(params={"canary_ids": []})
+    new, park = _claims_gates_check(st)
+    assert park is None and new["canary"].startswith("skipped")

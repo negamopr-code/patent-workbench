@@ -4331,7 +4331,8 @@ def _claims_status(tab_id: int) -> dict:
             "quotes": (st.get("params") or {}).get("quotes", True),
             "pairs": (st.get("params") or {}).get("pairs", False),
             "ranking": st.get("ranking") if st.get("step") == "done" else None,
-            "applied": st.get("applied", False)}
+            "applied": st.get("applied", False),
+            "gates": st.get("gates") or None}
 
 
 def _quote_norm(s: str) -> str:
@@ -4552,6 +4553,80 @@ def _claims_query(tab_id: int, nb: str, question: str) -> dict:
 _CLAIM_OK = ("verified", "fuzzy", "claimed")   # 'claimed' only exists in quotes-free runs
 _CLAIM_STATUS_RANK = {"verified": 3, "fuzzy": 2, "claimed": 1, "unverified": 0}
 
+# ---------- instrument-calibration gates ----------
+# t13 v1 (2026-08-17) burned 59 rounds with OCR-corrupted MUST wording: the
+# benchmark's own priority-family doc (opus 10.0) claimed 1/33 of the MUST
+# weight in round 1 — the blindness was visible immediately, but nothing
+# looked. Two code-only gates now judge a fresh MUST sweep at its round
+# boundaries; a fired gate parks the sweep (pause file → resumable), and the
+# fired flag is recorded so a deliberate resume overrides it exactly once.
+CANARY_MIN_FRACTION = 0.5   # round-1 champion must claim ≥ this share of MUST weight
+CORRIDOR_ROUNDS = 5         # corpus rounds audited before the rate corridor is judged
+CORRIDOR_LOW = 0.01         # < 1% claimants ⇒ instrument-blind regime (t13 v1: 0.24%)
+CORRIDOR_HIGH = 0.80        # > 80% claimants ⇒ saturation regime (t14 pseudo-survivors)
+
+
+def _claims_gates_check(st: dict) -> tuple[dict, tuple[str, str] | None]:
+    """Judge the calibration gates at a round boundary. Returns (new_gates, park):
+    new_gates = gate verdicts to record in st['gates'], park = (gate, message)
+    when the sweep should pause, else None. Pure — no I/O.
+
+    Only sweeps STARTED with gates armed (params carries 'gates_v') are judged,
+    so resumed pre-gate runs are never touched. CANARY: known opus champions are
+    staged into round 1 and the best of them must claim ≥ CANARY_MIN_FRACTION of
+    the MUST weight (a citation counts regardless of quote-verification status —
+    presence means NLM sees the doc). CORRIDOR: a quotes-free corpus sweep must
+    show a claimant rate between blind silence and saturation after
+    CORRIDOR_ROUNDS rounds. A gate already recorded is never re-judged."""
+    params = st.get("params") or {}
+    if not params.get("gates_v") or params.get("pairs") \
+            or params.get("feature_kind", "must") != "must":
+        return {}, None
+    gates = dict(st.get("gates") or {})
+    new: dict = {}
+    must = st.get("must") or []
+    total_w = sum(w for _, w in must) or 1
+    claims = st.get("claims") or {}
+    rnd = int(st.get("round", 0))
+    canaries = params.get("canary_ids") or []
+    if "canary" not in gates:
+        if not canaries:
+            new["canary"] = "skipped — no opus-scored champions in the queue"
+        elif rnd >= 1:
+            best = max((sum(w for i, (_n, w) in enumerate(must, 1)
+                            if str(i) in (claims.get(str(cid)) or {})) / total_w
+                        for cid in canaries), default=0.0)
+            if best >= CANARY_MIN_FRACTION:
+                new["canary"] = f"passed — best champion claimed {best:.0%} of MUST weight"
+            else:
+                new["canary"] = f"FIRED — best champion claimed {best:.0%}"
+                return new, ("canary",
+                    f"the best known champion claimed only {best:.0%} of the MUST "
+                    f"weight in round 1 (threshold {CANARY_MIN_FRACTION:.0%}) — the "
+                    "feature wording is likely invisible to NLM (t13-v1 lesson: "
+                    "OCR-corrupted vocabulary). Reword the MANDATORY features and "
+                    "relaunch; resuming overrides this gate once.")
+    if ("corridor" not in gates and params.get("scope") == "corpus"
+            and not params.get("quotes", True) and rnd >= CORRIDOR_ROUNDS):
+        audited = int(st.get("cursor", 0)) or 1
+        rate = len(claims) / audited
+        if rate < CORRIDOR_LOW:
+            new["corridor"] = f"FIRED — claimant rate {rate:.2%} below {CORRIDOR_LOW:.0%}"
+            return new, ("corridor",
+                f"claimant rate {rate:.2%} after {rnd} rounds ({len(claims)}/{audited}) "
+                f"is below the blind-silence floor ({CORRIDOR_LOW:.0%}) — the healthy "
+                "numeral-MUST regime runs in the tens of percent (t11/t12). Check the "
+                "feature wording; resuming overrides this gate once.")
+        if rate > CORRIDOR_HIGH:
+            new["corridor"] = f"FIRED — claimant rate {rate:.2%} above {CORRIDOR_HIGH:.0%}"
+            return new, ("corridor",
+                f"claimant rate {rate:.2%} after {rnd} rounds ({len(claims)}/{audited}) "
+                f"is above the saturation ceiling ({CORRIDOR_HIGH:.0%}) — generic MUSTs "
+                "produce pseudo-survivors (t14 lesson). Tighten the feature wording; "
+                "resuming overrides this gate once.")
+        new["corridor"] = f"passed — claimant rate {rate:.2%} after {rnd} rounds"
+    return new, None
+
 
 def _run_claims_audit(tab_id: int) -> None:
     lock = _claims_lock_path(tab_id)
@@ -4646,6 +4721,18 @@ def _run_claims_audit(tab_id: int) -> None:
                              error=None,
                              status_text=f"round {rnd} done — {len(merged)} claimant(s) so far")
             _claims_heartbeat(tab_id)
+            new_gates, park = _claims_gates_check(st)
+            if new_gates:
+                st = _claims_set(tab_id, gates={**(st.get("gates") or {}), **new_gates})
+            if park:
+                gate, msg = park
+                with open(_claims_pause_path(tab_id), "w"):
+                    pass
+                _claims_set(tab_id, status_text=f"🚦 parked by the {gate} gate")
+                db.append_message(tab_id, "s",
+                    f"🧾 Claims audit PARKED by the {gate} calibration gate after "
+                    f"round {rnd}: {msg}")
+                return
         _claims_finalize(tab_id, _claims_set(tab_id, step="finalize"))
     except Exception as exc:                             # keep the state file → resumable
         if _claims_transient_error(str(exc)):            # staging/auth failures self-heal
@@ -4932,16 +5019,31 @@ def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
                                "" if pp.get("quotes", True) else "-free"))
         except OSError:
             pass
+    # Calibration gates (t13-v1 lesson): stage up to 3 known opus champions into
+    # round 1 as CANARIES — if the instrument works, the best of them must claim
+    # most of the MUST weight immediately; if not, park after ONE round instead
+    # of sweeping the whole corpus with blinded feature wording.
+    canary_ids: list[int] = []
+    if body.features == "must" and not body.pairs:
+        champs = sorted((d for d in docs if (d.get("score") or 0) >= 4),
+                        key=lambda d: -(d["score"] or 0))
+        canary_ids = [d["id"] for d in champs[:3]]
+        if canary_ids:
+            front = set(canary_ids)
+            docs = ([d for d in docs if d["id"] in front]
+                    + [d for d in docs if d["id"] not in front])
     n_feats = len(must_list if body.pairs else feats)
     _claims_set(tab_id, step="round", queue=[d["id"] for d in docs], cursor=0, round=0,
                 roster=[],
                 claims=(seed_claims if body.pairs else {}), pairs=pair_map,
-                unmatched=[], failed=[],
+                unmatched=[], failed=[], gates={},
                 must=(must_list if body.pairs else
                       [[f["name"], f.get("weight") or 1] for f in feats]),
                 params={"batch_size": body.batch_size, "target": body.target,
                         "apply": body.apply, "feature_kind": body.features,
-                        "quotes": body.quotes, "pairs": body.pairs},
+                        "quotes": body.quotes, "pairs": body.pairs,
+                        "scope": body.scope, "gates_v": 1,
+                        "canary_ids": canary_ids},
                 started_at=db._now(), quota=None, stop=False, error=None,
                 status_text="queued…")
     rounds = -(-len(docs) // body.batch_size)
@@ -4957,7 +5059,12 @@ def claims_audit_start(tab_id: int, body: schemas.ClaimsAuditRequest):
            "hallucinated quotes score 0). " if body.quotes else
            "quotes-free recall mode (claims counted, verified later for whoever advances). ")
         + (f"{'Shortlist will be REWRITTEN on completion.' if body.apply else 'Dry-run: shortlist untouched.'} "
-           "Zero Claude tokens; survives restarts; quota pauses auto-resume."))
+           "Zero Claude tokens; survives restarts; quota pauses auto-resume. "
+           + (f"🚦 Canary gate armed: {len(canary_ids)} known champion(s) staged "
+              "into round 1 — a blind instrument parks after one round."
+              if canary_ids else
+              "🚦 Canary gate skipped (no opus-scored champions ≥4 in the queue)."
+              if body.features == "must" and not body.pairs else "")))
     return {"started": _claims_launch(tab_id), "rounds_estimate": rounds,
             **_claims_status(tab_id)}
 
