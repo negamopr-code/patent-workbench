@@ -1265,3 +1265,26 @@ explain t13 tier-1 silence as TWO DISTINCT MISS MODES:
 Doctrine refinement: don't blame tier-1 recall for mode B; do fix mode A with
 synonym-widened wording. Batch-2 verdicts will be mined the same way (does
 the 25..20 lex band contain mode-A docs tier-1 should have caught?).
+
+### 2026-08-17 — USER: chain the opus reads; NLM processes untouched. t10 sonnet batch pre-registered
+
+USER: once a read finishes start the next; if the token window trips, a
+watcher must relaunch when it's back — t13 continues as agreed (lexical
+bands), t10 continues into the sonnet-4.6 population, most promising first.
+All NLM processes run as agreed (t13 v2 + t12 auto-resume armed, untouched).
+
+Token-limit resilience verified in code: the built-in ⏳ watchdog persists the
+read request next to the DB, parses the announced reset time, wakes with
+margin, verifies with a tiny call and relaunches the SAME read in Continue
+mode (already-read docs skipped; survives container restarts; auth errors
+handled on a 2-min probe via the reseed daemon). External watchers only report.
+
+t10 next batch PRE-REGISTERED (/data/.t10_sonnet_sample.json): sonnet dist is
+3×3.0 · 85×2.0 · 1126×1.0 · 276×0.0 → batch = ALL ≥2.0 (88) + 2 unscored +
+random-20 control from the 1.0 band (seed 20260817) = 110 docs. The control
+measures sonnet's underscoring profile — it decides whether the 1126-doc 1.0
+band can be trusted or hides champions (same instrument-calibration logic as
+t13's rand20). Launches automatically when the 215-doc haiku reread frees the
+per-tab read lock. t13 batch-3 (next lexical band) launches after batch-2
+verdicts are mined per the standing token-knowledge rule.
+Progress at write time: t10 142/215 · t13 batch-2 91/100.
