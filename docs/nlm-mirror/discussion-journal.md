@@ -1213,3 +1213,28 @@ estimate: expected remaining champions ≈ low single digits.
 (205 scored + 10 score-less) relaunched as one opus-5 deep-compare
 (skip_scored=false); tab-10's 1490 sonnet reads untouched for now. Runs in
 parallel with t13 v2 (quota-parked 665/2058) and after t13's finished probe.
+
+### 2026-08-17 — USER: continue t13 opus? → batch 2 launched (lexical ranks 31–130)
+
+USER asked whether to continue t13 with another opus batch. Recommendation
+given and executed: targeted, not blanket — rand20's 0/20 says the flat mass
+is near-empty; the only enriched region left is the lexical tail. **Batch 2 =
+next 100 docs by the SAME pre-registered lexical score (ranks 31–130, lex
+25..20; design /data/.t13_promise_batch2.json)** — methodology unchanged so
+the hit-rate-vs-lex-band curve stays comparable and shows when to stop
+(top-30 band: 1×4.0 + 2×3.0). Runs concurrently with tab-10's 215-doc
+haiku→opus read (token-limit watchdog arbitrates the shared window).
+t13 opus coverage after this batch: 564/2058.
+
+### 2026-08-17 — USER: continue t13 opus? → YES, targeted: batch 2 = lexical ranks 31–130 launched
+
+Decision logic recorded: rand20 (0/20 ≥4) says the flat silent mass is
+near-empty — a blanket read of 1,594 docs is not justified; the lexical tail
+below the top-30 is the only remaining enriched region (top-30 yielded 1×4.0).
+Batch 2 = the NEXT 100 by the SAME pre-registered lexical score (ranks
+31–130, lex 25..20; design /data/.t13_promise_batch2.json) — methodology
+unchanged so the hit-rate-vs-lexical-band curve stays comparable and tells us
+where to stop. Launched as opus-5 deep-compare in parallel with tab-10's
+215-doc re-read (token-limit watchdog arbitrates the shared window).
+In flight now: t10 215 opus · t13 batch-2 100 opus · t13 v2 sweep
+(quota-parked 665/2058) · t12 tier-2 (quota-paused 240/478).
