@@ -2047,3 +2047,25 @@ expect the 7168afd corpus-top block.
 **DEPLOY: NOT deployed** — ships in the next parked/done sweep window together with
 the WEB_CONCURRENCY decision. Until then the live app still shows the wrong Must
 sort (🤖 sort remains the truthful view).
+
+**User:** "meaning that for t13 you expect no documents to cover benchmark or can you probe something with opus 5 in the meantime"
+
+**Claude (expectation quantified + opus probe launched):** Expectation = a clean
+negative, now with structural evidence beyond the sweep:
+- Among ALL 616 opus-read organic docs (canary CN223926581 excluded), **no single
+  doc and no 2-doc pair** assembles the 9 MUST elements: zero pairs come within
+  2 hard-✓ of the union (~189k pairs checked from stored per-element verdicts,
+  free, no model call). Best solo = 3✓+4~.
+- Per-element bottleneck: the first three MUST elements have **0 hard-✓ across the
+  entire read corpus** (battery-triggering device concept: 0✓/18~; input-device +
+  message-generating-device architecture: 0✓/56~; wireless-module + control-module
+  composition: 0✓/84~). The inventive core (trigger-a-battery-via-message-to-BMS)
+  is simply not disclosed anywhere read so far — the gap is structural, so even
+  obviousness combinations can't be built from hard coverage.
+Meaningful non-redundant probe found and LAUNCHED: the embeddings recall lane
+(.t13_embed_lane_queue_2026-08-18.json, built 14:02) had 34 of its 75
+semantically-nearest candidates still unread — incl. CN114402705, the #2 semantic
+neighbor after the canary. Opus-5 deep read of all 34 started 14:5x
+(doc_ids batch, skip_scored; Claude-side only, NLM sweep untouched — same
+parallel pattern as t10 interim-41). If even the top embedding neighbors score
+low, the negative is closed from the recall side too.
