@@ -1998,3 +1998,24 @@ accumulated 4.1 → few hundred MB; (2) .wslconfig memory/swap raise on Windows 
 only real headroom fix, still pending user); (3) longer-term app work: stream
 corpora from SQLite instead of holding them per-worker (only if pressure persists
 after 1+2).
+
+**User (2026-08-18 ~14:25 UTC):** "again crash, did you manage to change a bug on t10 ranking?"
+
+**Claude:** Crash #3 (container restarted 14:22 UTC; only gunicorn came back — both
+sweeps and the watcher died, progress survived on /data). Answer on the t10 ranking
+bug — it is TWO distinct issues:
+1. **Corpus-top block (7168afd) — NOW DEPLOYED.** It was committed but not live
+   (image predated the commit; deploy was parked until a sweep window). The crash
+   opened that window: rebuilt via scripts/serve.sh, verified the CURRENT CORPUS
+   TOP-10 block is in the running api.py. Batch-scoped runs can no longer crown a
+   local "BEST FIT" in the deep-read chat.
+2. **Must-sort orphans (pre-rewording reads, 0/11 name match) — NOT yet fixed by
+   design:** the position-remap / "assessed under older wording" badge fix still
+   awaits the user's approval. Scores are intact; switching the tab sort to 🤖
+   shows the true opus leaders (2×6.0).
+Recovery: locks backdated (threads provably dead), both audits POST-resumed —
+t10 r19→staging r20 (665/2046, 527 claimants), t13 v2 r43 (1505/2058) — and
+sweep-watcher re-armed inside patent-bench.
+Still pending for a FUTURE deploy window (needs user decision): WEB_CONCURRENCY=1
+(−~2 GB RSS) and the Must-sort remap fix; .wslconfig raise remains the only real
+headroom lever.
