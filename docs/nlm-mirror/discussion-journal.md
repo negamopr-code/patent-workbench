@@ -1575,3 +1575,63 @@ opus-5-scored, 24 opus-4.8, 103 sonnet-4-6. Design /data/.t10_interim_claimants_
 41 docs → deep-compare reading_model=claude-opus-5, skip_scored=true (model-aware
 continue). External stall-watcher armed (P4 workaround). On land: cross opus verdicts
 vs interim claim-weights → journal + skill, per the token-spend learning loop.
+
+## 2026-08-18 — VERBATIM chat log (new standing rule: every user message + Claude's answers go into this source, synced immediately — NLM = crash-proof chat history)
+
+**User:** "again crashed... continue"
+
+**Claude:** Recovered: patent-bench survived the crash (`--restart unless-stopped`), t10
+mega-screen still running (round 10, 350/2046, 267 claimants, both gates passed), t13 v2
+interrupted at round 33 → resumed via POST {"resume":true}, t12 done. Re-armed an
+external watchdog that auto-resumes interrupted sweeps every 5 min.
+
+**User:** "my question to you was the update of lesson learned in nlm and closing the loop of what you learned in t12 tab as you reported it as finished"
+
+**Claude:** Closed the loop: (1) re-ran sync-nlm-mirror.sh — all 3 sources replaced in
+notebook 35690175 (the crash had killed the sync); (2) folded t12 doctrine into the
+patent-search-pipeline skill — 4 dated lesson blocks (opus-only ranker / 36% rank-cut
+recall; tier hygiene 3-for-3 + snapshot-first; lexical lane = closure; 4 NLM blind
+spots; calibration gates; identifier normalization) + 2 SKILL.md anti-patterns (#7
+cheap-rank shortlists, #8 translation-layer quotes) + a standing TOKEN-SPEND LEARNING
+LOOP section; (3) cross-project snapshot-before-destructive-rescore lesson into the
+lessons-learned skill; (4) verified t12 shortlist applied in DB: 14 docs, all
+claude-opus-5, KR20260033205 8.0 at rank 1.
+
+**User:** "we need to always learn something from token spends, like in t12 what can we learn from opus reads and so on, also short list you wanted to update"
+
+**Claude:** The learn-from-every-token-spend loop is now baked into the skill itself as
+a standing section (cross vs cheaper signals → name error patterns → fold into
+wording/TERMS/skill → stop at marginal≈0, record the zero). Shortlist verified applied
+(see above).
+
+**User:** "also consider opus read in parallel for the current tabs assessement"
+
+**Claude:** Applied the sweep-orders/opus-ranks doctrine live: launched a 41-doc opus-5
+deep-read on t10 IN PARALLEL with the running mega-screen. Design
+/data/.t10_interim_claimants_2026-08-18.json (snapshot taken first): Lane A (8) =
+claimants ≥5/11 MUSTs not opus-5 — all sonnet-1.0, the uncovered inversion-risk class,
+headline US10158257 with 10/11 MUSTs at sonnet 1.0; Lane B (23) = opus-4.8-scored
+claimants (tier hygiene); Lane C (10) = seeded random control (seed 20260818).
+Stall-watcher armed (P4 workaround).
+
+**User:** "and even in rejected documents for t12 we can probably still probe some layers like you did before per 10 documents each in order to confirm that we did not miss anything, so this principle can be applied to all 4 tabs treated right now in parallel"
+
+**Claude:** Computed the unprobed reject layers for tabs 10/12/13/14
+(/data/.reject_probe_layers_2026-08-18.json, seeds 20260818+tab): L1 = silent mass
+(never claimed in any round, not opus-read), L2 = claimed-but-never-opus-read.
+Launched NOW: t12 L1+L2 (10+10; silent=1054, claimed-unread=560) and t14 L1+L2 (10+10;
+silent=220, claimed-unread=1254 — notable because t14's closure rested on
+quote-verification, which t12 proved translation-fragile). SKIPPED t13 (claimed-unread=0
+— every claimant already opus-read; silent mass has its measured zero from the
+seed-20260817 rand-20 — no re-spend at marginal≈0). DEFERRED t10 (silent mass not final
+mid-sweep; L2 probe queues after the 41-batch). t11 excluded from "the 4 tabs" — its
+corpus was read near-fully (1540/1605) and closed 08-12; same treatment available on
+request. Watchers armed for both probes.
+
+**User:** "the crash survivors can be also completed by what I already said to you, specifically everything I write here should be in the source document of nlm, this way each time you start, you have our chat history (also your answers) stored in nlm database and even if docker is crashing right now, everything is written in nlm"
+
+**Claude:** Adopted as a standing rule (this very entry is its first application): every
+user message goes into this journal VERBATIM together with Claude's answers, and the
+mirror is synced to NLM IMMEDIATELY after each exchange — not batched at session end —
+so the notebook always holds the full chat history and survives any docker crash.
+Memory rule feedback_patent_workbench_nlm_mirror updated accordingly.
