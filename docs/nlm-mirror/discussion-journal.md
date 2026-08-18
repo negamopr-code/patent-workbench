@@ -2133,3 +2133,24 @@ Post-sweep plan unchanged: t10 lane-1 silent probe (lexical top-30 of sonnet<2
 rejects, recall audit vs NLM claimants) + claimants funnel; t13 needs only the
 sweep tail as final confirmation. Open user items: WEB_CONCURRENCY=1 decision,
 .wslconfig 10-12GB+swap (5 incidents now).
+
+**User:** "'Still on your side: WEB_CONCURRENCY=1 … and the .wslconfig memory/swap fix — now
+5 incidents deep' is it something which will not be harmfull on our tool?"
+
+**Claude:** Neither is harmful. WEB_CONCURRENCY=1: the 2nd gunicorn worker only adds
+multi-user HTTP parallelism (pointless single-user); the worker is async, sweeps are
+background threads + NLM/Claude I/O — unaffected. No real redundancy lost (crash #4
+killed BOTH workers at once; watcher auto-resumes either way). Gain ~1.5-2 GB
+(patent-bench = top consumer, 3.2 GiB of the 7.76 GiB VM). .wslconfig: app-untouched,
+just resizes the VM — swap was already 79% full 3h after reboot; cost = one planned
+`wsl --shutdown` restart cycle in a parked window vs unplanned crashes every few hours;
+size to host RAM (16 GB total → 10 GB WSL; 32 GB → 12 GB comfortable).
+
+**User:** "ok, put it in the to do list later, keep remind me after we finish the
+assesement and window will present to us, ok?"
+
+**Claude:** ✅ WEB_CONCURRENCY=1 APPROVED → staged in serve.sh (`-e WEB_CONCURRENCY=${WEB_CONCURRENCY:-1}`,
+so any future rebuild includes it). ⏰ Reminder recorded in the incident memory: when
+both sweeps finish the assessment and a parked window opens → remind user + redeploy
+(one `sh scripts/serve.sh`). The session's completion monitor on both sweep statuses
+is the trigger. .wslconfig reminder rides the same moment.
