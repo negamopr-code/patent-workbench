@@ -1961,3 +1961,40 @@ or via work2 CLI; sweeps ran throughout). Results:
 Replay harness: scripts/replay_funnel.py (works for any tab's stored claims
 state vs opus labels). Doctrine folded into patent-search-pipeline
 references/lessons.md (incl. the empty-query-vector trap + canary sanity gate).
+
+**User:** "you say US20230337972 6.0 and US20220221016 6.0 on top … but ranking shows US20240191555 #1 · 🎯 3+4~/11 Must (4.7) · 🤖 3.0/10 … nothing to do with your list"
+
+**Claude (root cause, verified in DB + app.js):** The user is right that the display
+is wrong — and nothing was lost. Three stacked facts:
+1. The visible list is the 🎯 Must-COVERAGE sort (app.js default when a feature
+   list is accepted: sortKey='must', server-side rank.key), not the 🤖 opus ranking.
+2. This morning 10:51–11:51 UTC the documented t10 opus lanes (sonnet<2 mass +
+   fetch-error re-reads, the "opus-лейны DONE" closure) landed 417 fresh opus
+   full-reads (US20240191555 3.0, US20170060518 1.0 among them). No job is running
+   now (no .claude_read_10 state; nothing scored since 11:51 UTC).
+3. **The bug: t10's MUST wording was revised during hygiene, and _unified_score
+   matches stored feature_scores to benchmark elements BY NAME.** Fresh reads match
+   11/11 names; the 6.0 champions' older reads match 0/11 → they count as
+   "un-assessed" (rank=None) and sink to the bottom of the Must sort, despite
+   having BETTER real coverage (US20230337972 ⚖24.5/33 = 7✓+3~; US20220221016
+   ⚖19/33 = 8✓) than the displayed #1 (⚖15.5/33 = 3✓+4~). The 6.0 opus verdicts
+   themselves are untouched — switch the sort to 🤖 and the champions top the list.
+This is a NEW finding, distinct from 7168afd (which fixed the deep-read chat's
+corpus-top block). Proposed fix for the deploy window (user to approve): when the
+name-match is 0 but counts align, re-map stored feature_scores by POSITION and
+badge the card "assessed under older wording" — or at minimum badge instead of
+silently sorting last. Doctrine lesson: re-wording features invalidates the
+name-keyed coverage of every prior read — snapshot/remap, don't orphan.
+
+**User:** "I still do not get how to solve the memory issues, does it help to use nlm as a memory?"
+
+**Claude:** No — NLM-as-memory solves knowledge persistence (it already mirrors all
+discussions), but it cannot reduce Docker RAM. The 4.1 GiB is Python WORKING memory
+(two gunicorn workers × ~2 GB: loaded corpora, audit states, caches accumulated
+in-process), not stored knowledge. Documents already live on disk in SQLite — moving
+their text anywhere changes nothing about process RSS. What actually helps:
+(1) deploy window: WEB_CONCURRENCY=1 → immediately −~2 GB; restart resets the
+accumulated 4.1 → few hundred MB; (2) .wslconfig memory/swap raise on Windows (the
+only real headroom fix, still pending user); (3) longer-term app work: stream
+corpora from SQLite instead of holding them per-worker (only if pressure persists
+after 1+2).
