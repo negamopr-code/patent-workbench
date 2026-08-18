@@ -1733,3 +1733,21 @@ BATCH-SCOPED ("best of these 41, corpus best remains X at 6.0").
    stall re-arm driver. t10/t13/t14 bands already clean. Every compile lands with
    the new corpus-top block once deployed; until then per-tab results get mined
    as they finish, per the token-spend loop.
+
+**User:** "not in all tabs!" · "but only the one we are working with now!" · "t10, t12, t14"
+
+**Claude:** Scope corrected and enforced: driver STOPPED, tab-2 lane PAUSED at 43/70
+(no new reads launch). Before the stop, lanes had already completed on t11, t12, t8,
+t4, t1 (+43 of t2). Within the allowed scope {t10, t12, t14} everything is now clean:
+t10 band cleared by the 41-batch, t14 band was empty, t12's 19-doc haiku-≥2 band DONE —
+0 champions, max 3.0 (one 2.0→3.0) → the 14-champion t12 shortlist stays UNTHREATENED.
+No further in-scope opus reads exist right now; the only queued item is t10's
+silent-mass probe AFTER the mega-screen ends.
+FLAGS from the out-of-scope reads that landed before the stop (reported, NOT acted on):
+- t11: its single ≥2-band doc CN219553754 went 3.0 → 6.0 (champion band) — t11's
+  closed 08-12 comparison may deserve a revisit; awaiting user decision.
+- Old tabs confirm tier hygiene AT SCALE: t1 WO2023071266 4.0→8.0, t4 18 upgrades
+  (2.0→6.0 ×2), t2 31 upgrades (2.0→6.0), t8 two new 4.0s — the ≥2 pre-opus band is
+  champion-bearing everywhere, but per user scope no further reads there.
+Snapshots for every touched tab kept (.tN_scores_snapshot_2026-08-18_pre_hygiene.json);
+scores only improved in tier (opus-5 replacing sonnet/haiku) — no data harmed.
