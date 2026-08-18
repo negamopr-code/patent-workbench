@@ -17,6 +17,12 @@ ACCOUNTS_FILE="$PROFILES_DIR/accounts.conf"
 mkdir -p "$PROFILES_DIR"
 [ -f "$ACCOUNTS_FILE" ] || printf 'work2\n' > "$ACCOUNTS_FILE"
 
+# `docker restart` keeps the writable layer, so a killed Xvfb leaves its lock
+# behind and every subsequent boot dies with "Server is already active for
+# display 99" (3-day crash loop, 2026-08-15..18). Same class as the Chromium
+# SingletonLock cleanup below: only one X server ever runs here, always safe.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+
 Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp &
 export DISPLAY=:99
 sleep 1
