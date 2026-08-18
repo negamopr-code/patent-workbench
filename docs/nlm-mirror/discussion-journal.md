@@ -1496,3 +1496,18 @@ power feed devices, still only 2.0). All t10 opus lanes are now DONE; day
 yield = +1 champion (WO2020026413 4.0), t10 ≥4 tally 13, sonnet<2 mass and
 fetch-error blind spot both measured closed. Remaining t10 lane: the
 mega-screen on drawnformula (round 1 canary pending).
+
+t12 2b DONE (78/78 pairs, 4 rounds) + ladder step launched. 2b re-ranking
+put KR20240099963 (opus 7.0) and KR20260033205 (opus 8.0 — the tier-2
+false-kill, recovered by the KR patch) joint-top at w=17; the opus-verified
+champions CN119833811/CN121906003/KR102897392 all sit in the w≥6 band, so
+pair-verified weight correlates with opus verdicts far better than tier-2 v1
+did. Per funnel doctrine (tier-2 selects WHO gets opus-read), the 19 unread
+docs at w≥4 (4×w7: KR20210059935, CN111261961, CN119864548, KR20160051407;
+3×w6, 1×w5, 11×w4) are now reading with opus-5. After they land: ⚓/🏆
+anchors, then the verdict vs the old 47-shortlist.
+
+t10 mega-screen round 1: **canary gate PASSED** on the reworded numeral MUSTs
+(no t13-v1 blindness); 25/35 round-1 claimants, rotation continuing.
+t13 v2 at round 24 (840/2058): still only the canary claimant — the
+cross-family-recall-≈0 verdict keeps firming.
