@@ -1401,3 +1401,33 @@ the fix. Watchdog hardening noted as a candidate P4.
 Queue unchanged: 2b pairs → ladder → ⚓/🏆 → vs old 47-shortlist; calibration
 gates deploy still waits for an all-parked window (both sweeps parked AND no
 Claude reads in flight), then POST resume to both audits.
+
+## 2026-08-18 — logout root-caused: keeper 3-day crash loop (stale X lock), fixed f23cb74
+
+The recurring "everything logged out again" finally has a mechanical cause,
+and it is NOT the cookie-family invalidation the boot-quarantine was built
+against. nlm-keeper received a SIGTERM on 2026-08-15 18:35 (Docker Desktop /
+wedged-relay window) and never came back: `docker restart` preserves the
+container's writable layer, so the killed Xvfb's `/tmp/.X99-lock` survived,
+and every boot since died with "Fatal server error: Server is already active
+for display 99" — before a single Chromium launched (`set -eu` aborts at
+x11vnc). Three days of crash loop (RestartCount 16) = zero session refresh =
+Google sessions expired naturally = both sweeps auth-parked.
+
+Fix: entrypoint now clears `/tmp/.X99-lock` + `/tmp/.X11-unix/X99` before
+starting Xvfb — the exact same cleanup class as the Chromium SingletonLock
+lines that were already there. Redeployed via keeper/serve.sh; an in-place
+`docker restart` was then tested and boots clean (graceful SIGTERM cookie
+flush observed). Commit f23cb74, pushed.
+
+Consequence for the login question: the sessions are genuinely expired, so
+ONE more sign-in round is still needed (work2+bubu via noVNC :8106;
+accounts.conf no longer lists work3; `default` separately). But this should
+be the last "why again" of this class: host/Docker restarts no longer kill
+the keeper, and the quarantine logic finally gets to run.
+
+Opus queue check (asked explicitly today): empty. t12 w≥4 band read 44/44;
+t13 lexical lane closed at marginal≈0; t10 sonnet ≥2-band read 110/110 and
+the 1.0-band control (rand-20, max 2.0) gates the remaining ~1380 docs off;
+the only t13-v2 claimant so far is CN223926581 round-1 canary (already 10.0).
+Next opus work appears only after login → v2 sweep advances / 2b→ladder lands.
