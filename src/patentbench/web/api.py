@@ -539,6 +539,11 @@ def _attach_ranks(tab_id: int, docs: list[dict]) -> None:
         src = full_by_id.get(d["id"])
         u = _unified_score(elements, src) if src else None
         d["rank"] = u if (u and u["assessed"]) else None
+        # The payload's own copies feed the client matrix/featureStats — re-key them
+        # too, and surface the flag for the card's ⏳ old-wording badge.
+        _remap_legacy_reads(elements, d)
+        if src and src.get("legacy_wording"):
+            d["legacy_wording"] = True
 
 
 @app.get("/api/tabs/{tab_id}/state")
@@ -5597,6 +5602,55 @@ def _element_status_map(doc: dict) -> dict:
     return {n: v["status"] for n, v in _effective_coverage(doc).items()}
 
 
+# Reference numerals like " (10)", " (20A)", " (14, 16)" appended to a feature name
+# by a wording revision — the part _feat_norm strips so a pre-revision read still
+# finds its element.
+_REFNUM_RE = re.compile(r"\s*\(\s*\d+[A-Za-z]?(?:\s*,\s*\d+[A-Za-z]?)*\s*\)")
+
+
+def _feat_norm(name: str) -> str:
+    return re.sub(r"\s+", " ", _REFNUM_RE.sub("", name or "")).strip().lower()
+
+
+def _remap_legacy_reads(elements: list[dict], doc: dict) -> None:
+    """Re-key stored per-element reads recorded under an OLDER feature wording.
+
+    Element identity is the NAME (see _cov_records), so revising the wording (e.g.
+    adding reference numerals, t10 2026-08-18) orphans every prior deep read: 0/N
+    names match, the doc counts as un-assessed and silently sinks to the bottom of
+    the 🎯 Must sort DESPITE having better real coverage than freshly-read docs.
+    Fix: when a stored list has ZERO exact-name hits against the current elements,
+    re-key it — by numeral-stripped normalized name first (precise), by position as
+    a last resort when the counts align. In-memory only (stored rows untouched);
+    `orig_name` keeps the wording the read actually judged and
+    doc['legacy_wording'] drives the ⏳ badge on the card. Idempotent: any exact
+    hit means current wording and the doc is left alone."""
+    for arr_key, kind in (("feature_scores", "M"), ("additional_scores", "A")):
+        fs = doc.get(arr_key)
+        if not (isinstance(fs, list) and fs):
+            continue
+        cur = [e["name"] for e in elements if _kind(e) == kind]
+        if not cur or any(isinstance(s, dict) and s.get("name") in set(cur) for s in fs):
+            continue
+        by_norm = {}
+        for n in cur:
+            by_norm.setdefault(_feat_norm(n), n)
+        hits = {}
+        for i, s in enumerate(fs):
+            n = by_norm.get(_feat_norm(s.get("name"))) if isinstance(s, dict) else None
+            if n:
+                hits[i] = n
+        if not hits and len(fs) == len(cur):
+            hits = {i: n for i, n in enumerate(cur) if isinstance(fs[i], dict)}
+        if not hits:
+            continue
+        for i, n in hits.items():
+            s = fs[i]
+            s.setdefault("orig_name", s.get("name"))
+            s["name"] = n
+        doc["legacy_wording"] = True
+
+
 def _bonus_pool(elements: list[dict], cov: dict) -> dict:
     """Weighted bonus for one kind's elements: present=full unit, partial=half, absent=0,
     capped. Same scale as the ➕ additional read so the number means the same everywhere."""
@@ -5623,6 +5677,7 @@ def _unified_score(elements: list[dict], doc: dict) -> dict:
     `key` is a single sortable number encoding the lexicographic order
     (covers-all-Must, weighted-Must-rating, A-bonus, W-bonus) so callers can sort by it
     directly; the component fields are returned for display."""
+    _remap_legacy_reads(elements, doc)                 # pre-rewording reads still count
     mand = [e for e in elements if _kind(e) == "M"]
     add = [e for e in elements if _kind(e) == "A"]
     whole = [e for e in elements if _kind(e) == "W"]
@@ -5719,6 +5774,7 @@ def _rigorous(doc: dict, elements: list[dict]) -> bool:
     mand = [e for e in elements if _kind(e) == "M"]
     if not mand:
         return False
+    _remap_legacy_reads(elements, doc)                 # pre-rewording reads still count
     eff = _effective_coverage(doc)                     # combi coverage OR the full deep read
     return all(eff.get(e["name"], {}).get("fid", 0) >= _FID["combi_digest"] for e in mand)
 

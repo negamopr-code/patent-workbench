@@ -2019,3 +2019,31 @@ sweep-watcher re-armed inside patent-bench.
 Still pending for a FUTURE deploy window (needs user decision): WEB_CONCURRENCY=1
 (−~2 GB RSS) and the Must-sort remap fix; .wslconfig raise remains the only real
 headroom lever.
+
+**User:** "if it does not disturb nlm processing, build it" · then: "ok good, so it is planned, and will be deployed when window present, but you are aware of the bug"
+
+**Claude (Must-sort orphan fix BUILT, deploy deferred to next window):** Implemented
+without touching the running container — sweeps undisturbed (t10 staging r20, t13
+moved r43→r45 during the work). The fix:
+- `_remap_legacy_reads(elements, doc)` in api.py: when a stored feature_scores /
+  additional_scores list has ZERO exact-name hits against the current elements, it
+  is re-keyed — by numeral-stripped normalized name first, by position only as a
+  last resort when counts align. In-memory only (stored rows untouched);
+  `orig_name` preserves the wording the read actually judged;
+  `doc['legacy_wording']` set. Idempotent (any exact hit → left alone).
+- Wired into `_unified_score` (so 🎯 Must rank, matrix ①, chat, recalc all see it),
+  the mand-fidelity gate, and `_attach_ranks` (payload copies re-keyed too, so the
+  client matrix/featureStats align; flag serialized).
+- app.js: "⏳ old wording" badge on cards (verdicts unchanged; re-read to assess
+  under current wording).
+Verified against LIVE t10 data (read-only dry run inside patent-bench): all 2005
+orphans re-key via normalized name (positional fallback never needed), 0 docs left
+un-assessed, and the Must sort now leads with the true champion —
+US20230337972 must-rating 7.42 (opus 6.0), US20220221016 5.76 (opus 6.0) at #3;
+the false #1 US20240191555 (4.7) drops out of the top.
+Tests: full suite 348 passed (run inside patent-bench against the new code);
+includes a new unit test for the remap + updated the stale deep-compare test to
+expect the 7168afd corpus-top block.
+**DEPLOY: NOT deployed** — ships in the next parked/done sweep window together with
+the WEB_CONCURRENCY decision. Until then the live app still shows the wrong Must
+sort (🤖 sort remains the truthful view).

@@ -1732,7 +1732,10 @@ def test_deep_compare(client):
     assert client.post(f"/api/tabs/{tid}/deep-compare", json={}).json()["started"] is True
     _wait_read(client, tid)
     msgs = client.get(f"/api/tabs/{tid}/state").json()["messages"]
-    assert msgs[-1]["role"] == "c" and msgs[-1]["text"] == "ranking: best is X"
+    # 7168afd: every compiled ranking is prefixed with the deterministic live
+    # corpus-top block, so a batch-scoped run can never crown a local best.
+    assert msgs[-1]["role"] == "c" and msgs[-1]["text"].endswith("ranking: best is X")
+    assert msgs[-1]["text"].startswith("📌 CURRENT CORPUS TOP-10")
     assert any(m["role"] == "s" and "ranking ALL 2 candidate(s)" in m["text"] for m in msgs)
     parts = msgs[-1]["participants"]
     assert any(p["title"].endswith("full text") for p in parts if p["kind"] == "documents")
@@ -2880,6 +2883,36 @@ def test_unified_score_must_dominates_and_wholedoc_is_bonus():
     fs_only = {"feature_scores": [{"name": "M1", "status": "yes"}, {"name": "M2", "status": "partial"}]}
     u = api._unified_score(els, fs_only)
     assert u["assessed"] and u["mand_full"] == 1 and u["mand_partial"] == 1
+
+
+def test_unified_score_remaps_reads_stored_under_older_wording():
+    """Rewording the features (e.g. adding reference numerals) must NOT orphan prior
+    deep reads: a 0/N name match is re-keyed by numeral-stripped name (position as a
+    last resort) so the read still counts, `orig_name` keeps the judged wording and
+    `legacy_wording` drives the card badge (t10 Must-sort bug, 2026-08-18)."""
+    from patentbench.web import api
+    els = [{"name": "Wireless system (10)", "weight": 5, "kind": "M"},
+           {"name": "Base wireless device (14)", "weight": 5, "kind": "M"}]
+
+    # Pre-rewording read: same features, numeral-free names → normalized re-key.
+    doc = {"feature_scores": [{"name": "Wireless system", "status": "yes"},
+                              {"name": "Base wireless device", "status": "partial"}]}
+    u = api._unified_score(els, doc)
+    assert u["assessed"] and u["mand_full"] == 1 and u["mand_partial"] == 1
+    assert doc["legacy_wording"] is True
+    assert doc["feature_scores"][0]["name"] == "Wireless system (10)"
+    assert doc["feature_scores"][0]["orig_name"] == "Wireless system"
+
+    # Fully rewritten wording, counts align → positional fallback.
+    pos = {"feature_scores": [{"name": "totally different A", "status": "yes"},
+                              {"name": "totally different B", "status": "yes"}]}
+    u2 = api._unified_score(els, pos)
+    assert u2["covers_all"] and pos["legacy_wording"] is True
+
+    # Current wording (any exact hit) is left alone — idempotent, no false remap.
+    cur = {"feature_scores": [{"name": "Wireless system (10)", "status": "yes"}]}
+    api._unified_score(els, cur)
+    assert "legacy_wording" not in cur and "orig_name" not in cur["feature_scores"][0]
 
 
 def test_combi_scan_returns_the_element_document_matrix(client, monkeypatch):
