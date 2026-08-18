@@ -2091,3 +2091,45 @@ CN101606270, EP4222838, CN115911602), rest ≤2.0. No champion, nothing touches 
 5.0 shortlist → the t13 negative is now closed from the RECALL side too: nearest
 embedding neighbors ≤3.0, no single doc, no pair, 3 core MUST elements 0-hard-✓
 corpus-wide. Remaining confirmation = the v2 sweep tail (~450 docs, ETA ~18:15 UTC).
+
+---
+
+## 2026-08-18 ~18:15 UTC — crash #4 recovery (5th memory incident), Must-sort remap DEPLOYED
+
+**User:** "continue" · then: "there was a crash"
+
+**Claude:** Confirmed — **crash #4 today**: WSL VM full reboot ~15:23 UTC (host
+uptime 2.9h at 18:14). Precursor in patent-bench logs: both gunicorn workers
+OOM-SIGKILLed at 14:37 ("Perhaps out of memory?") — the chronic WSL memory
+pressure again (incidents: 08-13, 11:35, 13:07, 14:22, now 15:23). patent-bench
+auto-restarted via unless-stopped; both sweeps landed phase=interrupted
+(t10 r21 735/2046, t13 r46 1610/2058); the in-container sweep-watcher died with
+the VM (docker-exec processes don't survive a reboot).
+
+Recovery executed per the crash-#3 recipe, and the crash was used as the
+parked deploy window again:
+1. **8066543 (t10 Must-sort remap fix, user-approved 14:4x) DEPLOYED** —
+   rebuild scripts/serve.sh 18:16 UTC. Verified live: `_remap_legacy_reads`
+   in running api.py; t10 Must-sort top-1 = **US20230337972 mand_rating 7.42
+   (7 full / 11)** — exactly the approved dry-run. Orphaned pre-rewording
+   reads now count; ⏳ old-wording badge live.
+2. Both sweeps POST-resumed 18:17 (entrypoint had already cleared stale locks):
+   t10 running r22, t13 running r46.
+3. sweep-watcher re-armed inside the new container (log 18:17:29Z).
+4. **WEB_CONCURRENCY=1 NOT deployed** — still awaits user decision; container
+   runs 2 workers.
+
+**User:** "t10 and t13 were running nlm sequence if I remember correctly, where
+we are on those?"
+
+**Claude:** Both are the NLM claims-audit sweeps, both lost ~3h to the crash,
+both resumed 18:17 UTC:
+- **t10 mega-screen** (drawnformula): round 22, 735/2046 (36%), 577 claimants
+  (76.6% corridor passed), canary 64% passed. At the observed ~70-75 docs/h the
+  remaining ~1300 docs finish well into 08-19 (old ~00:30 ETA void).
+- **t13 v2**: round 46, 1610/2058 (78%), still exactly 1 claimant (canary) —
+  keeps confirming the closed negative. ~450 docs left → ETA ~22:30 UTC.
+Post-sweep plan unchanged: t10 lane-1 silent probe (lexical top-30 of sonnet<2
+rejects, recall audit vs NLM claimants) + claimants funnel; t13 needs only the
+sweep tail as final confirmation. Open user items: WEB_CONCURRENCY=1 decision,
+.wslconfig 10-12GB+swap (5 incidents now).
