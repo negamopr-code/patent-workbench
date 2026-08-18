@@ -148,3 +148,46 @@ opus-44), settle the instrument doctrine:
   running); ALWAYS snapshot scores first (now standing).
 - P7 full-corpus opus reads stay gated on measured density (t13's rand20 says
   no; the t10 sonnet-1.0 control will say for t10).
+
+## 2026-08-18 — t12 chain closed end-to-end: doctrine confirmations + refinements
+
+The first tab to run the FULL new funnel to a final, applied shortlist
+(mega-screen → tier-2 → 2a → 2b pairs → weighted opus ladder → residue probes
+→ apply). Result: 14 opus champions vs the old rank-cut shortlist's 5/14
+recall. What this exercise settled:
+
+1. **Tier-2 empty-quote kills are SOUND as a class.** The 29-doc probe of
+   quote-unverified w≥6 docs (the false-kill risk class) yielded 0 champions,
+   max 2.0. The KR20260033205 8.0 false-kill was translation fragility ONLY.
+   → P2 NARROWS: the auto-opus-probe list needs only translation-suspect ×
+   high tier-1 weight docs, not general distrust of quote kills.
+2. **Model-tier hygiene is now 3-for-3.** Every pre-opus top band re-read with
+   opus-5 yielded ≥1 champion: t10 sonnet ≥2 band (5), t10 opus-4.8 band
+   (WO2020026413 2.0→4.0), t12 ladder (2 at w6/w7). STANDING: no shortlist
+   boundary may rest on a pre-opus-5 score; snapshot before every re-read.
+3. **The lexical recall lane's value is CLOSURE, not just recovery.** t13's
+   lane recovered 7 champions; t10's identical lane found 0 — and that zero,
+   plus the rand-20 control, is what licenses closing 1,382 docs unread.
+   Either outcome pays: champions, or a measured close. Run it per tab.
+4. **2b pair-verified weight ranks the TOP band well, the rest weakly.**
+   All 5 prior opus champions landed w≥6, and both new champions came from
+   w6/w7 — but w=7 also contained 1.0s, and the w=4 slice went 0/11.
+   Confirmed shape: tier-2/2b = candidate generator ordered enough to pick
+   the read queue; opus = the only ranker. Apply shortlists FROM OPUS SCORES.
+5. **OCR-sourced identifiers get a normalization pass before "unfetchable".**
+   WO year zero-padding (WO202055313→WO2020055313) recovered 3/3 fetches;
+   also learned: publications post-dating the benchmark filing are not prior
+   art — don't chase their 404s. Permanent gap class: XP (non-patent lit).
+6. **Gates work.** t10 is the first sweep born under the calibration gates:
+   canary passed round 1 (best champion 64% of MUST weight), corridor passed
+   at 76.6%/5 rounds. A t13-v1-style blind sweep now costs 1 round, not 59.
+7. **Apply path gap (feature candidate):** the built-in apply serves only
+   MUST audits; an opus-score-based apply (shortlisted/nlm_rank from
+   score_model='claude-opus-5', tie-break stored w) had to be a manual DB
+   write today. Worth an endpoint.
+8. **Infra:** keeper 3-day crash-loop root-caused (stale /tmp/.X99-lock
+   survives docker restart; fixed f23cb74 + clean-on-boot). Profile renames
+   must happen BEFORE the user signs in. Slot manager now surfaces boot-
+   quarantine as "protected" (nlm-slot-manager 0d42999). P4 (token-watchdog
+   dies without re-arm) still open — external stall-monitors were today's
+   workaround.
