@@ -1676,3 +1676,21 @@ Realistic ceiling: the pipeline never replaces opus judgment; it approaches opus
 OUTCOMES by guaranteeing the champions reach a small opus queue. "Equal to opus" =
 same final shortlist at ~5% of the opus-read-everything cost — t12 is the first tab
 where that held 14/14.
+
+## 2026-08-18 — PROBE + INTERIM-BATCH RESULTS: all zeros, three doctrine refinements
+
+**Claude (report):** All reads landed. t12 reject-probe: L1 silent 0/10 (max 1.0),
+L2 claimed-unread 0/10 champions (max 3.0, CN117420462). t14: L1 0/10 (max 1.0),
+L2 0/10 (max 2.0) — t14's quote-verification closure HOLDS despite translation
+fragility. t10 interim-41: ZERO champions in all three lanes — Lane A ≥5-claim band
+max 3.0 (US20240191555 1.0→3.0), the 10/11-MUST headline US10158257 → opus 2.0;
+Lane B opus-4.8 1.0-band 0/23 (score drift ±1 = noise); Lane C control max 2.0.
+Refinements folded into the skill:
+1. Tier hygiene = TOP bands only (3-for-4): pre-opus ≥2 bands yield champions,
+   1.0-bands are dead across tiers — don't respend.
+2. Quotes-free claim-count is not champion-predictive even at 10/11 — tier-2
+   quote-verification is the necessary compression before opus reads.
+3. Layered rand-10 reject-probes confirmed closure on t12 + t14; zeros recorded.
+Standing state: t10 mega-screen round 11 staging, t13 v2 round 36 staging (canary-only),
+t10 reject-probe still deferred to sweep end. 14-champion t12 shortlist UNTHREATENED
+by any probe.
