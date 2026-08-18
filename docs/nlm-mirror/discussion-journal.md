@@ -1534,3 +1534,13 @@ translation-fragility only, already covered by the KR-patch. The w4-5 rest
 (40 docs) closes unread by the marginal rule. **t12 is now fully measured:
 14 champions, every band either opus-read or closed by a measured control.**
 Slot manager: quarantine-aware badges shipped (nlm-slot-manager 0d42999).
+
+**t12 shortlist APPLIED (user request).** Old 47-doc shortlist snapshotted to
+/data/.t12_old_shortlist_snapshot_2026-08-18.json, then shortlisted/nlm_rank
+rewritten from the opus champion table: 14 docs, ranked by opus score desc
+(tie-break: stored NLM weight, then number). #1 KR20260033205 (8.0) still
+shows stored w=1.0 — the false-kill artifact, kept as-is since nlm_score is
+the audit's record, not the ranking. Applied via direct DB write because the
+built-in apply path only serves MUST audits, and doctrine (P4) ranks on
+opus-verified scores, not tier-2 weights. t12 is now fully closed: measured,
+ranked, applied.
