@@ -2154,3 +2154,48 @@ so any future rebuild includes it). ⏰ Reminder recorded in the incident memory
 both sweeps finish the assessment and a parked window opens → remind user + redeploy
 (one `sh scripts/serve.sh`). The session's completion monitor on both sweep statuses
 is the trigger. .wslconfig reminder rides the same moment.
+
+## 2026-08-18 (late PM) — ranking-integrity auditor built; t10 top-claimant opus probe = all rejects
+
+**User:** "is nlm running even if I exit here ?"
+
+**Claude:** Yes — both claims-audit sweeps run server-side inside patent-bench
+(t10 r23 805/2046 · 627 claimants, gates passed; t13 r48 1680/2058 · canary-only).
+Exiting Claude kills only the in-session completion watcher (post-sweep follow-ups
+won't fire automatically); sweeps finish on their own, results persist.
+
+**User:** "and exiting here does help to memory being lesser use?"
+
+**Claude:** ~350 MB only (this session's container). Real levers: patent-bench 1.3 GB
+(WEB_CONCURRENCY=1 staged), nlm-keeper 695 MB, plus a second claude container
+(determined_kirch ~375 MB) possibly zombie. VM had 4.7/7.7 GB available, swap 950 MB.
+
+**User:** "we need to create an agent which is role to specifically check if the
+ranking corresponds to the most relevant documents (the bug you fixed earlier) we
+need to make it systematically"
+
+**Claude:** Built `scripts/audit_ranking.py` (read-only, runs in-container; exit
+0/1/2) + `.claude/agents/ranking-integrity-auditor.md`. Checks: C1 orphaned
+per-element reads (bug 8066543 class, incl. combi_coverage which the remap does NOT
+re-key), C2 rank-key encoding + benchmark-unranked + sunk assessments, C3 corpus-top
+block vs stored scores as of its own timestamp (bug 7168afd class), C4
+buried-champion heuristic. FIRST FULL AUDIT FINDINGS: t10/t11/t12/t14 + old tabs
+CLEAN (remap fix confirmed working in prod); **t13 = 412 docs with unremappable
+orphaned feature_scores (v2 re-decompose broke norm/position match), 13 docs fully
+sunk, canary CN223926581 (10.0) buried at Must-sort position ~220**; t7 = 1 sunk doc
+(EP3282551). Recorded as KNOWN baseline in the agent; growth = new violation.
+Remediation (user to decide): targeted re-read of the 13 sunk t13 docs under current
+wording, or a stronger remap.
+
+**User (mid-turn):** "btw as nlm advance, you can launch some opus 5 probe on t10
+and t13, choose some promising ones"
+
+**Claude:** t13: nothing to probe — across all 108 sweep rounds only 5 docs ever
+claimed a MUST element and ALL already have opus verdicts (canary 10.0 + organic
+1.0/1.0/5.0/1.0). t10: aggregated all 23 rounds of MUST claims → 627 claimants, took
+the top-12 NOT yet opus-read (claimed weight 20–27/33, 6–9 of 11 elements, all
+sonnet-band 1.0) and launched an opus-5 deep-read probe. RESULT: **all 12 ≤ 2.0**
+(7×2.0, 5×1.0) — zero new champions. The claim-weight TOP band is drained: NLM
+claim-count remains non-predictive even at maximum claimed weight (the one true
+champion among high claimants, US20220221016 6.0, was already found). Tally stays 13
+champions, leaders unchanged (2×6.0).
