@@ -1635,3 +1635,44 @@ user message goes into this journal VERBATIM together with Claude's answers, and
 mirror is synced to NLM IMMEDIATELY after each exchange — not batched at session end —
 so the notebook always holds the full chat history and survives any docker crash.
 Memory rule feedback_patent_workbench_nlm_mirror updated accordingly.
+
+**User (re-asked, original lost in the crash):** "do we now equal opus in terms of quality of finding documents with current pipeline, or there is still something where opus 5 is superiour and why. And what can we do to approach this level?"
+
+**Claude:** Split the question into RECALL (getting the right documents into the read
+queue) and RANKING (deciding which of them actually match). Measured answer:
+
+EQUAL on recall-into-queue (t12): the new funnel delivered 14/14 opus champions into
+the opus read queue (old rank-cut shortlist: 5/14). With the lexical lane + seeded
+controls + residue probes, the pipeline also produces MEASURED closure of the unread
+mass — something raw opus-reads don't give per token spent. On finding-candidates,
+the pipeline now matches opus at ~5% of the read cost.
+
+OPUS-5 STILL SUPERIOR — three structural reasons:
+1. Function-in-context judgment (ranking). NLM quotes prove word-existence, not
+   meaning (w=7→opus 1.0; w=11→2.0; 86% top-band contamination; w=4 slice 0/11).
+   Within the claimant band NO cheap signal predicts opus score. Sonnet inverts
+   rankings too (US20220221016 sonnet-band → 6.0; tier hygiene 3-for-3). Opus is the
+   only ranker — that's now doctrine, not a gap to close.
+2. Vocabulary-independent recall. NLM retrieval AND our lexical regex are both
+   vocabulary-bound; mode-B structural analogues sharing no benchmark vocabulary are
+   invisible to both (t13 v2: canary-only after 33 rounds). Opus reading a doc
+   recognizes structure regardless of wording. This tail is today reachable only by
+   full opus reads.
+3. Translation robustness. Quote verification collapses across a translation layer
+   (the 8.0 champion sat at w=1); opus reads translated text natively.
+
+HOW TO APPROACH OPUS LEVEL (in leverage order):
+a. Heavy-feature-weighted tier-2 ranking (pure code, no tokens) — cuts the 86%
+   contamination, shrinks the opus queue per champion.
+b. Tier-2.5 NLM function-question per surviving pair ("does the quoted passage perform
+   the feature's FUNCTION?") — pushes NLM from words toward meaning, cheap.
+c. Embeddings-similarity recall lane over claims text — the only known non-opus route
+   into the cross-family tail; feeds the same opus queue as the lexical lane.
+d. Translation handling: auto-probe translation-suspect × heavy-tier-1 docs (P2
+   narrowed) or verify quotes against original-language text.
+e. Keep layered residue probes per tab (running today on t12/t14) — they don't close
+   the gap, they MEASURE what remains of it.
+Realistic ceiling: the pipeline never replaces opus judgment; it approaches opus
+OUTCOMES by guaranteeing the champions reach a small opus queue. "Equal to opus" =
+same final shortlist at ~5% of the opus-read-everything cost — t12 is the first tab
+where that held 14/14.
