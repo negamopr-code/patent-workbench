@@ -1489,3 +1489,10 @@ DIFFERENT frequencies (the w5 features discriminate); opus verdicts say
 "base station" for our "base wireless device" → synonym for TERMS/tier-2;
 all near-misses miss the sensor/actuator(72)/magnet(60) chain (mode B).
 3 recovered WOs reading now; mega-screen round 1 ingesting on drawnformula.
+
+Lane 3 closed: the 3 OCR-recovered WOs scored 0.0 / 2.0 / 2.0 — no champions
+(WO1994028315 is a notable 1994 analogue: actuator stroke-end sensing + two
+power feed devices, still only 2.0). All t10 opus lanes are now DONE; day
+yield = +1 champion (WO2020026413 4.0), t10 ≥4 tally 13, sonnet<2 mass and
+fetch-error blind spot both measured closed. Remaining t10 lane: the
+mega-screen on drawnformula (round 1 canary pending).
