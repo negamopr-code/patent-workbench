@@ -2084,3 +2084,10 @@ from two directions). A t13-style embed-lane probe has no material on t10 (no
 fetched-unread docs). After the sweep: claimants funnel (527+, 79%) → gates →
 ladder is where t10 opus spend goes. Completion watcher armed on the t10 audit
 status (fires on done/error/pause) to launch lane-1 at the right moment.
+
+**[probe result, 2026-08-18 ~15:0x UTC]** t13 opus-5 embed-lane probe DONE 34/34:
+**max 3.0** (CN114402705 the #2 semantic neighbor, CN110192303, CN118017046,
+CN101606270, EP4222838, CN115911602), rest ≤2.0. No champion, nothing touches the
+5.0 shortlist → the t13 negative is now closed from the RECALL side too: nearest
+embedding neighbors ≤3.0, no single doc, no pair, 3 core MUST elements 0-hard-✓
+corpus-wide. Remaining confirmation = the v2 sweep tail (~450 docs, ETA ~18:15 UTC).
