@@ -1477,3 +1477,15 @@ fetched (WO2020055313, WO1994028315, WO2000070703 — queued for opus after the
 post-date the 2022 benchmark filing — not prior art, not worth chasing.
 OCR-identifier lesson re-confirmed: image-sourced numbers need a
 normalization pass (WO year zero-padding) before declaring them unfetchable.
+
+Lane 1+2 outcome (44 opus reads landed): **+1 champion — WO2020026413 2.0→4.0
+from the opus-4.8 band** (tier-hygiene rule holds: every old-model band
+re-read so far has surfaced ≥1 champion). Lexical top-30: 0 champions, max
+3.0 (CN103155353, CN111971873) — combined with the rand-20 control (max 2.0)
+this CLOSES the t10 sonnet<2 mass by the marginal≈0 rule; unlike t13, t10's
+sonnet ≥2 band had already caught every champion. t10 ≥4 tally now 13.
+Patterns mined: t10 champion profile = dual microwave power supply with
+DIFFERENT frequencies (the w5 features discriminate); opus verdicts say
+"base station" for our "base wireless device" → synonym for TERMS/tier-2;
+all near-misses miss the sensor/actuator(72)/magnet(60) chain (mode B).
+3 recovered WOs reading now; mega-screen round 1 ingesting on drawnformula.
