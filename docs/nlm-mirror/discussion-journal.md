@@ -1789,3 +1789,33 @@ holds. Nothing in-scope left to spend on except t10's end-of-sweep probe.
   serves only MUST audits (known gap, deferred feature); shortlists were applied via
   direct DB writes, verified in the documents table.
 - Today's probe layers (t12: 0/10+0/10+0/19; t14: 0/10+0/10) tightened both closures.
+
+**User:** "so what is the plan for improvement to be as good as opus read? and do we need to reread anything to become better?"
+
+**Claude (plan):** Key asset: we now have LABELED GROUND TRUTH (t12's 14 champions,
+t13's 7, t10's champions + all the measured zeros), so every pipeline improvement can
+be validated by REPLAY against known answers — measuring recall of a funnel variant
+costs code time, not opus tokens. The plan, by leverage:
+1. Heavy-feature-weighted tier-2 ranking (pure code, ~0 cost). Rank tier-2 output by
+   heavy (w≥4) feature claims only, light as tie-break. Kills the measured 86%
+   top-band contamination. Validate: replay t12 — do all 14 champions still land in
+   the read queue, and how much smaller is it?
+2. Tier-2.5 "function" question (cheap NLM). One question per surviving pair: does
+   the quoted passage perform the feature's FUNCTION? Attacks the words≠meaning gap
+   (w=7→1.0 class). Validate on t12's stored pairs vs known opus verdicts.
+3. Translation guard (code + tiny opus). Flag translation-suspect (CJK-origin) ×
+   heavy-tier-1 docs → auto-opus-probe instead of quote-kill. Prevents the KR 8.0
+   false-kill class. ~a handful of opus reads per tab.
+4. Embeddings recall lane (new capability). Similarity over claims text vs benchmark,
+   top-N into the same opus queue as the lexical lane. The ONLY route into the
+   cross-family paraphrase tail (t13 mode-B class) short of reading everything.
+   Validate: do embeddings retrieve t13's mode-B champions that NLM never claimed?
+5. Already in place: calibration gates (deployed), corpus-top compile fix (pending
+   deploy window), apply-from-opus endpoint (deferred feature).
+RE-READS: none needed in scope. t10/t12/t14 tier hygiene is clean (≥2 bands all
+opus-5; 1.0-bands measured dead ×2 — re-reading them is anti-doctrine); all probe
+layers zero. Re-reading is not how the pipeline improves — the gap is on the
+retrieval/ranking side (items 1–4). Only future reads in scope: t10 silent-mass
+probe at sweep end + whatever t10's tier-2 surfaces. Build order recommendation:
+1 → 3 → 2 → 4 (cheapest-first, each validated by replay before the next).
+Awaiting user's pick per the "discuss funnel fixes before building" standing note.
