@@ -1524,3 +1524,13 @@ more 4.0s.** Every one of the 9 misses was recovered by the new funnel
 (mega-screen → tier-2 → 2a → 2b pairs → weighted opus ladder). This is the
 definitive answer to "does the new pipeline beat the old shortlist": 14/14
 vs 5/14 champions found.
+
+t12 P2-residue probe (user asked "any more opus reads needed?"): the 69
+never-opus-read docs still carrying tier-2 MUST weight >=4 with EMPTY quotes
+(the false-kill risk class) were tested via their w>=6 slice — 29 opus reads:
+**0 champions, max 2.0** (6x2.0/14x1.0/9x0.0). Doctrine refined: tier-2
+empty-quote kills are SOUND as a class; the KR20260033205 false-kill was
+translation-fragility only, already covered by the KR-patch. The w4-5 rest
+(40 docs) closes unread by the marginal rule. **t12 is now fully measured:
+14 champions, every band either opus-read or closed by a measured control.**
+Slot manager: quarantine-aware badges shipped (nlm-slot-manager 0d42999).
