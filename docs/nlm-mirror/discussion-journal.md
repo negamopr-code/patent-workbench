@@ -1751,3 +1751,23 @@ FLAGS from the out-of-scope reads that landed before the stop (reported, NOT act
   champion-bearing everywhere, but per user scope no further reads there.
 Snapshots for every touched tab kept (.tN_scores_snapshot_2026-08-18_pre_hygiene.json);
 scores only improved in tier (opus-5 replacing sonnet/haiku) — no data harmed.
+
+**User:** "but you spent bunch of tokens for nothing, it is disappointing"
+
+**Claude:** Acknowledged without excuse: "for any tabs" was ambiguous and I took the
+maximal reading instead of confirming or defaulting to the active tabs — exactly the
+core lessons-learned rule (ask before costly assumptions). Lesson written into BOTH
+skills: lessons-learned ("ambiguous scope on a bulk token spend resolves to the
+ACTIVE set, never the maximal reading; asking costs one exchange, guessing wrong
+burns money and trust") and patent-search-pipeline ("bulk-read launches: confirm tab
+scope explicitly"). ~158 out-of-scope opus reads is the measured cost of the mistake.
+
+**User:** "how is going with t10, t12, t14?"
+
+**Claude:** t10 — mega-screen at round 14, 490/2046 audited (24%), 366 claimants,
+gates passed, running healthy; 41-doc interim batch done (0 champions, leaders
+unchanged 2×6.0); silent-mass probe queued for sweep end. t12 — COMPLETE: chain
+closed, 14-champion shortlist applied; all three of today's probe layers zero
+(silent 0/10, claimed-unread 0/10 max 3.0, haiku-band 0/19). t14 — COMPLETE: its
+150/150 quoted sweep done earlier; today's probes 0/10 + 0/10 confirm the closure
+holds. Nothing in-scope left to spend on except t10's end-of-sweep probe.
