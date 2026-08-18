@@ -2069,3 +2069,18 @@ neighbor after the canary. Opus-5 deep read of all 34 started 14:5x
 (doc_ids batch, skip_scored; Claude-side only, NLM sweep untouched — same
 parallel pattern as t10 interim-41). If even the top embedding neighbors score
 low, the negative is closed from the recall side too.
+
+**User:** "would you need to run something on opus 5 also for t10?"
+
+**Claude:** Nothing NOW — t10 has zero unread material (2049/2049 fetched docs
+scored; the 87 unscored are permanent fetch-errors, XP/NPL gap already triaged by
+lane 3). All 08-18 opus lanes closed (lane2 +1 champ WO2020026413, lane3, interim-41
+zeros, t10-110 5 champs, L2 layers). The ONE remaining opus-5 item is **lane-1
+(silent probe): opus read of the lexical top-30 of the 1382 sonnet<2 rejects —
+deliberately parked until the mega-screen ends**, because it is a recall audit OF
+the sweep: cross opus picks vs NLM claimants on the same reject mass (champion
+found by opus but not flagged by NLM = recall hole; both empty = reject band dead
+from two directions). A t13-style embed-lane probe has no material on t10 (no
+fetched-unread docs). After the sweep: claimants funnel (527+, 79%) → gates →
+ladder is where t10 opus spend goes. Completion watcher armed on the t10 audit
+status (fires on done/error/pause) to launch lane-1 at the right moment.
