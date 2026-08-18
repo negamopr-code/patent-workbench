@@ -1511,3 +1511,16 @@ t10 mega-screen round 1: **canary gate PASSED** on the reworded numeral MUSTs
 (no t13-v1 blindness); 25/35 round-1 claimants, rotation continuing.
 t13 v2 at round 24 (840/2058): still only the canary claimant — the
 cross-family-recall-≈0 verdict keeps firming.
+
+**t12 CHAIN COMPLETE — final verdict vs the old 47-shortlist.**
+Ladder reads landed: +2 champions (KR20260027428 w6 → 4.0, CN119864548 w7 →
+4.0; 2/19 hit rate below them w-correlation stays noisy — tier-2 selects,
+opus decides, re-confirmed). t12 final champion table: **14 docs ≥4**
+(8.0 KR20260033205 · 7.0 KR20240099963 · 6.0 KR20260043552 · 5.0 CN119833811
+· 10×4.0).
+**The old 47-shortlist held only 5 of the 14 (36% recall, 10.6% precision)
+and MISSED the top champion KR20260033205 (8.0), CN119833811 (5.0), and 7
+more 4.0s.** Every one of the 9 misses was recovered by the new funnel
+(mega-screen → tier-2 → 2a → 2b pairs → weighted opus ladder). This is the
+definitive answer to "does the new pipeline beat the old shortlist": 14/14
+vs 5/14 champions found.
