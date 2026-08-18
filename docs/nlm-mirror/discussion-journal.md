@@ -1819,3 +1819,21 @@ retrieval/ranking side (items 1–4). Only future reads in scope: t10 silent-mas
 probe at sweep end + whatever t10's tier-2 surfaces. Build order recommendation:
 1 → 3 → 2 → 4 (cheapest-first, each validated by replay before the next).
 Awaiting user's pick per the "discuss funnel fixes before building" standing note.
+
+**User:** "also does quarantined in 'work2 🛡 quarantined (protected) · last refresh 4h 56m ago' means, that even if we will not have any projects running, you will maintain cookies regulary in order to not relogin each and every time?"
+
+**Claude (from keeper code + live logs):** Yes on the goal (no re-login), but the
+mechanism is smarter than periodic refresh: after a boot every account's browser is
+launched BLOCKED from Google with a .quarantine marker. While quarantined the keeper
+deliberately does NOT touch Google with the browser — driving stale rotating cookies
+next to a live CLI session is what KILLS session families (the 08-14 shutdown-test
+lesson). Instead, every cycle it probes the saved CLI session for free (`nlm notebook
+list`, no browser, no quota). Live logs right now: "[work2] quarantined: CLI session
+ALIVE, browser parked off Google — running login-free". "Last refresh 4h56m" = last
+browser-driven refresh before the boot; the timestamp parks during quarantine while
+the CLI probe keeps verifying health every cycle. If the CLI session ever dies
+(auth-class error or 3 straight probe failures) the keeper AUTO-lifts quarantine,
+relaunches the browser to self-recover from gracefully-flushed cookies, and only if
+that fails shows LOGIN NEEDED (noVNC :8106). All of this runs in the always-on
+nlm-keeper container, fully independent of any project running. Re-login is needed
+only when Google truly kills the session server-side.
