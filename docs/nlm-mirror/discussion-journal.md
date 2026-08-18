@@ -1837,3 +1837,55 @@ relaunches the browser to self-recover from gracefully-flushed cookies, and only
 that fails shows LOGIN NEEDED (noVNC :8106). All of this runs in the always-on
 nlm-keeper container, fully independent of any project running. Re-login is needed
 only when Google truly kills the session server-side.
+
+**User:** "drawnformula 🛡 quarantined (protected) · last refresh 2h 8m ago" does it mean that even without any running projects, cookies will be maintained by you?"
+
+**Claude (from keeper code + live logs):** Yes — the session is maintained with no
+project running, but not by touching cookies on a timer. drawnformula is in
+boot-quarantine like work2: after the 11:35 VM reboot its Chromium was relaunched
+BLOCKED from Google (.quarantine marker), and while quarantined the keeper never
+drives the browser — stale rotating cookies next to a live CLI session is what
+kills session families (08-14 lesson). Instead the always-on nlm-keeper container
+probes the saved CLI session every 15-min cycle (`nlm notebook list`, free, no
+browser, no quota). Live log right now, repeating every cycle: "[drawnformula]
+quarantined: CLI session ALIVE, browser parked off Google — running login-free".
+"Last refresh 2h 8m" = the last browser-driven refresh before the reboot; that
+timestamp parks during quarantine while CLI probes keep verifying health. If the
+CLI session dies (auth-class error or 3 straight probe failures), the keeper
+auto-lifts quarantine and relaunches the browser to self-recover from the
+gracefully-flushed cookies; only if that fails does it show LOGIN NEEDED (noVNC
+:8106). Re-login is needed only if Google kills the session server-side.
+
+**User:** "if it is running, it is ok, probably you can even probe some layers documents in t13 with opus read? or you prefer to wait till the end of analysis?"
+
+**Claude (recommendation: WAIT, from measured ground truth):** Opus probing mid-sweep
+would be blind spend: after 1435/2058 the t13 v2 audit has exactly 1 claimant — the
+canary itself — so there is no claimant band to aim opus at yet. Our own experiments
+say untargeted opus ≈ zero yield: t10 gave 5 champions from the sonnet-flagged band
+vs 0 from the rand-20 control; t13's own untargeted batch-3 was stopped at 53/100
+with marginal≈0; reject-probes on t12/t14/t10 (20 docs each) all came back dead
+(max 3.0/2.0/3.0). The 1435 resolved docs are final rejects of the same kind.
+Plan: let the sweep finish (~4-5 h). If new claimants appear → opus-read exactly
+those. If zero across all 2058 → closure: the full-corpus screen independently
+confirms the existing 7 t13 champions as complete, with zero opus spend.
+(Context also answered: t13 runs on the DEFAULT NLM account (bubu); t10=drawnformula,
+t12/t14=work2 — so it competes with no in-scope quota; zero Claude tokens.)
+
+**User:** "what will we improve btw. based on all info we gathererd from nlm analysis of 4 tabs and opus punctional rereads? are we now on the level of opus 5 or we can improve our pipeline?"
+
+**Claude (verdict + plan, consistent with the 13:02 journaled plan):** The FUNNEL is at
+opus level; the cheap tiers alone are not. Proof: t12 replay = new funnel 14/14
+champions vs old 47-shortlist 5/14 (36%); t14 shortlist opus-conformant; all reject
+probes zero (rejects genuinely dead). But precision is still 100% opus: 86% t12
+top-band contamination, haiku band 0 champions, quotes-free claim counts
+non-predictive, KR-8.0 translation false-kill class. We didn't replace opus — we
+built a funnel that lets punctual opus reads do the work of reading everything.
+Improvements (replay-validated against labeled ground truth 14+7+13 champions +
+measured zeros), build order 1→3→2→4: (1) heavy-feature-weighted tier-2 ranking
+(free, kills 86% contamination); (3→2nd) translation guard (auto-opus-probe for
+CJK×heavy-tier-1); (2→3rd) tier-2.5 function question (words≠meaning gap);
+(4) embeddings recall lane — only route into the mode-B paraphrase tail; the
+running t13 v2 full-corpus sweep is the control experiment for whether that lane
+is needed (zero new claimants ⇒ yes). RE-READS: none — gap is retrieval/ranking
+side. Recommendation: build #1 first, let its replay numbers size the appetite for
+the rest. Awaiting user's pick per the standing "discuss before building" note.
