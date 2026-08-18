@@ -1710,3 +1710,26 @@ unqualified "BEST FIT" language. Data is fine; the message headline is scope-
 misleading. → Deferred-feature candidate: compile messages must either include the
 corpus top cards for a true global ranking, or label the ranking loudly as
 BATCH-SCOPED ("best of these 41, corpus best remains X at 6.0").
+
+**User:** "you should always show the most updated list! it needs to be fixed immediately (without harm done on current processes)" · "and launche other opus reads" · "for any tabs"
+
+**Claude:** Three actions, all done:
+1. IMMEDIATE FIX (zero risk): posted a correction message into the t10 chat right
+   under the misleading ranking — labels it batch-scoped and shows the live
+   CURRENT CORPUS TOP-10 (US20230337972 6.0, US20220221016 6.0, then the 4.0 band).
+2. CODE FIX (api.py, _run_claude_read): every compiled ranking message now gets a
+   DETERMINISTIC "📌 CURRENT CORPUS TOP-10" block prepended, rebuilt from live stored
+   scores at compile time — never from the reduce model, so a batch-scoped run can
+   no longer crown its local best; when the run didn't touch the leaders it says
+   "this run was BATCH-SCOPED and did not change the leaders". Syntax-checked.
+   ⏳ DEPLOY PENDING: code is baked into the image — rebuild (scripts/serve.sh)
+   waits for the window when BOTH sweeps are parked/done, per standing practice;
+   after restart both sweeps need POST {"resume":true}.
+3. NEW OPUS READS FOR ALL TABS: tier-hygiene lanes launched — every fetched doc
+   with a pre-opus-5 score ≥2 (the champion-bearing band, 3-for-4; 1.0-bands stay
+   closed) across ALL tabs: t11(1) t12(19 haiku!) t8(21) t4(38) t1(55) t2(70)
+   t3(81) t5(92) t9(94) t6(117) t7(171) = 760 docs, sequential smallest-first,
+   per-tab score snapshots (.tN_scores_snapshot_2026-08-18_pre_hygiene.json),
+   stall re-arm driver. t10/t13/t14 bands already clean. Every compile lands with
+   the new corpus-top block once deployed; until then per-tab results get mined
+   as they finish, per the token-spend loop.

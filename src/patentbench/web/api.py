@@ -7365,7 +7365,22 @@ def _run_claude_read(tab_id: int, doc_ids: list[int], model: str, read_model: st
                                     question=question, err=res["error"])
         else:
             _disarm_limit_watchdog(tab_id)     # ranking delivered — armed job (if any) is done
-            db.append_message(tab_id, "c", _verify_citations(tab_id, res["answer"]),
+            # 📌 The corpus standings NEVER come from the reduce model: a batch-scoped
+            # run (e.g. a residue probe over a junk band) would otherwise crown its
+            # local best as "BEST FIT" and mislead (2026-08-18). Deterministic block,
+            # rebuilt from the live stored scores at every compile.
+            standings = sorted((d for d in db.list_documents(tab_id)
+                                if d.get("score") is not None),
+                               key=lambda d: (-(d["score"] or 0), d["id"]))[:10]
+            scoped = len(standings) and standings[0]["id"] not in set(doc_ids)
+            top_block = ("📌 CURRENT CORPUS TOP-10 (live stored scores, all reads to date"
+                         + (" — this run was BATCH-SCOPED and did not change the leaders" if scoped else "")
+                         + "):\n"
+                         + "\n".join(f"{i}. {d['number']} — {d['score']:g}"
+                                     f" ({(d.get('score_model') or '?').replace('claude-', '')})"
+                                     for i, d in enumerate(standings, 1))
+                         + "\n\n---\n\n") if standings else ""
+            db.append_message(tab_id, "c", top_block + _verify_citations(tab_id, res["answer"]),
                               model=model, participants=participants)
             for les in res.get("lessons", []):
                 saved = lessons.append_lesson(les["skill"], les["lesson"])
