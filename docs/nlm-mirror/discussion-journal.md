@@ -2199,3 +2199,15 @@ sonnet-band 1.0) and launched an opus-5 deep-read probe. RESULT: **all 12 ≤ 2.
 claim-count remains non-predictive even at maximum claimed weight (the one true
 champion among high claimants, US20220221016 6.0, was already found). Tally stays 13
 champions, leaders unchanged (2×6.0).
+
+**User:** "did you finished?"
+
+**Claude:** Yes on the asked work (auditor 13f88b1 pushed, probes done) — but the
+finish-check caught that BOTH sweeps were WEDGED: crash #6 (~18:47 privfilter storm)
+killed the sweep threads (locks frozen 18:44), while status lied "running" — the
+first status reads landed inside the 20-min stale-lock TTL, and later reads showed
+phase=interrupted. Watcher also died with the VM. 21:54 UTC: both sweeps
+POST-resumed (locks already stale, no backdating needed), watcher re-armed
+in-container, session monitor armed (resume-confirm / trouble / both-done →
+WEB_CONCURRENCY=1 + .wslconfig reminder window). ~3h lost: t13 tail now ~01:30
+08-19, t10 deeper into 08-19.
