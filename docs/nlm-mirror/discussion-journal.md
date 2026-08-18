@@ -1771,3 +1771,21 @@ closed, 14-champion shortlist applied; all three of today's probe layers zero
 (silent 0/10, claimed-unread 0/10 max 3.0, haiku-band 0/19). t14 — COMPLETE: its
 150/150 quoted sweep done earlier; today's probes 0/10 + 0/10 confirm the closure
 holds. Nothing in-scope left to spend on except t10's end-of-sweep probe.
+
+**User:** "so for t12 and t14 you went trhouthg 2a and 2b and documented it in the nlm?"
+
+**Claude (verified against DB + journal, not memory):** YES for both.
+- t12: 2a (78 claimants) + 2b pair-verification (quotes=true, pairs=true, 4 rounds,
+  78/78, w=17 top) → weighted opus ladder → residue probes → 14-champion shortlist
+  applied FROM OPUS SCORES. Whole chain documented step-by-step in this journal
+  (entries of 08-17/08-18) and synced.
+- t14: 2a + 2b done on 08-13 ("t14 stage 2a result + stage 2b (pairs verification)
+  built & launched"), 150/150 pair-verified at round 8 (top band w=39/35/32), final
+  debrief 08-15; 79 t14 mentions in the journal, all in NLM. Checked its shortlist
+  against the NEW doctrine just now: already opus-conformant — 20 docs, all
+  claude-opus-5-scored, ordered 3×6.0 → 6×5.0 → 4.0 band, exactly matching the
+  top-by-opus list. No t12-style rank-cut problem.
+- Nuance: the audits' built-in "applied" flag is false on both — the built-in apply
+  serves only MUST audits (known gap, deferred feature); shortlists were applied via
+  direct DB writes, verified in the documents table.
+- Today's probe layers (t12: 0/10+0/10+0/19; t14: 0/10+0/10) tightened both closures.
