@@ -1431,3 +1431,49 @@ t13 lexical lane closed at marginal≈0; t10 sonnet ≥2-band read 110/110 and
 the 1.0-band control (rand-20, max 2.0) gates the remaining ~1380 docs off;
 the only t13-v2 claimant so far is CN223926581 round-1 canary (already 10.0).
 Next opus work appears only after login → v2 sweep advances / 2b→ladder lands.
+
+## 2026-08-18 (cont.) — t10 full pipeline day: 3 opus lanes + mega-screen on new account "drawnformula"
+
+User added a third Google account (drawnformula@gmail.com) for parallel NLM
+capacity. Registered in nlm-keeper as profile `drawnformula` (add-account.sh;
+one rename hiccup wiped the user's first sign-in — work3→drawnformula rename
+must happen BEFORE the user signs in; they kindly signed in twice). Keeper's
+crash-loop fix held through two more container restarts.
+
+**t10 (Exam_2_478_2026) plan, all pre-registered in /data/.t10_lanes_2026-08-18.json,
+score snapshot .t10_scores_snapshot_2026-08-18_pre_lanes.json (2046 docs):**
+
+- Lane 1 — lexical recall: v3-style ranking (title+abstract+claims, 7 synonym
+  clusters from the 11 MUSTs) over the 1382 sonnet<2 rejects; 959 carry signal;
+  top-30 (lex 15..10: KR20190087664, JP7405624B2, CN111971873, GB2632317, …)
+  → opus-5. Control = existing rand-20 (max 2.0).
+- Lane 2 — tier hygiene: the 14 opus-4.8 ≥2 docs (US20080036588 3.0 top)
+  re-read with opus-5. Lanes 1+2 run as ONE deep-compare (44 docs, in flight).
+- Lane 3 — fetch-error salvage: 76 never-read docs = 52 XP (non-patent lit,
+  permanent known gap) + 24 patent numbers, ALL source=image (OCR). Refetch
+  as-is: 24/24 failed again (19 × GP-404 = mangled/too-new numbers, 5 × BR
+  parse-empty). Re-added 14 corrected/kind-coded variants (WO zero-padding:
+  WO202055313→WO2020055313, WO9428315→WO1994028315, WO0070703→WO2000070703;
+  EP/US/CN/JP 2026-fresh + kind codes) — fetching now. PV5010 = OCR garbage.
+
+**t10 mega-screen (t13/t14 pipeline) LAUNCHED on drawnformula:**
+- MUSTs reworded v1→v2 per specificity doctrine (reference numerals 10/14/16/
+  18/20A/20B/72/60 + verbatim claim-1 vocabulary; weights/kinds unchanged);
+  v1 archived .t10_features_v1_numeralfree.json. The API's own specificity
+  gate confirms the doctrine (numeral-free MUSTs → t14's 11% pseudo-survivors).
+- Old tab-notebook binding (8f3e089f "Patent candidates", default account)
+  DISCONNECTED to unlock the profile pin (notebook survives on default acct;
+  binding recorded in the design file). Tab pinned to drawnformula.
+- Sweep: scope=corpus 2046, quotes-free MUST, batch 35, ~59 rounds, dry-run,
+  calibration gates ACTIVE (first sweep born under the deployed gates —
+  canary verdict in round 1 will validate tier-1 wording immediately).
+
+Parallel load: t13 v2 (default/bubu) + t12 2b (default/bubu) + t10 (drawnformula)
+= 3 NLM sweeps on 3 accounts + 44 opus reads. Monitors on all sweeps + reads.
+
+Lane-3 outcome (landed same session): the 3 WO zero-padding corrections all
+fetched (WO2020055313, WO1994028315, WO2000070703 — queued for opus after the
+44-doc read). The 11 other variants stay 404: 2026-fresh publications that
+post-date the 2022 benchmark filing — not prior art, not worth chasing.
+OCR-identifier lesson re-confirmed: image-sourced numbers need a
+normalization pass (WO year zero-padding) before declaring them unfetchable.
