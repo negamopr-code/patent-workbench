@@ -1559,3 +1559,19 @@ Loop closure completed:
   translation-layer quotes) + a standing TOKEN-SPEND LEARNING LOOP section.
 - Cross-project lesson (snapshot before destructive bulk re-score) added to the
   `lessons-learned` skill.
+
+## 2026-08-18 — t10 parallel opus assessment launched alongside the running mega-screen (user request)
+
+Doctrine applied: the sweep only orders the read queue, so opus starts ranking interim
+claimants now instead of idling ~50 rounds. Round-10 state: 267 claimants; 140 already
+opus-5-scored, 24 opus-4.8, 103 sonnet-4-6. Design /data/.t10_interim_claimants_2026-08-18.json
+(snapshot .t10_scores_snapshot_2026-08-18_pre_interim.json taken FIRST, standing rule):
+- Lane A (8): claimants with ≥5/11 MUSTs claimed, not opus-5 — ALL are sonnet-1.0 docs,
+  i.e. the inversion-risk class the earlier sonnet-≥2-band lane never covered. Headline:
+  US10158257 claims 10/11 MUSTs at sonnet 1.0.
+- Lane B (23): claimants still on opus-4.8 scores (tier hygiene, 3-for-3 so far).
+- Lane C (10): seeded random control (seed 20260818) from remaining non-opus-5 claimants —
+  calibrates whether interim claim-weight predicts opus score.
+41 docs → deep-compare reading_model=claude-opus-5, skip_scored=true (model-aware
+continue). External stall-watcher armed (P4 workaround). On land: cross opus verdicts
+vs interim claim-weights → journal + skill, per the token-spend learning loop.
