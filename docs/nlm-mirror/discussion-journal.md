@@ -1544,3 +1544,18 @@ the audit's record, not the ranking. Applied via direct DB write because the
 built-in apply path only serves MUST audits, and doctrine (P4) ranks on
 opus-verified scores, not tier-2 weights. t12 is now fully closed: measured,
 ranked, applied.
+
+## 2026-08-18 (post-crash) — t12 learning loop CLOSED into doctrine
+
+Session crash interrupted the loop closure; recovered: patent-bench survived, t10
+mega-screen kept running (gates passed), t13 v2 resumed at round 33, t12 shortlist
+verified applied in DB (14 docs, all claude-opus-5, KR20260033205 8.0 rank 1).
+Loop closure completed:
+- NLM mirror re-synced (all 3 sources replaced in notebook 35690175).
+- t12 doctrine folded into the `patent-search-pipeline` skill: 4 new dated lesson
+  blocks (opus-only ranker / 36% rank-cut recall; tier hygiene + snapshot-first;
+  lexical lane = closure; 4 NLM blind spots; calibration gates; identifier
+  normalization) + 2 new SKILL.md anti-patterns (#7 cheap-rank shortlists, #8
+  translation-layer quotes) + a standing TOKEN-SPEND LEARNING LOOP section.
+- Cross-project lesson (snapshot before destructive bulk re-score) added to the
+  `lessons-learned` skill.
