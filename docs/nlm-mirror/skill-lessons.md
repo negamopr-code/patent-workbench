@@ -191,3 +191,27 @@ recall. What this exercise settled:
    quarantine as "protected" (nlm-slot-manager 0d42999). P4 (token-watchdog
    dies without re-arm) still open — external stall-monitors were today's
    workaround.
+
+## 2026-08-18 — NLM pipeline blind spots, read out of the opus verdicts (user question)
+
+Cross-reading opus verdicts vs NLM weights over the full t12 chain exposes
+four structural gaps in the NLM side of the funnel:
+
+1. **Non-English text breaks quote verification.** KR20260033205: opus 8.0,
+   NLM w=1 — verbatim quotes can never match a translation. Risk class =
+   every CJK doc, every tab. Fix direction: translation-suspect × heavy
+   claim → auto-probe (P2, narrowed), or verify against original language.
+2. **Quotes verify word-existence, not meaning.** KR20160051407 w=7 → opus
+   1.0 (real cooling-vocabulary quotes, wrong kind of system); EP3780316
+   w=11 → opus 2.0. NLM confirms words exist; only opus confirms function-
+   in-context. Candidate cheap fix: a tier-2.5 NLM question per surviving
+   pair — "does the quoted passage perform the feature's function?".
+3. **Light-feature counting drowns heavy-feature matches.** w=4 slice 0/11
+   champions; both new champions at w6–7 among 1.0s; 86% tier-2 v1 top-band
+   contamination. Fix: rank tier-2 output by heavy (w≥4) feature claims
+   only, light features as tie-break — pure code, high leverage.
+4. **Cross-family paraphrase blindness.** t13: zero mode-B structural
+   analogues ever claimed by NLM at any MUST wording (v2 at round 26:
+   canary-only). NLM retrieval is vocabulary-bound. Only idea on the table:
+   an embeddings-similarity recall lane over claims text, feeding the same
+   opus-read queue as the lexical lane.
