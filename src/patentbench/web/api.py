@@ -4553,6 +4553,15 @@ def _claims_query(tab_id: int, nb: str, question: str) -> dict:
 _CLAIM_OK = ("verified", "fuzzy", "claimed")   # 'claimed' only exists in quotes-free runs
 _CLAIM_STATUS_RANK = {"verified": 3, "fuzzy": 2, "claimed": 1, "unverified": 0}
 
+# Translation guard (NLM blind spot #1; replay-validated on t12 2026-08-18:
+# flags exactly the KR20260033205 opus-8.0 false-kill for ~10 probes/tab).
+# Verbatim quotes cannot cross a translation layer, so on a QUOTED run a
+# CJK-origin doc whose quote-KILLED claim weight is heavy while its verified
+# weight died at noise tier is an opus-probe candidate, not a dead reject.
+_TGUARD_CJK = ("KR", "CN", "JP", "TW")
+_TGUARD_UNVER_MIN = 4   # quote-killed MUST weight alone is heavy
+_TGUARD_VER_MAX = 2     # ...and what survived verification is noise-tier
+
 # ---------- instrument-calibration gates ----------
 # t13 v1 (2026-08-17) burned 59 rounds with OCR-corrupted MUST wording: the
 # benchmark's own priority-family doc (opus 10.0) claimed 1/33 of the MUST
@@ -4764,9 +4773,11 @@ def _claims_finalize(tab_id: int, st: dict) -> None:
             continue
         ok = {k for k, sv in feats.items() if sv[0] in _CLAIM_OK}
         score = sum(weights.get(k, 0) for k in ok)
+        unver = sum(weights.get(k, 0) for k, sv in feats.items()
+                    if sv[0] == "unverified")
         rows.append({"id": did, "number": docs[did].get("number"),
                      "score": score, "crown": "1" in ok, "n_ok": len(ok),
-                     "n_claimed": len(feats)})
+                     "n_claimed": len(feats), "unver": unver})
     rows.sort(key=lambda r: (-r["score"], not r["crown"], -r["n_ok"], r["id"]))
     kind = params.get("feature_kind", "must")
     if kind == "must":         # A-runs must not clobber the MUST audit's nlm_score/note
@@ -4797,6 +4808,23 @@ def _claims_finalize(tab_id: int, st: dict) -> None:
                 f"applied cut lack an opus-tier read ({', '.join(weak[:8])}"
                 + ("…" if len(weak) > 8 else "") + ") — the boundary is currently "
                 "decided by weaker evidence. Opus-read them before trusting the cut.")
+    t_guard = []
+    if kind == "must" and params.get("quotes", True):
+        t_guard = sorted((r for r in rows
+                          if (r["number"] or "")[:2] in _TGUARD_CJK
+                          and r["unver"] >= _TGUARD_UNVER_MIN
+                          and r["score"] <= _TGUARD_VER_MAX),
+                         key=lambda r: -r["unver"])
+        if t_guard:
+            db.append_message(tab_id, "s",
+                f"🈶 Translation guard: {len(t_guard)} CJK-origin doc(s) claimed "
+                f"heavy MUST weight (≥{_TGUARD_UNVER_MIN}) that the quote check "
+                f"killed — quotes cannot cross a translation layer, so these are "
+                "opus-probe candidates, NOT dead rejects: "
+                + ", ".join(f"{r['number']} (killed w{r['unver']}, kept "
+                            f"w{r['score']})" for r in t_guard[:12])
+                + ("…" if len(t_guard) > 12 else "")
+                + ". Top-tier-read them before trusting their kills.")
     n_claims = sum(len(f) for f in claims.values())
     n_ver = sum(1 for f in claims.values() for sv in f.values() if sv[0] == "verified")
     n_fuz = sum(1 for f in claims.values() for sv in f.values() if sv[0] == "fuzzy")
@@ -4830,7 +4858,9 @@ def _claims_finalize(tab_id: int, st: dict) -> None:
            ". Dry-run — shortlist untouched; raw answers in the nlm_claims table."))
     _claims_set(tab_id, step="done", status_text="✅ done", error=None, applied=applied,
                 ranking=[[r["id"], r["number"], r["score"], r["crown"], r["n_ok"]]
-                         for r in rows])
+                         for r in rows],
+                t_guard=[[r["id"], r["number"], r["unver"], r["score"]]
+                         for r in t_guard])
 
 
 def _claims_quota_pause(tab_id: int, err: str) -> None:

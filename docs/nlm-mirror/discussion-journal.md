@@ -1889,3 +1889,75 @@ running t13 v2 full-corpus sweep is the control experiment for whether that lane
 is needed (zero new claimants ⇒ yes). RE-READS: none — gap is retrieval/ranking
 side. Recommendation: build #1 first, let its replay numbers size the appetite for
 the rest. Awaiting user's pick per the standing "discuss before building" note.
+
+**User:** "go ahead with all proposals, only be sure to not interrupt any current processes"
+
+**Claude:** Building all 4 funnel fixes (order 1→3→2→4), under a hard no-interrupt
+constraint: patent-bench is NOT rebuilt/restarted while t10+t13 sweeps run — every
+fix is implemented as code + validated by OFFLINE REPLAY against stored data
+(/data/workbench.db + .nlm_claims_* files, labeled champions); server deployment of
+all changes joins the already-pending api.py rebuild window (7168afd) after the
+sweeps park. Live NLM validation (fix #2) only on the idle work2 account (t10 owns
+drawnformula, t13 owns default — no quota contention). Fix #4's embedding model run
+is memory-gated (VM swap 100%) — code lands now, heavy run deferred if it risks
+OOMing the sweeps' container.
+
+**User (mid-build):** "you said before that t10 is also not finished and running, and for t10 there was definitely better document before than now (I remember that one document was missing only two must features, where now the first ranking document is missing almost all must features)"
+
+**Claude (from live sweep state + DB):** No regression — two different rankings are
+being conflated. The doc you remember is US10158257: it still tops the running
+mega-screen's interim claim-count list at 10/11 MUST features (w=29/33) — and it has
+already been opus-read: 2.0. That is the measured interim-41 lesson (claim-count is
+not predictive). The sweep's interim "top" is a coverage screen's claim-weight
+order, batch/round-scoped, quotes-free — it is WHO to check, not a ranking. The
+tab's REAL leaders are unchanged: US20230337972 6.0 and US20220221016 6.0, then
+4.0s (US20070021140, EP3970350, WO2020026413, …). The corrective message about the
+false batch-scoped "BEST FIT" is already posted in t10 chat, and the pending api.py
+corpus-top-block fix (7168afd, deploy window) addresses exactly this display trap.
+
+**User:** "when I exit patent bench current application, will I free up the memory in the docker? does memory depend on amount of projects/tabs/nlms running inside of the benhcmark patent tool?"
+
+**Claude (measured inside the container):** Closing the browser frees ~nothing — the
+UI is a static page; the memory is the SERVER: two gunicorn workers at ~2.0 GB RSS
+EACH (= the 4.1 GiB). It does not depend on tabs existing (SQLite on disk) or on
+NLM notebooks (they live at Google; sessions live in nlm-keeper's Chromium,
+~380 MB). It depends on what each worker process has touched since start —
+corpora/claims states accumulate in-process and are never returned to the OS; the
+running sweeps keep their working sets. Freeing it requires restarting the
+patent-bench container (kills sweeps mid-round — deferred to the parked window).
+Deploy-window addition: WEB_CONCURRENCY=1 (single worker) halves the duplicated
+footprint for this single-user tool.
+
+## 2026-08-18 PM — all four funnel fixes MEASURED (2 rejected, 2 validated) — build session
+
+User: "go ahead with all proposals, only be sure to not interrupt any current
+processes." Executed replay-first, zero server interruption (all validation offline
+or via work2 CLI; sweeps ran throughout). Results:
+- **#1 heavy-weighted tier-2 rank: REJECTED.** t12/t14 identical ordering (t12
+  weights [5,3,3,2,2,1] — single heavy feature already crown tie-break); t10
+  WORSE (full-recall prefix 83→156, hidden 6.0 US20220221016 fell #18→#155).
+  Cheap-weight order cannot compress the opus queue on any tab (champions at
+  246/332, 83/467). Not built — measured zero recorded.
+- **#2 tier-2.5 NLM function question: REJECTED.** 6 champs vs 6 contaminated
+  (verified w≥6, work2 throwaway notebook, 13 sources, compact question):
+  contaminated kept full function-weight (EP3780316 opus-2.0 → 5×YES w=11;
+  WO2025102467, CN112976999 9→9), and 2/6 true champions were falsely demoted
+  (CN218472047, KR102897392: F2=NO). NLM cannot be a precision instrument at any
+  question wording. Raw verdicts: /data/.t25_validation_2026-08-18.json.
+- **#3 translation guard: VALIDATED + BUILT** into api.py (_TGUARD_* constants +
+  _claims_finalize): quoted-MUST runs now flag CJK docs with quote-killed weight
+  ≥4 & verified ≤2 as opus-probe candidates (system message + t_guard state).
+  t12 replay: 10 flags, catches exactly KR20260033205 (8.0, killed w15 → kept
+  w1). Deploy rides the pending rebuild window (7168afd).
+- **#4 embeddings recall lane: VALIDATED** as a complementary lane
+  (scripts/embed_recall_lane.py — quantized MiniLM ONNX int8, chunked +
+  ulimit-guarded, runs OUTSIDE the server). t13 measured: benchmark's own 10.0
+  canary ranks #1/2190; recall 4/15 champions in top-60 (~10× random lift).
+  Decisive cross-measurement: the running t13 v2 NLM sweep had audited 11/15
+  opus champions — 10 passed SILENT (only the canary claimed) = blind spot #4
+  demonstrated at scale on live data. Lane queue (top-60 + 15-doc seeded
+  control): /data/.t13_embed_lane_queue_2026-08-18.json — a candidate opus/
+  sonnet read queue AFTER the sweep closes, if user wants the mode-B tail.
+Replay harness: scripts/replay_funnel.py (works for any tab's stored claims
+state vs opus labels). Doctrine folded into patent-search-pipeline
+references/lessons.md (incl. the empty-query-vector trap + canary sanity gate).
