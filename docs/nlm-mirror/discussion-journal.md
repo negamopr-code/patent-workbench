@@ -1694,3 +1694,19 @@ Refinements folded into the skill:
 Standing state: t10 mega-screen round 11 staging, t13 v2 round 36 staging (canary-only),
 t10 reject-probe still deferred to sweep end. 14-champion t12 shortlist UNTHREATENED
 by any probe.
+
+**User:** "for t10 I have impression that now you have much worse document at the top of the list compared to the previous results"
+
+**Claude (diagnosis):** Verified against the pre-batch snapshot: ZERO score changes
+outside the 41 batch docs; the score-ranked top is UNCHANGED (US20230337972 6.0,
+US20220221016 6.0, then the 4.0 band). What the user is seeing is the deep-read's
+COMPILE MESSAGE in the t10 chat: it declared "SINGLE BEST FIT: US20240191555 (APP
+RANK 1)" — but that is best-of-BATCH, and this batch was deliberately the suspect
+band (sonnet-1.0 claimants + opus-4.8 1.0s + random control), so its "best" is an
+opus 3.0. Root cause: the compile step's ranking promise ("always reuses the whole
+corpus of stored assessments") is capped in practice — the chat model was grounded
+on only the ~30 batch verdict cards, so it ranked within the batch and used
+unqualified "BEST FIT" language. Data is fine; the message headline is scope-
+misleading. → Deferred-feature candidate: compile messages must either include the
+corpus top cards for a true global ranking, or label the ranking loudly as
+BATCH-SCOPED ("best of these 41, corpus best remains X at 6.0").
