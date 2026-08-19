@@ -2211,3 +2211,22 @@ POST-resumed (locks already stale, no backdating needed), watcher re-armed
 in-container, session monitor armed (resume-confirm / trouble / both-done →
 WEB_CONCURRENCY=1 + .wslconfig reminder window). ~3h lost: t13 tail now ~01:30
 08-19, t10 deeper into 08-19.
+
+## 2026-08-19 — overnight outage caught on a "how you doing?" (wedge #7)
+
+**User:** "how you doing?"
+
+**Claude:** Casual greeting turned into recovery: patent-bench was only "Up 5
+minutes" (started 19:33 UTC 08-19) and both sweeps had been frozen since 08-18
+~22:15 — the host went down shortly after the crash-#6 recovery and stayed off
+overnight (~21.5h lost, the longest wedge yet). Locks/state on /data survived
+intact: t10 round 24, 840/2046, 649 claimants, gates passed; t13 round 49,
+1715/2058, canary-only. Watcher died with the VM as always. Recovery per the
+crash-#3/#4 recipe, and the interruption doubled as the approved parked window:
+**WEB_CONCURRENCY=1 redeployed live** (serve.sh rebuild, single gunicorn worker
+confirmed — the last pending deploy item), both sweeps POST-resumed (t10 → round
+25, t13 → round 50, both "asking NotebookLM" within a minute), watcher re-armed
+in-container (log 19:42:32Z). Remaining ETA: t13 ~343 docs (~3-4h), t10 ~1206
+docs (deep into 08-20). Still pending on user: .wslconfig memory cap (7th
+memory-related incident window) and the t13 auditor baseline decision (412
+orphans / 13 sunk / buried canary).
