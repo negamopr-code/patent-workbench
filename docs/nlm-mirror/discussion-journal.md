@@ -2424,3 +2424,48 @@ spec), then a per-doc follow-up.
    revisit judgments from new angles at zero cost; document every
    interrogation round back into the mirror so no session re-reads what a
    prior round already established.
+
+## 2026-08-20 — FAILURE-CONTROL AGENT SYSTEM SHIPPED (plan approved) + t13 package results
+
+**User:** "create several agents, each of which will be responsible for
+controlling all failures you just described. And on top there should be an
+agent which will monitor it" → plan approved (agents + ALL pipeline fixes;
+enforcement = protocol + memory; ops out of scope).
+
+**Claude:** Shipped in two commits:
+- **0f384a5 (Part A — control system):** deterministic audits writing verdict
+  files to /data/audits/ (evidence exists iff the script ran): audit_staging
+  (S1 blind-tails census — t13 byte-exact: 443 truncated / 347 blind; S3 live
+  notebook inventory; S4 claims guard), audit_recall (R1 measured recall — t13
+  1/14, t10 7/12 reproduced; R2 batch corridor — all 119 t13 rounds roster-35
+  flagged discovery-only; R3/R4 canary semantics; R5 lane controls; R6
+  follow-up queue), audit_ranking extended (C5-deterministic closure gate —
+  live verdict: canary 0/9 under current keys → closure_claims_permitted NONE
+  until the canary is re-read; C6 falsification coverage — top-15 PASS after
+  the re-reads; C7 DONE divergence), audit_status (freshness by data
+  watermark + the gate matrix), nlm_followup.py (the free per-doc loop, F3c-
+  safe multi-part restaging). Agents: staging-completeness-auditor,
+  recall-integrity-auditor, nlm-followup-verifier, pipeline-integrity-
+  supervisor (top monitor: verifies verdict-file evidence, names missing/stale
+  auditors, verdict REPORTING PERMITTED / SCOPED / BLOCKED). Registries:
+  docs/failure-registry.md (F1–F7 + approved-baselines JSON = the ONLY source
+  of KNOWN) and docs/controls-registry.json (canaries + champion lane
+  controls). Memory rule feedback_pipeline_integrity_supervisor.md supersedes
+  the solo-auditor rule.
+- **d4d8691 (Part B — cause removal):** multi-part staging (>118KB docs split
+  into part k/K sources — the 120KB clip can no longer cut content; rotation
+  scans raw sources so parts rotate cleanly), in-sweep 🔁 follow-up stage
+  (per-doc YES/PARTIAL/NO for roster docs the broad answer silenced, status
+  'followup'), DONE message now carries the 📌 stored-score corpus-top and
+  labels claim-weight as DISCOVERY; pending-trigger flag for the supervisor;
+  embed lane embeds description chunks sampled front-to-tail + writes R5 lane
+  reports; lexical lane promoted to scripts/lex_recall_lane.py (full
+  description). All 348 tests pass. Rebuild pending the parked window.
+
+**t13 approved read package — results so far:** sunk-13 re-read: all stayed
+≤2.0 and their ranks are RESTORED (C2 now PASS — the 13-sunk baseline entry is
+closed). t10 funnel-35 (sonnet-only ≥5-claim claimants): zero new champions —
+best 4×3.0, claim-weight non-predictiveness confirmed again; t10 tally stands.
+Lane-40 union (embed+lexical top unread): max 3.0 (×5) — no hidden champion in
+the most-similar unread band. Remaining: 3.0-band-62 re-read + canary re-read
+(restores C5), launching in the parked window after the rebuild.
