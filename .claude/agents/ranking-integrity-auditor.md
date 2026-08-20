@@ -31,11 +31,17 @@ Watch for its absence (regression) or divergence from stored scores.
 
 ## Procedure
 
-1. Run the deterministic audit (from the workspace root):
-   `docker exec -i patent-bench python3 - [--tab N] [--json] < scripts/audit_ranking.py`
-   Exit 0 = COMPLIANT, 1 = warnings, 2 = violations. Checks C1 (orphaned reads),
-   C2 (rank-key encoding, benchmark unranked, sunk assessments), C3 (corpus-top
-   block vs stored scores as of its timestamp), C4 (buried-champion heuristic).
+1. Run the deterministic audit (from the workspace root; NO --tab flag — the
+   verdict file must cover all tabs for the supervisor's freshness view):
+   `BASE=$(awk '/^```json$/,/^```$/' docs/failure-registry.md | grep -v '^```')`
+   `docker exec -i patent-bench python3 - --registry "$(cat docs/controls-registry.json)" --baselines "$BASE" [--json] < scripts/audit_ranking.py`
+   Exit 0 = COMPLIANT, 1 = warnings, 2 = violations, 3 = incomplete. Checks:
+   C1 (orphaned reads), C2 (rank-key encoding, benchmark unranked, sunk
+   assessments), C3 (corpus-top block vs stored scores as of its timestamp),
+   C4 (buried-champion heuristic), C5 (deterministic closure gate), C6
+   (falsification coverage of the top band), C7 (DONE-message divergence).
+   The script writes /data/audits/audit_ranking.json — leave it in place; the
+   pipeline-integrity-supervisor consumes it.
 2. For every FAIL, verify against raw data before reporting — read the flagged
    docs' `feature_scores` / `combi_coverage` / benchmark `features_json` straight
    from sqlite (`mode=ro`!) and confirm the mismatch is real, not an audit-script
@@ -45,11 +51,11 @@ Watch for its absence (regression) or divergence from stored scores.
    It is a finding only when the doc's Must coverage in the DB is actually good
    but unmatched (then it is bug A), or the doc is un-assessed despite stored
    verdicts. State which case it is.
-4. KNOWN BASELINE (2026-08-18, first full audit): t13 carries 412 unremappable
-   orphans + 13 sunk docs + the canary CN223926581 buried at position ~220 (the
-   v2 re-decompose orphaned all v1 reads); t7 has 1 sunk doc (EP3282551). Until
-   the user decides on a re-read or a stronger remap, report these as KNOWN, not
-   as new violations — but any GROWTH in these numbers is new.
+4. KNOWN baselines come ONLY from the fenced JSON block in
+   docs/failure-registry.md (passed via --baselines; the script tags each FAIL
+   row KNOWN or GATING). Never treat a FAIL as known from memory or prose —
+   that exact habit produced the 2026-08-18 false closure. Any GROWTH over a
+   registered count is GATING.
 
 ## The third bug class (real, 2026-08-20): false NEGATIVE closure claims
 
@@ -61,7 +67,10 @@ not absences; an 11-doc v2 re-read later surfaced a 6-full-MUST doc and a full
 trigger chain, falsifying both claims. The tell was available the whole time:
 in that same store the CANARY (known 9/9-MUST) also showed mand_full=0.
 
-Therefore ALWAYS run **C5 — closure-claim gate**:
+C5 is now DETERMINISTIC — audit_ranking.py recomputes the MUST aggregate under
+current keys and asserts the registered canary registers, emitting
+`closure_claims_permitted: NONE/SCOPED/FULL` in its verdict data. Your job is
+to verify and interpret it, per these rules — **C5 — closure-claim gate**:
 1. **Canary-control:** every corpus-wide NEGATIVE aggregate («0 docs with X»,
    «0 pairs», «nothing above N») is valid ONLY if the planted canary / a known
    positive registers correctly in the SAME query over the SAME store. Canary

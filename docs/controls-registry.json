@@ -1,0 +1,26 @@
+{
+  "_doc": "Controls as DATA (not prose) for the audit scripts — pass via --registry \"$(cat docs/controls-registry.json)\". verbatim_canary: planted doc in the benchmark's own wording (validates plumbing ONLY, never recall). paraphrased_canaries: known-relevant docs re-worded/translated away from the feature phrasing (the ONLY valid recall control) — standing WARN until planted and user-confirmed. champion_controls: real opus-verified strong docs each recall lane must rank within expect_lane_rank_max, else the lane is blind to paraphrase (measured: embed lane ranked CN116508192 at 1778/2058 because it embedded claims text only).",
+  "tabs": {
+    "13": {
+      "verbatim_canary": "CN223926581",
+      "paraphrased_canaries": [],
+      "champion_controls": [
+        {"number": "CN205265271", "expect_lane_rank_max": 200, "why": "opus 6.0, 6/9 MUST full — missed by the sweep at roster-35, claimed 7/9 at roster-10"},
+        {"number": "CN116508192", "expect_lane_rank_max": 400, "why": "opus 5.0, full trigger chain [1][5][6][7] — decisive paragraph beyond the 120KB staging clip"},
+        {"number": "CN115166523", "expect_lane_rank_max": 400, "why": "opus 6.0, 3F/6P MUST"},
+        {"number": "CN118056137", "expect_lane_rank_max": 400, "why": "opus 5.0, 4F/5P MUST"}
+      ],
+      "ground_truth_min_score": 4.0
+    },
+    "10": {
+      "verbatim_canary": null,
+      "paraphrased_canaries": [],
+      "champion_controls": [
+        {"number": "US20230337972", "expect_lane_rank_max": 200, "why": "opus 6.0, mand 7.42 (7F/3P of 11)"},
+        {"number": "US20220221016", "expect_lane_rank_max": 200, "why": "opus 6.0, 8F/0P of 11 — was 3.0 under sonnet (sonnet-band lesson)"},
+        {"number": "CN113924787", "expect_lane_rank_max": 500, "why": "opus 4.0, missed by the sweep (non-US-origin miss cluster)"}
+      ],
+      "ground_truth_min_score": 4.0
+    }
+  }
+}

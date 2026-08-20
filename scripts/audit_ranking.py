@@ -26,18 +26,41 @@ Checks (per tab with a ready benchmark):
   C4 buried champion  — a doc in the corpus top-5 by holistic score whose 🎯 Must
                         rank position is far below gets flagged with a likely cause
                         (legacy wording / conflicts / un-assessed). Heuristic → WARN.
+  C5 closure gate     — deterministic canary-control (2026-08-20 lesson: the false
+                        t13 closure's negative aggregates were computed over an
+                        orphan-keyed store in which the CANARY itself showed 0/9
+                        MUST): recompute the MUST-coverage aggregates under the
+                        CURRENT keys and assert the registered canary/known-positive
+                        registers. Canary dark → closure_claims_permitted: NONE.
+  C6 falsification    — every top-K doc by holistic score must hold a deep read
+                        keyed to the CURRENT wording (post-re-decompose); an unread
+                        or stale-keyed top band forbids closure statements (F2).
+  C7 DONE divergence  — a claims-audit DONE message listing "Top by claim score"
+                        without the deterministic 📌 stored-score corpus-top block
+                        invites reading claim-weight as relevance (measured
+                        non-predictive) → WARN.
 
-Exit code: 0 = all PASS, 1 = warnings only, 2 = failures.
+Verdict file: /data/audits/audit_ranking.json (+ history.jsonl) with per-tab
+data-watermark anchors; --baselines takes the approved-known-baselines JSON from
+docs/failure-registry.md (unregistered FAILs, or growth over a registered count,
+gate regardless of prose); --registry takes docs/controls-registry.json.
+
+Exit code: 0 = all PASS, 1 = warnings only, 2 = failures, 3 = incomplete.
 """
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
+import time
 import urllib.request
 
 DB = "file:/data/workbench.db?mode=ro"
 API = "http://127.0.0.1:8000"
+AUDIT_DIR = "/data/audits"
+SCHEMA = 1
+SCRIPT_VERSION = "2026-08-20.2"
 _REFNUM_RE = re.compile(r"\s*\(\s*\d[\d\s,./-]*\s*\)")   # mirrors api._REFNUM_RE intent
 
 
@@ -65,14 +88,26 @@ def jload(s, default):
 
 class Report:
     def __init__(self):
-        self.rows = []          # (level, tab, check, message)
+        self.rows = []          # (level, tab, check, message[, data])
 
-    def add(self, level, tab, check, msg):
-        self.rows.append({"level": level, "tab": tab, "check": check, "msg": msg})
+    def add(self, level, tab, check, msg, data=None):
+        self.rows.append({"level": level, "tab": tab, "check": check, "msg": msg,
+                          **({"data": data} if data is not None else {})})
 
     def worst(self):
         lv = [r["level"] for r in self.rows]
         return 2 if "FAIL" in lv else (1 if "WARN" in lv else 0)
+
+
+def anchors(cx, tab):
+    bm = cx.execute("select updated_at from benchmark where tab_id=?", (tab,)).fetchone()
+    mx = cx.execute("select max(scored_at), count(*) from documents "
+                    "where tab_id=? and status='fetched'", (tab,)).fetchone()
+    nc = cx.execute("select max(ts), count(*) from nlm_claims where tab_id=?",
+                    (tab,)).fetchone()
+    return {"benchmark_updated_at": bm[0] if bm else None,
+            "max_scored_at": mx[0], "fetched_docs": mx[1],
+            "max_claims_ts": nc[0], "claims_rounds": nc[1]}
 
 
 def names_recoverable(stored, current_names):
@@ -90,7 +125,7 @@ def names_recoverable(stored, current_names):
     return None
 
 
-def audit_tab(cx, rep, tab):
+def audit_tab(cx, rep, tab, reg_tab=None):
     bm = cx.execute("select features_json, number, updated_at from benchmark "
                     "where tab_id=? and status='ready'", (tab,)).fetchone()
     if not bm:
@@ -180,6 +215,95 @@ def audit_tab(cx, rep, tab):
                     f"{sum(1 for d in state['documents'] if d.get('rank'))} ranked docs: "
                     "key encoding exact, benchmark unranked, no sunk assessments")
 
+    # ---- C5: closure-claim gate (deterministic canary-control) ---------------
+    # Recompute the corpus-wide MUST-coverage aggregate under CURRENT keys and
+    # assert the registered known-positive registers. If the canary is dark in
+    # this very computation, ANY corpus-wide negative derived from it is void.
+    canary = (reg_tab or {}).get("verbatim_canary")
+    m_names = names_by_kind["M"]
+    if canary and m_names:
+        full_by_elem = {n: 0 for n in m_names}
+        canary_full = None
+        for d in docs:
+            arr = jload(d["feature_scores"], [])
+            if not arr:
+                continue
+            by_name = {s.get("name"): s.get("status") for s in arr
+                       if isinstance(s, dict)}
+            fulls = sum(1 for n in m_names if by_name.get(n) == "yes")
+            for n in m_names:
+                if by_name.get(n) == "yes":
+                    full_by_elem[n] += 1
+            if d["number"] == canary:
+                canary_full = fulls
+        zero_elems = [n for n, c in full_by_elem.items() if c == 0]
+        if canary_full is None or canary_full == 0:
+            rep.add("FAIL", tab, "C5-closure-gate",
+                    f"canary {canary} registers {canary_full or 0}/{len(m_names)} "
+                    "full MUST in the CURRENT-key aggregate — the store is broken "
+                    "for negative claims. closure_claims_permitted: NONE",
+                    data={"closure_claims_permitted": "NONE",
+                          "canary_full": canary_full or 0})
+        else:
+            scope = ("corpus-wide negatives allowed ONLY scoped to current-key "
+                     "reads" if orphans["feature_scores"] else "aggregate healthy")
+            rep.add("PASS", tab, "C5-closure-gate",
+                    f"canary {canary} registers {canary_full}/{len(m_names)} full "
+                    f"MUST under current keys; zero-full elements now: "
+                    f"{len(zero_elems)} ({[feat_norm(z)[:40] for z in zero_elems[:3]]}) "
+                    f"— {scope}",
+                    data={"closure_claims_permitted":
+                          "SCOPED" if orphans["feature_scores"] else "FULL",
+                          "canary_full": canary_full,
+                          "zero_full_elements": len(zero_elems)})
+    elif m_names:
+        rep.add("WARN", tab, "C5-closure-gate",
+                "no verbatim canary registered — negative aggregates have no "
+                "known-positive control; closure claims must stay scoped")
+
+    # ---- C6: falsification coverage of the top band --------------------------
+    # Every top-K holistic doc must hold a deep read keyed to the CURRENT wording
+    # — the 08-18 false closure stood on a top band whose reads were stale-keyed.
+    TOP_K = 15
+    top_band = sorted((d for d in docs if d["score"] is not None),
+                      key=lambda d: (-(d["score"] or 0), d["id"]))[:TOP_K]
+    stale_band = []
+    for d in top_band:
+        arr = jload(d["feature_scores"], [])
+        if not arr:
+            stale_band.append(f"{d['number']} (no per-element read)")
+            continue
+        cur = set(all_names)
+        if not any(isinstance(s, dict) and s.get("name") in cur for s in arr):
+            stale_band.append(f"{d['number']} (stale-keyed)")
+    if stale_band:
+        rep.add("FAIL", tab, "C6-falsification",
+                f"{len(stale_band)}/{len(top_band)} top-band doc(s) lack a "
+                f"CURRENT-key deep read — closure statements are forbidden until "
+                f"the top band is re-read: {stale_band[:5]}",
+                data={"stale_top_band": len(stale_band)})
+    elif top_band:
+        rep.add("PASS", tab, "C6-falsification",
+                f"all top-{len(top_band)} docs hold current-key deep reads "
+                "(falsification attempt available)")
+
+    # ---- C7: DONE-message divergence (claim-weight ≠ relevance) --------------
+    done_msg = cx.execute(
+        "select text from messages where tab_id=? and role='s' "
+        "and text like '%Claims audit%DONE%' order by id desc limit 1",
+        (tab,)).fetchone()
+    if done_msg:
+        if ("Top by claim score" in done_msg[0]
+                and "CURRENT CORPUS TOP" not in done_msg[0]):
+            rep.add("WARN", tab, "C7-done-divergence",
+                    "latest claims-audit DONE message lists 'Top by claim score' "
+                    "WITHOUT the stored-score corpus-top alongside — claim-weight "
+                    "is measured non-predictive of relevance (top claimants ≤3.0 "
+                    "opus); readers will mistake it for a relevance ranking")
+        else:
+            rep.add("PASS", tab, "C7-done-divergence",
+                    "DONE message carries the stored-score corpus-top context")
+
     # ---- C3: corpus-top block vs stored scores as of the message ------------
     msg = cx.execute(
         "select text, ts from messages where tab_id=? and role='c' "
@@ -242,23 +366,69 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tab", type=int, default=None)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--registry", default=None,
+                    help="contents of docs/controls-registry.json")
+    ap.add_argument("--baselines", default=None,
+                    help="approved-known-baselines JSON from docs/failure-registry.md")
+    ap.add_argument("--deploy-head", default=None)
     args = ap.parse_args()
-    cx = sqlite3.connect(DB, uri=True)
-    tabs = ([args.tab] if args.tab else
-            [r[0] for r in cx.execute(
-                "select tab_id from benchmark where status='ready' order by tab_id")])
     rep = Report()
-    for t in tabs:
-        audit_tab(cx, rep, t)
+    exit_code = None
+    anch = {}
+    try:
+        reg = jload(args.registry, {}) if args.registry else {}
+        reg_tabs = reg.get("tabs") or {}
+        baselines = jload(args.baselines, {}) if args.baselines else {}
+        cx = sqlite3.connect(DB, uri=True)
+        tabs = ([args.tab] if args.tab else
+                [r[0] for r in cx.execute(
+                    "select tab_id from benchmark where status='ready' order by tab_id")])
+        for t in tabs:
+            audit_tab(cx, rep, t, reg_tabs.get(str(t)))
+            anch[str(t)] = anchors(cx, t)
+        # baseline governance: annotate each FAIL as KNOWN (registered, no growth)
+        # or GATING. A registered count is a CEILING — growth gates.
+        for r in rep.rows:
+            if r["level"] != "FAIL":
+                continue
+            bl = (baselines.get(str(r["tab"])) or {}).get(r["check"])
+            count = None
+            m = re.match(r"(\d+)", r["msg"])
+            if m:
+                count = int(m.group(1))
+            if bl and (count is None or count <= int(bl.get("count", 0))):
+                r["baseline"] = "KNOWN"
+                r["baseline_note"] = bl.get("approved", "")
+            else:
+                r["baseline"] = "GATING"
+    except Exception as e:  # noqa: BLE001 — audit reports, never crashes silently
+        rep.add("FAIL", 0, "C0-audit-crash", f"audit could not complete: {e}")
+        exit_code = 3
+    verdict = {"schema": SCHEMA, "audit": "ranking", "script_version": SCRIPT_VERSION,
+               "ts": int(time.time()),
+               "args": {k: v for k, v in vars(args).items()
+                        if k not in ("registry", "baselines")},
+               "deploy_head": args.deploy_head,
+               "worst": ["PASS", "WARN", "FAIL"][rep.worst()] if exit_code != 3 else "INCOMPLETE",
+               "rows": rep.rows, "anchors": anch}
+    try:
+        os.makedirs(AUDIT_DIR, exist_ok=True)
+        with open(os.path.join(AUDIT_DIR, "audit_ranking.json"), "w") as fh:
+            json.dump(verdict, fh, ensure_ascii=False, indent=1)
+        with open(os.path.join(AUDIT_DIR, "history.jsonl"), "a") as fh:
+            fh.write(json.dumps({k: verdict[k] for k in
+                                 ("audit", "ts", "worst", "deploy_head")}) + "\n")
+    except OSError as e:
+        print(f"⚠ verdict file not written: {e}", file=sys.stderr)
     if args.json:
-        print(json.dumps({"worst": ["PASS", "WARN", "FAIL"][rep.worst()],
-                          "rows": rep.rows}, ensure_ascii=False, indent=1))
+        print(json.dumps(verdict, ensure_ascii=False, indent=1))
     else:
         for r in rep.rows:
-            icon = {"PASS": "✅", "WARN": "⚠️ ", "FAIL": "❌"}[r["level"]]
-            print(f"{icon} t{r['tab']:>2} {r['check']:<20} {r['msg']}")
-        print(f"\nVERDICT: {['COMPLIANT', 'WARNINGS', 'VIOLATIONS'][rep.worst()]}")
-    sys.exit(rep.worst())
+            icon = {"PASS": "✅", "WARN": "⚠️ ", "FAIL": "❌", "INFO": "ℹ️ "}[r["level"]]
+            tag = f" [{r['baseline']}]" if r.get("baseline") else ""
+            print(f"{icon} t{r['tab']:>2} {r['check']:<20}{tag} {r['msg']}")
+        print(f"\nVERDICT: {verdict['worst']}")
+    sys.exit(exit_code if exit_code is not None else rep.worst())
 
 
 main()
