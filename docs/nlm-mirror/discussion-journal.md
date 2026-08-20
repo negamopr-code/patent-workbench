@@ -2353,3 +2353,33 @@ phrased in the benchmark's own words, exactly the case NLM can see.
 Open safety consequence: t13 has 1537 docs with NO opus read whose only
 «clearance» was this sweep — i.e. not cleared at all. Safe-side lane + sunk-13
 re-read + orphan-top re-read proposal → next journal entry after user review.
+
+## 2026-08-20 — root-cause of the false closure + C5 closure-claim gate
+
+**User:** "you are not plausible when you say there are no documents and then
+you find 8/9 must features... there is something wrong, you need to check and
+think how we can avoid it."
+
+**Claude:** Acknowledged — the failure was claim discipline, not the search
+tools. Verified root cause: the 08-18 closure negatives («0 pairs», «3 core
+elements 0✓ corpus-wide») were computed over feature_scores keyed to v1 names
+— the same store the auditor had ALREADY flagged that day as 412-orphaned.
+The zeros were name-join failures, not absences. Smoking gun (verified live):
+in that store the CANARY itself — the known 9/9-MUST document — showed
+mand_full=0. A canary-control on the negative query would have exposed the
+broken join before the claim was ever made. The auditor's FAIL had been
+treated as «known baseline / decision parked» while closure claims kept being
+derived from the defective store; and all probes attacked candidate docs,
+none attacked the closure itself.
+
+Fixes shipped (45ee275): new check **C5 «closure-claim gate»** in the
+ranking-integrity-auditor agent — (1) canary-control mandatory on every
+corpus-wide negative aggregate, claim forbidden if the known-positive doesn't
+register in the same query; (2) an auditor FAIL on orphans/sunk forbids
+corpus-wide negative claims on that tab (only scoped «among N v2-keyed reads»
+allowed) — the auditor now must state «Closure claims permitted: …»;
+(3) closure requires a failed falsification attempt (cheapest: top-band
+re-read under current keys). Same doctrine written into the
+patent-search-pipeline skill (closure-claim discipline block + the measured
+recall lessons). All standing t13 statements already re-scoped accordingly
+in the previous retraction entry.
