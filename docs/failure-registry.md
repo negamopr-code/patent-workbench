@@ -43,3 +43,19 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
 - 2026-08-20: registry seeded with the session's measured numbers (see
   docs/nlm-mirror/discussion-journal.md entries of 2026-08-20 for the full
   experimental record: recall joins, roster-size repro, truncation census).
+- 2026-08-20 (post-deploy d4d8691, pre-report t13/t10): supervisor run.
+  All three verdicts FRESH on d4d8691 (staging/recall/ranking, /data/audits/
+  21:27); no pending_trigger. Baselines: t13 C1 = 387 ≤ 401 registered (within
+  baseline, shrinking — top-band re-read); t13 C4 RESOLVED (canary CN223926581
+  now registers 9/9 full MUST under current keys, C5 PASS SCOPED, zero-full
+  elements 0). Unregistered gating FAILs: t10 C6 15/15 top-band stale-keyed
+  (no current-key deep reads — closure/champion forbidden until re-read);
+  t10 R2 59/59 rounds roster>12; t13 R1 recall 1/14 (7%); t13 R2 119/119
+  rounds roster>12. Disclosures: t13 S1 blind-tails 344 (grew from 309 as
+  sweep staged more rounds — legitimate movement, not shrinkage anomaly);
+  t10 S3 notebook 5e1c98dd PERMISSION_DENIED (sources unverifiable — do not
+  interpret its answers until verified). R6 queues non-empty: t13 13 docs,
+  t10 5 docs → nlm-followup-verifier. No cross-file contradictions found
+  (t13 R1 misses are opus-read but sweep-unclaimed, coherent with C6 PASS).
+  VERDICT: BLOCKED (t10 C6/R2; t13 R1/R2); t13 champion report would be
+  PERMITTED+DISCLOSE, t13 closure SCOPED-ONLY.

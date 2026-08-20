@@ -2469,3 +2469,31 @@ best 4×3.0, claim-weight non-predictiveness confirmed again; t10 tally stands.
 Lane-40 union (embed+lexical top unread): max 3.0 (×5) — no hidden champion in
 the most-similar unread band. Remaining: 3.0-band-62 re-read + canary re-read
 (restores C5), launching in the parked window after the rebuild.
+
+## 2026-08-20 — supervisor E2E live-fire: system operational; two audit refinements from first contact
+
+**Claude:** Post-deploy supervisor run (head d4d8691) worked end-to-end and its
+first contact surfaced two audit-script refinements, both fixed and re-verified:
+C6 was exact-key-only and false-gated t10 (its legacy keys are remappable by
+the deployed norm-strip remap — C6 now mirrors C1's remap tolerance, while
+t13-style structural rewording still gates); S3 queried notebooks with the
+default NLM profile and got PERMISSION_DENIED on t10's per-tab account (now
+reads tabs.nlm_profile) — all five tabs' notebook inventories now verify PASS.
+
+**Final gate matrix (all evidence FRESH on d4d8691):**
+- t10: 🟢 champion_report PERMITTED · 🟢 closure_claim PERMITTED ·
+  🔴 post_sweep_results BLOCKED (R2 — the completed roster-35 sweep is
+  discovery-only forever; registerable as KNOWN if user approves).
+- t13: 🟡 champion_report PERMITTED+DISCLOSE (344 blind-tail docs must be
+  named alongside) · 🟡 closure_claim SCOPED-ONLY («among current-key reads»)
+  · 🔴 post_sweep_results BLOCKED (R2 + recall 1/14).
+- Canary CN223926581 re-read: 10.0, 24/24 full under v2 keys — C4 RESOLVED,
+  C5 control live. C1 orphans 401→387 (shrinking, within baseline).
+- Latent catch beyond t10/t13: t3 has 2 top-band docs with no per-element
+  read (C6 GATING there) — the system sees tabs nobody was watching.
+
+Open items for the user: approve R2-as-KNOWN for the two completed legacy
+sweeps (or plan roster-≤12 confirmation rounds); plant paraphrased canaries
+(R4 standing WARN); R6 follow-up queues non-empty (t13: 13, t10: 5 —
+nlm-followup-verifier ready, costs only NLM quota); the 387-orphan
+re-read-or-remap decision stands.

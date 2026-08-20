@@ -157,7 +157,12 @@ def audit_tab(cx, rep, tab, no_live):
             try:
                 sys.path.insert(0, "/app/src")
                 from patentbench import nlm_bridge  # noqa: PLC0415
-                res = nlm_bridge.list_sources(nb, force=True, profile=None)
+                # the tab's pinned NLM account — listing with the wrong profile
+                # returns PERMISSION_DENIED (t10 lives on a per-tab account)
+                prow = cx.execute("select nlm_profile from tabs where id=?",
+                                  (tab,)).fetchone()
+                prof = prow[0] if prow else None
+                res = nlm_bridge.list_sources(nb, force=True, profile=prof)
                 if res.get("error"):
                     rep.add("WARN", tab, "S3-live-inventory",
                             f"could not list sources of {nb}: {res['error'][:120]} — "

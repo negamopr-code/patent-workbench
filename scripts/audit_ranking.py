@@ -273,9 +273,12 @@ def audit_tab(cx, rep, tab, reg_tab=None):
         if not arr:
             stale_band.append(f"{d['number']} (no per-element read)")
             continue
-        cur = set(all_names)
-        if not any(isinstance(s, dict) and s.get("name") in cur for s in arr):
-            stale_band.append(f"{d['number']} (stale-keyed)")
+        # remap-tolerant, mirroring C1: a legacy-keyed store the deployed remap
+        # recovers (exact/norm/position) is NOT stale — only unremappable is
+        # (t10's numeral-stripped keys are healthy; t13's structural v1
+        # rewording was not).
+        if names_recoverable(arr, all_names) is None:
+            stale_band.append(f"{d['number']} (stale-keyed, unremappable)")
     if stale_band:
         rep.add("FAIL", tab, "C6-falsification",
                 f"{len(stale_band)}/{len(top_band)} top-band doc(s) lack a "
