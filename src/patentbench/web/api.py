@@ -4701,7 +4701,13 @@ def _run_claims_audit(tab_id: int) -> None:
         if not st or st.get("step") == "done":
             return
         must = st.get("must") or []                      # [[name, weight], …] frozen at start
-        spec = "\n".join(f"{i}. {name} (importance {w}/5)"
+        # NLM question spec strips the benchmark's reference numerals (F-wording
+        # lesson 2026-08-20: "(10)"-style numerals made NLM issue false NOs when a
+        # candidate's own numbering differed — 3/5 docs on one element). Numerals
+        # stay in the stored names (element identity); only the QUESTION drops them.
+        def _q_name(n: str) -> str:
+            return re.sub(r"\s+", " ", _REFNUM_RE.sub("", n)).strip()
+        spec = "\n".join(f"{i}. {_q_name(name)} (importance {w}/5)"
                          for i, (name, w) in enumerate(must, 1))
         params = st.get("params") or {}
         quoted = params.get("quotes", True)

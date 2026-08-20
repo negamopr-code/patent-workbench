@@ -2497,3 +2497,156 @@ sweeps (or plan roster-≤12 confirmation rounds); plant paraphrased canaries
 (R4 standing WARN); R6 follow-up queues non-empty (t13: 13, t10: 5 —
 nlm-followup-verifier ready, costs only NLM quota); the 387-orphan
 re-read-or-remap decision stands.
+
+## 2026-08-20 — R6 follow-up round #1 (tab 10): all 5 non-US misses recovered at roster-5; doctrine validated
+
+**Agent (nlm-followup-verifier):** First live run of `scripts/nlm_followup.py`
+— tab 10, queue from audit_recall R6: CN113924787, JP2019221076, EP3849091,
+TW201717523, CA2552849 (the measured non-US miss cluster; all opus 4.0, all
+0-claimed by the legacy roster-35 sweep; first three are the registered
+paraphrased canaries). Notebook `cc0ef843` on drawnformula, multi-part
+restaged, exit 0 (no quota abort), ledger appended, notebook deleted.
+
+**Question angles:** (1) broad checklist once — 11 MUST features from
+`.nlm_claims_10.json` (weight-descending order F1=2nd-WPT-microwave …
+F11=wireless-system), explicit-or-implicit-realisation wording; (2) one
+per-doc follow-up each — per-feature YES/PARTIAL/NO with citation.
+
+**Broad-round result (the doctrine test):** every doc claimed for multiple
+features — the same docs the roster-35 sweep claimed for ZERO. All three
+paraphrased canaries CLAIMED at roster-5. The paraphrase blindness R4 measured
+is a roster-size artifact (answer-budget competition), not doc-content
+opacity. R2's "roster>12 = discovery-only, never clearance" is now validated
+from both directions.
+
+**Per-doc follow-up vs stored opus feature_scores (read-only comparison,
+NLM numbering = must-list order):**
+- CN113924787 — 3×YES (F8 base, F9 remote, F10 sensor-comm) + 2×PARTIAL incl.
+  F1 2nd-WPT w5 citing the ~5W "WiFi power" beam — the exact element opus
+  graded YES as the doc's strongest. 6/11 exact status agreement; divergences
+  are opus-partial→NLM-NO (stricter on implicit) except F11 (see artifact).
+- JP2019221076 — 4×YES incl. BOTH microwave power triggers (F1 2nd-WPT w5 at
+  5.725 GHz, F3 1st-WPT w4) where opus had partial/yes. 7/11 exact. Strongest
+  follow-up of the round; fully consistent with opus 4.0.
+- EP3849091 — 5×YES incl. the distinctive tail: F4 pairing-in-advance, F6
+  actuator stroke position, F7 magnetic sensor — identical to opus's three
+  hallmark YESes. 7/11 exact, ZERO yes↔no flips; every divergence is
+  opus-partial→NLM-NO on the induction-not-microwave / wired-sensor points
+  with the same citations opus used.
+- TW201717523 — 4×YES (F3 1st-WPT-microwave, F4 pairing 配對, F8, F9). ONE
+  real core divergence, the only one of the round: F2 different-frequencies
+  (w5) — opus YES ("claim 1+12, freq to first receiver differs from second",
+  caveat single phased array) vs NLM NO ("different frequencies but a single
+  transmitter, not separate supply devices"). Same evidence, opposite
+  strictness on the two-devices qualifier.
+- CA2552849 — 3×YES (F8, F9) + PARTIAL on both microwave-power elements
+  (F1, F3: "RF power but never the word microwave" — mirrors opus's partials
+  verbatim). Weakest of the five, exactly as opus's 2-yes/8-partial profile
+  predicts. Consistent.
+
+**Grouping:** all five → "consistent with stored opus 4.0" — none needs a
+(re-)read; the follow-up loop independently reproduced the opus profile shape
+for free on every doc. No new champion signal (no follow-up suggested >4.0
+behaviour). Recommend-opus-read set: EMPTY.
+
+**Systematic artifact found (wording lesson):** the must-list carries claim
+reference numerals ("Wireless system (10)", "actuator (72)") and NLM treats
+them as requirements — F11 "Wireless system (10)" got false NO on 3/5 docs
+with justifications like "reference number 10 is assigned to the sensor
+element". Opus scores YES on all those. → Before the next follow-up round,
+strip parenthesised numerals from the spec fed to NLM (script-level fix
+candidate for nlm_followup.py compose of `spec`). Second pattern, expected
+and doctrine-consistent: NLM grades most opus-PARTIALs as NO — one more
+confirmation that an NLM NO clears nothing.
+
+**Ledger:** /data/audits/followup_ledger.jsonl round 1 (ts 1787262472, 5
+docs). R6 t10 queue is now fully verified; t13 queue (13 docs) still open.
+
+## 2026-08-20 — R6 follow-up round #2 (tab 13): all 10 quiet ground-truth docs recovered at roster-10; opus profile reproduced, 1 implicit-YES flag
+
+**Agent (nlm-followup-verifier):** Second live run of `scripts/nlm_followup.py`
+— tab 13, queue from audit_recall R6 (all opus-read ≥4.0, ALL claimed for
+ZERO features by the legacy roster-35 sweep; CN205265271 is a registered
+paraphrased canary): CN115166523, CN205265271, CN118056137, CN114690685,
+CN101639686, CN204215539, CN101598930, CN201497876, CN105429285, CN117692268.
+Notebook `65133f16` on the tab's pinned profile, exit 0 (no quota abort),
+ledger appended (ts 1787262519), notebook deleted. F3c multi-part restage
+confirmed live: CN115166523 staged as 2 parts (broad answer cites
+"Documents 5, 6 (CN115166523)" — 11 sources for 10 docs), nothing clipped.
+Ran ~75 min wall-clock, sharing NLM bandwidth with the concurrent t10 round.
+
+**Question angles:** (1) broad checklist once — 9 MUST features from
+`.nlm_claims_13.json` (F1-F2 control-module/BMS-wired w5, F3 trigger-output
+w5, F4-F5 wireless w4, F6-F8 topology/controller/transceiver w3, F9
+device-category w1), explicit-or-implicit-realisation wording; (2) one
+per-doc follow-up each — per-feature YES/PARTIAL/NO with citations.
+
+**Broad-round result (the doctrine test, second tab):** every one of the 10
+docs claimed for multiple features — the same docs roster-35 claimed for
+ZERO. Paraphrased canary CN205265271 CLAIMED on 7 features in the broad round
+and confirmed 7×YES in its follow-up with component citations (microcontroller
+23 / wireless transceiver 22 / CAN isolation transceiver 24). R4's paraphrase
+blindness is again a roster-size artifact, not doc opacity. Small-roster
+caveat observed in the other direction: broad round claimed "all 11
+documents" wholesale on generic F6/F7/F8 — at roster-10 NLM over-includes on
+generic component features; the per-doc follow-up pass is what disambiguates.
+
+**Per-doc follow-up vs stored opus feature_scores (read-only, must-list
+order, vectors opus→NLM over F1..F9):**
+- CN115166523 (opus 6.0) — YYPPPPPYP → PYYPPYYYY, 4/9 exact, 0 yes↔no flips.
+  NLM upgrades the w5 trigger F3 to YES citing the wake-up simulation unit +
+  relay module closing to output high-voltage — the champion behaviour opus
+  scored the doc 6.0 for. Consistent with champion.
+- CN205265271 (opus 6.0, PARAPHRASED CANARY) — YYNYYYPYP → YYNYYYYYN, 7/9
+  exact, 0 flips; divergence only F7 P→Y and F9 (w1) P→N. CANARY RECOVERED.
+- CN118056137 (opus 5.0) — YYPYYPPPP → YYNYYYYYN, 5/9 exact, 0 flips; NLM
+  upgrades generic F6/F7/F8 P→Y, downgrades F3/F9 P→N ("awakens the battery
+  for parameter acquisition, not to output energy" — same evidence as opus's
+  partial, stricter cut).
+- CN114690685 (opus 5.0) — YPNYPPPYN → YYNYYYPYN, 6/9 exact, 0 flips.
+- CN101639686 (opus 5.0) — PYPYYYYPP → 9×YES incl. F8 self-labelled "YES
+  (Implicit)" via DB-9/wire-pair CAN physical interface, 5/9 exact, 0 flips.
+  Most generous answer of the round — NLM ran the implicit-realisation
+  instruction harder here (starter/ignition sequencing as F3 trigger).
+- CN204215539 (opus 4.0) — YYNPPPPYN → YYNYNYYYN, 5/9 exact, 0 flips; F5
+  opus-partial→NLM-NO with the same evidence (input module wired via LIN, not
+  wireless).
+- CN101598930 (opus 4.0) — PPNPYPPPN → PPNYYYYYN, 5/9 exact, 0 flips; NLM
+  keeps the vehicle-CAN-not-BMS caveat on F1/F2 exactly as opus did.
+- CN201497876 (opus 4.0) — PPNPYPPYN → PPNYYYYYN, 6/9 exact, 0 flips (sister
+  filing of CN101598930; both profiles near-identical, as opus found).
+- CN105429285 (opus 4.0) — PNNPYPPYN → PPNYYPYYN, 5/9 exact, 0 flips; NLM
+  keeps the satellite-test/no-BMS caveat and the no-input-device F6 partial.
+- CN117692268 (opus 4.0) — YYPPPPPNP → YYYYPYYYY, 4/9 exact, and the ONLY
+  hard yes↔no flip of the round: F8 transceiver→CANH/CANL — opus NO ("no
+  transceiver disclosed") vs NLM YES "implicitly utilizes a CAN transceiver"
+  inferred from the standard connector piece. Classic implicit-inference
+  lead, NOT evidence; opus verdict stands. NLM also upgrades F3 to YES
+  (relay forced control instruction → HV output), matching opus's note text
+  if not its grade.
+
+**Aggregate:** 90 verdict pairs → 52 exact (58%), 37 one-step (P↔Y or P↔N),
+exactly 1 hard Y↔N flip (CN117692268 F8, self-labelled implicit). Zero cases
+of NLM-NO on an opus-YES element — no false clears among core elements.
+Direction differs from round #1 (t10): there NLM was stricter than opus on
+partials; here it upgrades generic-component partials to YES (F6/F7/F8
+claimed for everything). Same instrument, tab-dependent bias — one more
+reason follow-up answers are EVIDENCE, never scores.
+
+**Grouping:** all 10 → "consistent with stored opus verdict". The three docs
+NLM gave a core-trigger F3 YES (CN115166523, CN101639686, CN117692268) are
+exactly the opus 6.0/5.0/4.0 trigger-adjacent docs — ranking direction
+preserved. Recommend-opus-read set: EMPTY (all 10 already opus-read; nothing
+suggests >stored-score behaviour).
+
+**Artifact watch:** the t10 numeral artifact (reference numerals in the spec
+treated as requirements → false NOs) did NOT reproduce on t13 despite the
+must-list carrying "(122)/(121)/(1221)" numerals — every NO here was
+substantive. Strip-numerals remains a nice-to-have for nlm_followup.py, not
+a blocker. New pattern to watch instead: "YES (Implicit)" answers — treat any
+implicit-labelled YES as a lead requiring the stored opus note before acting.
+
+**Ledger:** /data/audits/followup_ledger.jsonl round 2 (ts 1787262519, 10
+docs). R6 queues for BOTH t10 and t13 are now fully verified — doctrine
+validation complete on both tabs that motivated the protocol: small-roster +
+per-doc follow-up recovers every known roster-35 miss, for free.

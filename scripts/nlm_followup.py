@@ -87,8 +87,13 @@ def main():
     if not must:
         print("no MUST features for this tab", file=sys.stderr)
         sys.exit(3)
-    spec = "\n".join(f"{i}. {name} (importance {w}/5)"
-                     for i, (name, w) in enumerate(must, 1))
+    # strip reference numerals from the QUESTION (F-wording lesson 2026-08-20:
+    # "(10)"-style numerals trigger false NOs when a doc's own numbering differs)
+    import re as _re
+    _refnum = _re.compile(r"\s*\(\s*\d+[A-Za-z]?(?:\s*,\s*\d+[A-Za-z]?)*\s*\)")
+    spec = "\n".join(
+        f"{i}. {_re.sub(r'[ ]+', ' ', _refnum.sub('', name)).strip()} (importance {w}/5)"
+        for i, (name, w) in enumerate(must, 1))
 
     docs = []
     for n in nums:
