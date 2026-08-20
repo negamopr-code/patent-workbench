@@ -2310,3 +2310,46 @@ top (9/9), the best organic docs remain the opus Must-sort leaders
 claimant list. Still on the user: the 412-orphan / 13-sunk re-read-or-remap
 decision (unchanged by the sweep) and .wslconfig (9 incidents).
 t10 sweep continues (round 34+, 1155/2046 at resume).
+
+## 2026-08-20 — ⚠ RETRACTION + t13 REVISION: v2 re-read overturns the 08-18 closure
+
+**User:** pushed three verification questions (opus batch probes? shortlist
+checked? best docs re-checked with opus-5?) → approved the 11-doc re-read.
+
+**Claude:** The 11-doc opus-5 re-read against the v2 features (all now 24/24
+keyed, auditor-verified accurate, no echo contamination) RETRACTS two 08-18
+closure claims — they were artifacts of stale v1 feature keys:
+- ~~«3 core-элемента 0✓ corpus-wide»~~ — FALSE. No MUST element is at zero
+  full any more: [1]=1 full, [2]=2, [3]=5, [7]=7, [8]=10, [9]=18.
+- ~~«0 pairs у MUST-union среди 616 reads»~~ — FALSE. CN205265271 holds 6
+  full MUSTs alone; [5]+[6] co-occur in at least 4 docs.
+
+**Revised t13 organic leaders (auditor-approved framing — «best among
+v2-keyed reads», NOT corpus-final):**
+- **#1 CN116508192** (Must-sort top, mand 7.88): FULL trigger chain
+  [1]+[5]+[6]+[7] — activation signal [0137] → battery outputs driving power
+  [0193]; 5F/4P of 9 MUST, holistic 5.0.
+- **#2 CN205265271** (mand 7.88, holistic 6.0): 6 full MUSTs
+  [2][3][4][5][6][9] — but explicit ABSENT on core trigger [7]; must not be
+  presented as covering the trigger.
+- Pair CN205265271+CN116508192 covers 8/9 MUST full (only [8] partial) — a
+  two-document combination argument is now viable.
+- Score moves: CN115166523 5→6, CN205265271 5→6, CN114690685 4→5,
+  CN101639686 4→5. Orphan baseline 412→401; 13 sunk unchanged; canary
+  Must-sort burial unchanged (bug-A residue, position 233).
+
+**Why NLM missed all of these — measured, not guessed:** the v2 sweep's
+recall against the opus ≥4.0 ground truth is **0/14** on t13 (13 of 14 never
+even entered the roster in 59 rounds) vs **7/12** on t10, where the misses
+concentrate in non-US-origin docs (CN113924787, JP2019221076, EP3849091,
+TW201717523, CA2552849). Meanwhile the verbatim canary scored 9/9. Conclusion:
+NLM claims-audit claim-probability tracks WORDING overlap with the feature
+phrasing, not technical disclosure — translated/paraphrased documents are
+systematically invisible. The claims-audit is a precision instrument (what it
+names deserves a look) with low, biased recall; a non-claim must NEVER be
+treated as clearance. The canary validates plumbing, not recall — it is
+phrased in the benchmark's own words, exactly the case NLM can see.
+
+Open safety consequence: t13 has 1537 docs with NO opus read whose only
+«clearance» was this sweep — i.e. not cleared at all. Safe-side lane + sunk-13
+re-read + orphan-top re-read proposal → next journal entry after user review.
