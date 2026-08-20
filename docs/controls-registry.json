@@ -3,7 +3,8 @@
   "tabs": {
     "13": {
       "verbatim_canary": "CN223926581",
-      "paraphrased_canaries": [],
+      "paraphrased_canaries": ["CN205265271", "CN116508192"],
+      "_paraphrased_note": "natural paraphrased canaries (user-approved 2026-08-20): opus-proven strong docs worded away from the feature phrasing — the legacy sweep missed both; every future sweep must claim them or its recall is broken",
       "champion_controls": [
         {"number": "CN205265271", "expect_lane_rank_max": 200, "why": "opus 6.0, 6/9 MUST full — missed by the sweep at roster-35, claimed 7/9 at roster-10"},
         {"number": "CN116508192", "expect_lane_rank_max": 400, "why": "opus 5.0, full trigger chain [1][5][6][7] — decisive paragraph beyond the 120KB staging clip"},
@@ -14,7 +15,8 @@
     },
     "10": {
       "verbatim_canary": null,
-      "paraphrased_canaries": [],
+      "paraphrased_canaries": ["CN113924787", "JP2019221076", "EP3849091"],
+      "_paraphrased_note": "natural paraphrased canaries (user-approved 2026-08-20): opus 4.0 docs from the sweep's measured non-US miss cluster",
       "champion_controls": [
         {"number": "US20230337972", "expect_lane_rank_max": 200, "why": "opus 6.0, mand 7.42 (7F/3P of 11)"},
         {"number": "US20220221016", "expect_lane_rank_max": 200, "why": "opus 6.0, 8F/0P of 11 — was 3.0 under sonnet (sonnet-band lesson)"},

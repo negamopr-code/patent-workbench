@@ -68,6 +68,10 @@ def main():
     args = ap.parse_args()
     nums = [n.strip() for n in args.docs.split(",") if n.strip()][:MAX_DOCS]
     cx = sqlite3.connect(DB, uri=True)
+    # the tab's pinned NLM account — creating/querying with the wrong profile
+    # fails (t10 lives on a per-tab account); mirror of the S3 audit fix
+    prow = cx.execute("select nlm_profile from tabs where id=?", (args.tab,)).fetchone()
+    prof = prow[0] if prow else None
 
     st_path = f"/data/.nlm_claims_{args.tab}.json"
     must = []
@@ -97,7 +101,7 @@ def main():
         print("no fetched docs matched", file=sys.stderr)
         sys.exit(3)
 
-    res = nlm_bridge.create_notebook(f"🔁 follow-up — tab {args.tab}", profile=None)
+    res = nlm_bridge.create_notebook(f"🔁 follow-up — tab {args.tab}", profile=prof)
     nb = res.get("id") or (res.get("notebook") or {}).get("id")
     if not nb:
         print(f"notebook create failed: {res}", file=sys.stderr)
@@ -105,10 +109,10 @@ def main():
     partial = False
     for num, title, ab, cl, de, dg in docs:
         for src_title, text in split_parts(num, title, compose_blob(num, title, ab, cl, de, dg)):
-            r = nlm_bridge.add_source_text(nb, src_title, text, profile=None)
+            r = nlm_bridge.add_source_text(nb, src_title, text, profile=prof)
             if not r.get("ok"):
                 partial = True
-    nlm_bridge.wait_sources_ready(nb, timeout=600, profile=None)
+    nlm_bridge.wait_sources_ready(nb, timeout=600, profile=prof)
 
     results = {"tab": args.tab, "notebook": nb, "ts": int(time.time()),
                "docs": [d[0] for d in docs], "answers": {}}
@@ -117,7 +121,7 @@ def main():
              "document that physically does it without the literal words). Reply "
              "with EXACTLY one line per feature: FEATURE <k>: <numbers or NONE>."
              "\n\n=== FEATURES ===\n" + spec)
-    r = nlm_bridge.query(nb, broad, profile=None)
+    r = nlm_bridge.query(nb, broad, profile=prof)
     if nlm_bridge.is_quota_error(r):
         print("quota exhausted — aborting", file=sys.stderr)
         sys.exit(2)
@@ -127,7 +131,7 @@ def main():
               "feature of the checklist above, state whether this document "
               "discloses it (YES / PARTIAL / NO) with a one-line justification "
               "citing where in the document.")
-        r = nlm_bridge.query(nb, fu, profile=None)
+        r = nlm_bridge.query(nb, fu, profile=prof)
         if nlm_bridge.is_quota_error(r):
             partial = True
             results["answers"][num] = "QUOTA-ABORT"
@@ -142,7 +146,7 @@ def main():
                                       not in (None, "QUOTA-ABORT")]},
                             ensure_ascii=False) + "\n")
     if not args.keep_notebook:
-        nlm_bridge.delete_notebook(nb, profile=None)
+        nlm_bridge.delete_notebook(nb, profile=prof)
         results["notebook_deleted"] = True
     print(json.dumps(results, ensure_ascii=False, indent=1) if args.json
           else "\n\n".join(f"=== {k} ===\n{v}" for k, v in results["answers"].items()))

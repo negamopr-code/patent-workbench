@@ -31,10 +31,12 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
 ```json
 {
   "13": {
-    "C1-orphaned-reads": {"count": 401, "approved": "2026-08-18 user (re-read-or-remap decision pending)", "scope": "pre-v2 feature_scores keyed to v1 names; top band re-read 08-20, tail remains"},
-    "C4-buried-champion": {"count": 1, "approved": "2026-08-18 user", "scope": "canary CN223926581 buried in Must sort (its 9 MUST verdicts are v1-keyed)"}
+    "C1-orphaned-reads": {"count": 401, "approved": "2026-08-18 user; 2026-08-20 accepted as scoped end-state (Claude recommendation, user 'go ahead') — all probes/lanes at marginal≈0 in the ≤2.0 orphan tail; re-read only on explicit user request. Closure wording stays 'among current-key reads'.", "scope": "pre-v2 feature_scores keyed to v1 names; top band + canary + sunk-13 re-read 08-20 (387 remain, all in the weak tail)"},
+    "R2-batch-corridor": {"count": 119, "approved": "2026-08-20 user 'go ahead'", "scope": "the COMPLETED legacy v2 sweep ran roster-35 before the corridor doctrine — its results are discovery-only forever and every conclusion carries recall: 1/14; future sweeps run roster ≤12 + follow-up stage"}
   },
-  "10": {}
+  "10": {
+    "R2-batch-corridor": {"count": 59, "approved": "2026-08-20 user 'go ahead'", "scope": "the COMPLETED legacy sweep ran roster-35 — discovery-only forever, conclusions carry recall: 7/12; future sweeps run roster ≤12 + follow-up stage"}
+  }
 }
 ```
 
