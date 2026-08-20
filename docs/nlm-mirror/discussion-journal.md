@@ -2383,3 +2383,44 @@ re-read under current keys). Same doctrine written into the
 patent-search-pipeline skill (closure-claim discipline block + the measured
 recall lessons). All standing t13 statements already re-scoped accordingly
 in the previous retraction entry.
+
+## 2026-08-20 — ROOT CAUSE ISOLATED by controlled repro: batch size + missing follow-ups (user's hypothesis CONFIRMED)
+
+**User:** "you talk about lexical rewording, but I think the problem is not
+there. NLM is intelligent enough to assess it. So there is something else.
+My guess is the follow-up questions." Also: use the NLM-stored sweeps as the
+leverage point — revisit judgments at near-zero token cost, from different
+angles, documenting each round in NLM as an iterative loop with history.
+
+**Claude (experiment, ~zero tokens):** Controlled repro in a scratch notebook
+(daf4622c, deleted after): CN205265271 + 9 fillers from its ORIGINAL round-21
+roster, then the EXACT sweep question (NLM_CLAIMS_FREE_PROMPT, frozen v2 MUST
+spec), then a per-doc follow-up.
+- **T1 — roster 10, exact question: CN205265271 claimed for 7/9 features.**
+  The identical question missed it 0/9 in the real sweep at roster 35.
+  → Mechanism = ANSWER-BUDGET COMPETITION: one reply over 35 sources attends
+  to the salient few; quiet docs get zero lines. NOT semantic blindness.
+- **T3 — per-doc follow-up: near-opus-grade per-feature YES/NO with
+  component citations** (7 YES / 2 NO — matches opus 6F/2P, agrees NO on the
+  trigger element). Follow-up mode ≈ free opus-lite.
+- Second, independent mechanism (found earlier same day): the 120KB staging
+  clip truncated CN116508192 (280KB) BEFORE its payoff paragraph [0193] —
+  NLM never received the disclosure. The embed lane also misses that doc
+  (rank 1778) because it embeds claims-only text.
+- Voided result: the earlier "Angle-A → NONE" ask hit the ROLLING sweep
+  notebook after rotation — the champions were no longer sources. Rule:
+  before interpreting any notebook answer, verify which sources it currently
+  holds.
+
+**Pipeline redesign proposals (need user sign-off before code changes):**
+1. Recall-critical sweep rounds at batch_size ~10-12 (not 35), OR keep 35 for
+   discovery + add a per-doc/per-trio FOLLOW-UP stage for every staged doc —
+   all free; answers stored = the iterative NLM loop with history.
+2. Fix staging truncation: split >120KB docs into multiple sources
+   (part 1/2/N) so nothing is clipped away.
+3. Embed lane: add description-chunk embeddings (claims-only missed
+   CN116508192).
+4. Standing method (user's directive): NLM = re-queryable assessment engine;
+   revisit judgments from new angles at zero cost; document every
+   interrogation round back into the mirror so no session re-reads what a
+   prior round already established.
