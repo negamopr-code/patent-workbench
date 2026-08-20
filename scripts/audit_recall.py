@@ -102,8 +102,11 @@ def ledger_docs(tab):
 
 
 def audit_tab(cx, rep, tab, reg_tab, args, lane_reports):
+    # --since-ts scopes the audit to ONE sweep generation — without it a re-sweep's
+    # recall would be polluted by the previous sweep's claims rows.
     rounds = cx.execute("select round, roster, claims, kind from nlm_claims "
-                        "where tab_id=? order by round", (tab,)).fetchall()
+                        "where tab_id=? and ts>=? order by round",
+                        (tab, args.since_ts or 0)).fetchall()
     if not rounds:
         rep.add("INFO", tab, "R0", "no nlm_claims rounds — nothing to audit")
         return
@@ -232,6 +235,8 @@ def main():
     ap.add_argument("--lane-report", action="append", default=[])
     ap.add_argument("--gt-min", type=float, default=4.0)
     ap.add_argument("--max-batch", type=int, default=12)
+    ap.add_argument("--since-ts", type=int, default=None,
+                    help="only count nlm_claims rounds with ts >= this (scope to one sweep)")
     ap.add_argument("--deploy-head", default=None)
     args = ap.parse_args()
     rep = Report()
