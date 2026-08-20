@@ -2276,3 +2276,37 @@ ETA: t13 well under an hour of sweep time (~17:00 UTC), t10 ~891 docs
 .wslconfig memory cap — now NINE incidents — and the t13 auditor baseline
 decision (412 orphans / 13 sunk / buried canary). After t10 completes:
 lane-1 silent probe (lexical top-30) + claimants funnel per the armed plan.
+
+## 2026-08-20 — t13 v2 sweep COMPLETE + ranking audit + final 2-claimant verify: funnel CLOSED
+
+**Claude (autonomous, same session as wedge-#9):** The t13 v2 claims-audit
+sweep finished at ~16:45 UTC: round 59, 2058/2058 audited, 11 claimants.
+Claimant head: canary CN223926581 on top with 33 pts / all 9 MUST — the funnel
+validated end-to-end. Per the mandatory rule the ranking-integrity auditor ran
+BEFORE any results were reported. Verdict: all counted violations are the
+known 08-18 baseline, unchanged (412 orphans / 13 sunk / canary buried at
+Must-pos 220 — all bug-A orphaned v1 reads; corpus-top block PASS). One NEW
+warning: the sweep claimant list must NOT be presented as "the most relevant
+docs" — the genuine opus Must-sort leaders (CN110146820 #1 3-full-MUST,
+EP4222838 #2 3-full-MUST, CN204215539 #3 3F/4P) received ZERO NLM claims
+(instrument divergence, not a code bug), and 10 of 11 organic claimants had
+opus ≤3.0 with two never deep-read. Auditor also asks that the 08-18 phrase
+"0 pairs in MUST-union among 616 reads" be reconciled with those three
+3-MUST docs before being repeated verbatim (no doc combines trigger [6]
+with BMS-CAN [5], so the pair-closure itself stands).
+
+The two unread claimants were then opus-verified (2-doc deep-compare,
+claude-opus-5): **AU2024205792 → 2.0** (0 full / 8 partial / 16 no — the NLM
+"4 MUST features" claim was over-claiming; it is a wiring-harness monitoring
+system (WHAMS), never a battery trigger) and **CN115051449 → 2.0** (2 full
+but only the generic BMS-CAN request/discharge elements, 9 partial — a power
+supply management system, not a triggering/test device). With that, EVERY t13
+claimant is opus-graded and none exceeds 3.0.
+
+**t13 status line for the user:** the sweep confirms the corpus holds no
+organic doc matching the benchmark's MUST union — the canary is alone at the
+top (9/9), the best organic docs remain the opus Must-sort leaders
+(3 full MUST each, holistic ≤5.0). t13 champions = opus Must sort, not the
+claimant list. Still on the user: the 412-orphan / 13-sunk re-read-or-remap
+decision (unchanged by the sweep) and .wslconfig (9 incidents).
+t10 sweep continues (round 34+, 1155/2046 at resume).
