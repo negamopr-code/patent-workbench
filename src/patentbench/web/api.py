@@ -1201,13 +1201,52 @@ def _auto_focus_ids(question: str, docs: list[dict]) -> list[int]:
 def _doc_source_text(doc: dict) -> str:
     """The candidate as a NotebookLM text source — FULL primary text (abstract +
     claims + description with [00NN] markers) first so it's never clipped out by
-    the derived digest; nlm_bridge clips the tail to ~100k chars."""
+    the derived digest. ⚠ nlm_bridge clips each SOURCE at 120_000 BYTES — stage
+    through _doc_source_parts(), never through a single add_source_text call
+    (2026-08-20: CN116508192's decisive paragraph sat past the clip and the
+    sweep missed a full trigger-chain disclosure)."""
     return "\n\n".join(filter(None, [
         f"{doc['number']} — {doc.get('title') or ''}",
         ("ABSTRACT:\n" + doc["abstract"]) if doc.get("abstract") else None,
         ("CLAIMS:\n" + doc["claims"]) if doc.get("claims") else None,
         ("DESCRIPTION:\n" + doc["description"]) if doc.get("description") else None,
         ("FULL-TEXT DIGEST:\n" + doc["digest"]) if doc.get("digest") else None]))
+
+
+STAGE_PART_BYTES = 118_000     # per-part budget, safely under nlm_bridge's 120_000 clip
+
+
+def _doc_source_parts(doc: dict) -> list[tuple[str, str]]:
+    """[(source_title, text)] covering the WHOLE candidate. Part 1 keeps the
+    canonical 'NUM — title' so _notebook_source_index/dedup are unchanged;
+    overflow parts are titled 'NUM (part k/K) — title' (the number extractor
+    still keys them to NUM). Guarantees the 120KB clip never removes content."""
+    text = _doc_source_text(doc)
+    data = text.encode("utf-8")
+    base = f"{doc['number']} — {(doc.get('title') or '')[:120]}"
+    if len(data) <= STAGE_PART_BYTES:
+        return [(base, text)]
+    parts, i = [], 0
+    while i < len(data):
+        chunk = data[i:i + STAGE_PART_BYTES].decode("utf-8", "ignore")
+        if not chunk:
+            break
+        parts.append(chunk)
+        i += len(chunk.encode("utf-8"))
+    n = len(parts)
+    return [(base if k == 0
+             else f"{doc['number']} (part {k + 1}/{n}) — {(doc.get('title') or '')[:100]}",
+             p) for k, p in enumerate(parts)]
+
+
+def _add_doc_parts(nb: str, doc: dict, profile: str | None) -> dict:
+    """Stage every part of a candidate; the first failing part's result wins."""
+    out = {"ok": True}
+    for title, text in _doc_source_parts(doc):
+        res = nlm_bridge.add_source_text(nb, title, text, profile=profile)
+        if not res.get("ok") and out.get("ok"):
+            out = res
+    return out
 
 
 def _verify_citations(tab_id: int, answer: str) -> str:
@@ -1253,9 +1292,7 @@ def _add_doc_to_notebook(doc_id: int, notebook_id: str | None = None) -> dict:
         return {"skip": "no notebook connected"}
     if doc.get("nlm_source_notebook") == nb:
         return {"skip": "already added"}
-    title = f"{doc['number']} — {(doc.get('title') or '')[:120]}"
-    res = nlm_bridge.add_source_text(nb, title, _doc_source_text(doc),
-                                     profile=_tab_profile(doc["tab_id"]))
+    res = _add_doc_parts(nb, doc, _tab_profile(doc["tab_id"]))
     if res.get("ok"):
         db.update_document(doc_id, nlm_source_notebook=nb)
     return res
@@ -3839,8 +3876,7 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
         _screen_set(tab_id, status_text=f"📤 staging round {st.get('round', 0) + 1}: "
                                         f"{added}/{len(missing)} added…")
         _screen_heartbeat(tab_id)
-        nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
-                                   _doc_source_text(d), profile=prof)
+        _add_doc_parts(nb, d, prof)
         added += 1
     # 3. wait for ingestion (probe costs no chat quota); carried-over sources are
     #    already confirmed — only the fresh adds need probing.
@@ -3892,6 +3928,10 @@ def _run_nlm_screen(tab_id: int) -> None:
         spec = _benchmark_feature_spec_for_nlm(bm)
         params = st.get("params") or {}
         s_cap = int(params.get("survivor_cap", 10))
+        # ⚠ roster >12 = DISCOVERY-ONLY (F3a, proven 2026-08-20: one answer's
+        # attention budget over a big roster silences quiet docs — roster-35 →
+        # 0/9 claimed vs roster-10 → 7/9 for the same doc+question). The screen
+        # keeps 39 for cheap discovery; audit_recall R2 gates any clearance use.
         batch = int(params.get("batch_size", 39))
         question = _nlm_question(NLM_SCREEN_PROMPT, spec, top=s_cap)
         docs_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
@@ -4501,7 +4541,18 @@ def _claims_stage(tab_id: int, st: dict, want_ids: list[int],
     want_keys = {_shortlist_key(docs_by_id[i]["number"]): i for i in want_ids
                  if docs_by_id.get(i)}
     num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
-    stale = [sid for num, sid in num_map.items() if _shortlist_key(num) not in want_keys]
+    # rotation must scan RAW sources: a >120KB doc is staged in PARTS that all
+    # share its number — the collapsed num_map sees only one sid per number and
+    # would leave rotated-out parts lingering in the notebook.
+    raw = nlm_bridge.list_sources(nb, force=True, profile=prof)
+    stale = []
+    for s in (raw.get("sources") or []):
+        t = s.get("title") or ""
+        if t.startswith("🎯 BENCHMARK"):
+            continue
+        nums = patents.extract_candidates(t)
+        if not nums or _shortlist_key(nums[0]) not in want_keys:
+            stale.append(s["id"])
     if stale:
         _claims_set(tab_id, status_text=f"🗑 rotating out {len(stale)} source(s)…")
         nlm_bridge.delete_source(stale, nb, profile=prof)
@@ -4520,8 +4571,7 @@ def _claims_stage(tab_id: int, st: dict, want_ids: list[int],
         _claims_set(tab_id, status_text=f"📤 staging round {st.get('round', 0) + 1}: "
                                         f"{idx}/{len(missing)} added…")
         _claims_heartbeat(tab_id)
-        nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
-                                   _doc_source_text(d), profile=prof)
+        _add_doc_parts(nb, d, prof)
     _claims_set(tab_id, status_text="⏳ waiting for NotebookLM to ingest the batch…")
     known = set(num_map.values()) | ({bm_sid} if bm_sid else set())
     nlm_bridge.wait_sources_ready(nb, timeout=PIPELINE_INGEST_TIMEOUT,
@@ -4533,8 +4583,7 @@ def _claims_stage(tab_id: int, st: dict, want_ids: list[int],
         for k, did in want_keys.items():
             if k not in have:
                 d = docs_by_id[did]
-                nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
-                                           _doc_source_text(d), profile=prof)
+                _add_doc_parts(nb, d, prof)
         nlm_bridge.wait_sources_ready(nb, timeout=60, known_ready=set(num_map.values()),
                                       profile=prof)
         num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
@@ -4555,8 +4604,11 @@ def _claims_query(tab_id: int, nb: str, question: str) -> dict:
     return res
 
 
-_CLAIM_OK = ("verified", "fuzzy", "claimed")   # 'claimed' only exists in quotes-free runs
-_CLAIM_STATUS_RANK = {"verified": 3, "fuzzy": 2, "claimed": 1, "unverified": 0}
+_CLAIM_OK = ("verified", "fuzzy", "claimed", "followup")   # 'claimed'/'followup' = quotes-free evidence
+# 'followup' = per-doc follow-up YES (2026-08-20: recovers docs the broad round's
+# answer-budget silenced — roster-35 → 0/9 vs roster-10 → 7/9 for the same doc).
+_CLAIM_STATUS_RANK = {"verified": 3, "fuzzy": 2, "claimed": 1, "followup": 0.5,
+                      "unverified": 0}
 
 # Translation guard (NLM blind spot #1; replay-validated on t12 2026-08-18:
 # flags exactly the KR20260033205 opus-8.0 false-kill for ~10 probes/tab).
@@ -4658,6 +4710,9 @@ def _run_claims_audit(tab_id: int) -> None:
         pair_map = ({int(d): list(ks) for d, ks in (st.get("pairs") or {}).items()}
                     if pairs_mode else {})
         question = _nlm_question(NLM_CLAIMS_PROMPT if quoted else NLM_CLAIMS_FREE_PROMPT, spec)
+        # roster ≤12 keeps each doc inside the answer's attention budget (F3a);
+        # >12 rounds are flagged discovery-only by audit_recall R2. The 🔁
+        # follow-up stage below recovers docs the broad answer still silences.
         batch = int(params.get("batch_size", 12))
         docs_by_id = {d["id"]: d for d in db.list_documents(tab_id, full=True)
                       if d["status"] == "fetched"}
@@ -4718,6 +4773,46 @@ def _run_claims_audit(tab_id: int) -> None:
                                   if quoted else "claimed")
                         round_claims.setdefault(str(did), {})[str(k)] = [status, quote]
             db.add_nlm_claims_round(tab_id, rnd, roster, res["answer"], round_claims, kind)
+            # 🔁 follow-up stage (F3b, proven 2026-08-20): one broad answer per
+            # roster has a bounded attention budget — quiet docs get ZERO lines
+            # even when they disclose most features. A cheap per-doc follow-up in
+            # the same notebook recovers them (near-opus verdicts, free). Only
+            # YES answers become claims (status 'followup'); best-effort — an
+            # errored follow-up never fails the round. params followups=false
+            # disables.
+            if not pairs_mode and (params.get("followups", True)):
+                prior = st.get("claims") or {}
+                quiet = [did for did in roster
+                         if str(did) not in round_claims and str(did) not in prior
+                         and did in docs_by_id]
+                for fi, did in enumerate(quiet):
+                    d = docs_by_id[did]
+                    _claims_set(tab_id, status_text=(
+                        f"🔁 round {rnd}: follow-up {fi + 1}/{len(quiet)} "
+                        f"({d['number']})…"))
+                    _claims_heartbeat(tab_id)
+                    fu_q = (f"Now check ONE document specifically: {d['number']}. "
+                            "For EACH numbered feature of the checklist above, "
+                            "answer exactly 'FEATURE <k>: YES' or 'FEATURE <k>: "
+                            "PARTIAL' or 'FEATURE <k>: NO' for this one document, "
+                            "judged by FUNCTION — implicit realisations count.")
+                    res_fu = _claims_query(tab_id, nb, fu_q)
+                    if nlm_bridge.is_quota_error(res_fu):
+                        _claims_quota_pause(tab_id, res_fu.get("error") or "quota exhausted")
+                        return
+                    ans_fu = res_fu.get("answer") or ""
+                    if not ans_fu:
+                        continue
+                    got = {}
+                    for mm in re.finditer(
+                            r"FEATURE\s*#?\s*(\d+)\s*[:\-–]?\s*\**\s*YES\b", ans_fu, re.I):
+                        k = mm.group(1)
+                        if 1 <= int(k) <= len(must):
+                            got[k] = ["followup", ""]
+                    if got:
+                        round_claims[str(did)] = got
+                        db.add_nlm_claims_round(tab_id, rnd, [did], ans_fu,
+                                                {str(did): got}, kind + "-followup")
             merged = st.get("claims") or {}              # keep the BEST status per feature
             for did, feats in round_claims.items():
                 cur = merged.setdefault(did, {})
@@ -4789,7 +4884,7 @@ def _claims_finalize(tab_id: int, st: dict) -> None:
         for r in rows:
             feats = claims[str(r["id"])]
             note = " · ".join(
-                f"F{k}{'✓' if sv[0] == 'verified' else '~' if sv[0] == 'fuzzy' else '＋' if sv[0] == 'claimed' else '✗'}"
+                f"F{k}{'✓' if sv[0] == 'verified' else '~' if sv[0] == 'fuzzy' else '＋' if sv[0] == 'claimed' else '🔁' if sv[0] == 'followup' else '✗'}"
                 f" \"{(sv[1] or '')[:80]}\""
                 for k, sv in sorted(feats.items(), key=lambda kv: int(kv[0])))
             db.update_document(r["id"], nlm_score=float(r["score"]),
@@ -4853,14 +4948,34 @@ def _claims_finalize(tab_id: int, st: dict) -> None:
             f"quoted verify of the {len(above)} above-noise doc(s) (weight ≥3, "
             f"~{-(-len(above) // 12)} quoted round(s)), then opus for the verified "
             "survivors only. ")
+    # F6 guard (2026-08-20): claim-weight is measured NON-predictive of relevance
+    # (top claimants ≤3.0 opus while both champions got zero claims) — the DONE
+    # message must never show a claim-score list without the stored-score
+    # corpus-top alongside, or readers mistake discovery for relevance.
+    scored = sorted((d for d in docs.values() if d.get("score") is not None),
+                    key=lambda d: (-(d["score"] or 0), d["id"]))[:10]
+    corpus_top = ("\n📌 CURRENT CORPUS TOP-10 (live stored deep-read scores — the "
+                  "RELEVANCE ranking, unlike claim-weight): "
+                  + ", ".join(f"{d['number']} {d['score']}" for d in scored)
+                  if scored else "")
     db.append_message(tab_id, "s",
         f"🧾 Claims audit ({label}) DONE: {len(st.get('queue') or [])} doc(s) audited in "
         f"{st.get('round', 0)} round(s); {len(rows)} made ≥1 counted {label} claim. "
-        f"{quote_line}Top by claim score: "
+        f"{quote_line}Top by claim score (DISCOVERY signal, not relevance): "
         + ", ".join(f"{r['number']} ({r['score']}{'👑' if r['crown'] else ''})"
                     for r in top[:10])
         + (". Shortlist REWRITTEN (apply=true)." if applied else
-           ". Dry-run — shortlist untouched; raw answers in the nlm_claims table."))
+           ". Dry-run — shortlist untouched; raw answers in the nlm_claims table.")
+        + corpus_top)
+    # F7 support: leave a pending-trigger flag for the pipeline-integrity
+    # supervisor — cleared automatically once the post-sweep audits are fresh.
+    try:
+        os.makedirs("/data/audits", exist_ok=True)
+        with open("/data/audits/pending_trigger.json", "w") as fh:
+            json.dump({"event": "claims-audit-done", "tab": tab_id,
+                       "ts": time.time()}, fh)
+    except OSError:
+        pass
     _claims_set(tab_id, step="done", status_text="✅ done", error=None, applied=applied,
                 ranking=[[r["id"], r["number"], r["score"], r["crown"], r["n_ok"]]
                          for r in rows],

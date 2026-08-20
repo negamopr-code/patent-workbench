@@ -208,6 +208,18 @@ def main():
                                     {k: {"verdict": v[0], "red": v[1]}
                                      for k, v in gates.items()}}
 
+    # auto-clear the pending-trigger flag once the flagged tab's post-sweep
+    # evidence is fully FRESH (the trigger has been served)
+    if pending and str(pending.get("tab")) in report["tabs"]:
+        fr = report["tabs"][str(pending["tab"])]["freshness"]
+        if all(v == "FRESH" for v in fr.values()):
+            try:
+                os.unlink(pt)
+                report["pending_trigger"] = {"cleared": pending}
+                pending = None
+            except OSError:
+                pass
+
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=1))
     else:

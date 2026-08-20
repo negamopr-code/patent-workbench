@@ -67,6 +67,9 @@ def _embed_texts(sess, tok, texts):
     return np.vstack(out) if out else np.zeros((0, 384), dtype=np.float32)
 
 
+DESC_CHUNKS = 4        # description chunks, sampled EVENLY across its length
+
+
 def _doc_chunks(d):
     text = " ".join(filter(None, [d.get("title"), d.get("abstract"),
                                   d.get("claims"), d.get("text")])) \
@@ -75,6 +78,16 @@ def _doc_chunks(d):
     step = 180                      # ~230 tokens per 180 words, under MAX_TOK
     chunks = [" ".join(words[i:i + step]) for i in range(0, len(words),
                                                          step)][:CHUNKS_PER_DOC]
+    # F5 fix (2026-08-20): claims-only embedding ranked a champion whose
+    # disclosure lives in the DESCRIPTION at 1778/2058. Sample the description
+    # EVENLY — front to tail — so deep-embodiment content contributes. Corpus
+    # docs should therefore carry a "description" field.
+    dwords = (d.get("description") or "").split()
+    if dwords:
+        n = max(1, min(DESC_CHUNKS, -(-len(dwords) // step)))
+        span = max(len(dwords) - step, 0)
+        offs = [int(k * span / max(n - 1, 1)) for k in range(n)]
+        chunks += [" ".join(dwords[o:o + step]) for o in offs]
     return chunks or [d.get("number") or ""]
 
 
@@ -139,6 +152,18 @@ def rank(corpus_path, outdir, champ_min=4.0):
     champs = [d for d in labeled if d["score"] >= champ_min]
     print(f"\nlane recall: {hits}/{len(champs)} champions inside top-{TOP_N} "
           f"({100 * hits / max(len(champs), 1):.0f}%)")
+
+    # R5 lane report (audit_recall consumes it after `docker cp` into
+    # patent-bench:/data/audits/): full number->rank map for control checking.
+    tab = data.get("tab")
+    if tab is not None:
+        rep = {"lane": "embed", "tab": tab, "total": len(ids),
+               "ranks": {docs[i]["number"]: int(r) for i, r in rank_of.items()
+                         if i in docs}}
+        rp = os.path.join(outdir, f"lane_embed_{tab}.json")
+        with open(rp, "w") as fh:
+            json.dump(rep, fh)
+        print(f"lane report -> {rp} (docker cp into patent-bench:/data/audits/)")
 
     rng = np.random.default_rng(20260818)
     queue = [{"id": ids[i], "number": docs[ids[i]]["number"],
