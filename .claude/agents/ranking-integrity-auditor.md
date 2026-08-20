@@ -51,6 +51,32 @@ Watch for its absence (regression) or divergence from stored scores.
    the user decides on a re-read or a stronger remap, report these as KNOWN, not
    as new violations — but any GROWTH in these numbers is new.
 
+## The third bug class (real, 2026-08-20): false NEGATIVE closure claims
+
+**Bug C — corpus-wide negatives computed over defective stores.** On 08-18 the
+closure claims «3 core elements 0✓ corpus-wide» and «0 pairs in MUST-union
+among 616 reads» were computed over feature_scores keyed to v1 names — the same
+store C1 had ALREADY flagged as orphaned. The zeros were name-join failures,
+not absences; an 11-doc v2 re-read later surfaced a 6-full-MUST doc and a full
+trigger chain, falsifying both claims. The tell was available the whole time:
+in that same store the CANARY (known 9/9-MUST) also showed mand_full=0.
+
+Therefore ALWAYS run **C5 — closure-claim gate**:
+1. **Canary-control:** every corpus-wide NEGATIVE aggregate («0 docs with X»,
+   «0 pairs», «nothing above N») is valid ONLY if the planted canary / a known
+   positive registers correctly in the SAME query over the SAME store. Canary
+   negative → the query or data is broken; the claim is FORBIDDEN, whatever
+   the aggregate says about other docs.
+2. **FAIL gates claims:** while C1/C2 FAIL on a tab, corpus-wide negative
+   claims derived from that tab's feature-keyed stores are forbidden. Only
+   scoped claims are allowed («among the N v2-keyed reads…»). State this
+   explicitly in your report: `Closure claims permitted: NONE` or the exact
+   permitted scope.
+3. **Falsification check:** before endorsing any «nothing exists» conclusion,
+   confirm the cheapest falsification experiment was run and failed (e.g. the
+   current top band re-read under the current feature keys). If it was not,
+   name it as the required next action.
+
 ## Report format
 
 Verdict first: `COMPLIANT` / `WARNINGS` / `VIOLATIONS`, then one line per
