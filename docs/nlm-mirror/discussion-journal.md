@@ -2252,3 +2252,27 @@ time (WEB_CONCURRENCY=1 already live since wedge-#7 window). New ETA: t13
 .wslconfig memory cap — now 8 incidents — and the t13 auditor baseline
 decision (412 orphans / 13 sunk / buried canary). After t10 completes:
 lane-1 silent probe (lexical top-30) + claimants funnel per the armed plan.
+
+## 2026-08-20 — wedge #9: daytime host-down 07:53→16:04, caught on "continue"
+
+**User:** "continue"
+
+**Claude:** Bootstrap found patent-bench "Up About a minute" — the host went
+down again at ~07:53 UTC (sweep locks frozen at 07:53) and came back only at
+16:04 UTC, ~8h lost. This is the 9th memory/host incident, and the sweeps had
+survived barely 1.5h after the wedge-#8 recovery. /data intact as always:
+t10 round 33, 1155/2046, 857 claimants (advanced ~175 docs between 06:21 and
+07:53); t13 round 57, 1995/2058 — only ~63 docs from the finish line. One new
+wrinkle: localhost:8099 is connection-refused from the Claude container this
+session (Windows/WSL relay likely wedged, same pattern as travel-relay), so
+all status/resume calls went through `docker exec patent-bench python3` against
+127.0.0.1:8000 — the recipe works identically that way. Recovery per the
+standard recipe: locks long-stale (no backdating) → both POST-resumed
+(t10 round 33 resuming, t13 round 57 resuming) → watcher re-armed in-container
+(log 16:07:26Z) → background verifier + persistent completion/wedge monitor
+armed (fires on DONE / interrupted / unreachable). No deploys pending. New
+ETA: t13 well under an hour of sweep time (~17:00 UTC), t10 ~891 docs
+(runs into 08-21 at current pace if the host stays up). Still on user:
+.wslconfig memory cap — now NINE incidents — and the t13 auditor baseline
+decision (412 orphans / 13 sunk / buried canary). After t10 completes:
+lane-1 silent probe (lexical top-30) + claimants funnel per the armed plan.
