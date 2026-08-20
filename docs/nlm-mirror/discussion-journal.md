@@ -2230,3 +2230,25 @@ in-container (log 19:42:32Z). Remaining ETA: t13 ~343 docs (~3-4h), t10 ~1206
 docs (deep into 08-20). Still pending on user: .wslconfig memory cap (7th
 memory-related incident window) and the t13 auditor baseline decision (412
 orphans / 13 sunk / buried canary).
+
+## 2026-08-20 — wedge #8: another overnight host-down, caught on "continue"
+
+**User:** "continue"
+
+**Claude:** Bootstrap found patent-bench (and the whole WSL VM) only "Up 5
+minutes" — the host rebooted ~06:13 UTC. Both sweep locks were frozen at 20:39
+08-19, i.e. the sweeps died less than an hour after the wedge-#7 recovery and
+the machine was down most of the night again (~9.5h lost). This is the 8th
+memory/host incident. /data survived intact as always: t10 round 28, 980/2046,
+753 claimants (it had advanced ~140 docs before dying); t13 round 53,
+1855/2058, canary-only. Note: the t13 "done 2058/2058" from the nlm-screen
+endpoint is the OLD Aug-9 screen artifact — the live v2 sweep is the
+claims-audit one and was NOT done. Recovery per the standard recipe: locks
+long-stale (no backdating) → both POST-resumed (t10 round 28, t13 round 53,
+both confirmed back to "asking NotebookLM") → watcher re-armed in-container
+(log 06:21:25Z) → session completion monitor armed. No deploys pending this
+time (WEB_CONCURRENCY=1 already live since wedge-#7 window). New ETA: t13
+~200 docs (~2-3h, ~09:00 UTC), t10 ~1066 docs (late 08-20). Still on user:
+.wslconfig memory cap — now 8 incidents — and the t13 auditor baseline
+decision (412 orphans / 13 sunk / buried canary). After t10 completes:
+lane-1 silent probe (lexical top-30) + claimants funnel per the armed plan.
