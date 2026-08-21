@@ -2684,3 +2684,23 @@ funnels; v2 negatives void by measurement; 178 v2 rounds remain in nlm_claims
 as free history; opus ground truth reused as the verification benchmark.
 Doctrine written into patent-search-pipeline lessons: sweep queue = unknowns
 + planted controls; protocol validation = small stratified sample.
+
+## 2026-08-21 — t10 CALIBRATION RESULT: new protocol recall 12/12 (100%) vs legacy 58%
+
+**Claude:** The 36-doc stratified calibration (12 GT ≥4.0 / 12 mid 3.0 / 12
+low ≤1.0, 23 rounds incl. per-doc follow-up rows, all roster ≤12) completed on
+the drawnformula account. Audited numbers (audit_recall --since-ts scoped):
+- **R1 recall 12/12 (100%)** on the opus ground truth — legacy roster-35
+  protocol measured 58% on the same tab. All 5 previously-missed non-US docs
+  claimed, 4 of them with quote-VERIFIED claims.
+- **R4: all 3 paraphrased canaries claimed** (CN113924787 ×6, EP3849091 ×3
+  verified, JP2019221076 ×2) — paraphrase blindness is gone at roster-12.
+  (R4 initially reported them unclaimed — inverted map in the check, fixed.)
+- Discrimination: GT champions 6–8 claims mostly quote-verified;
+  low band 1–3 claims mostly unverified/follow-up. Claim-weight remains a
+  DISCOVERY signal (34/36 claimed something) — verified-weight prioritizes
+  the funnel, opus still grades.
+- Noted for the t13 run: the follow-up stage is generous (claims for weak
+  docs too) — expected; follow-up status ranks below 'claimed' and feeds the
+  funnel, never the ranking.
+t13 unknowns-sweep (1376 docs, 115 rounds) continues under quota auto-resume.
