@@ -175,8 +175,8 @@ def audit_tab(cx, rep, tab, reg_tab, args, lane_reports):
                 "NO paraphrased canaries planted — recall has no live control; "
                 "plant known-relevant docs reworded away from the feature phrasing")
     else:
-        nums = {n: i for i, n in ((r[1], r[0]) for r in cx.execute(
-            "select id, number from documents where tab_id=?", (tab,)))}
+        nums = {num: did for did, num in cx.execute(
+            "select id, number from documents where tab_id=?", (tab,))}
         dark = [p for p in para if nums.get(p) not in claimed_ids]
         if dark:
             rep.add("FAIL", tab, "R4-paraphrased-canary",
