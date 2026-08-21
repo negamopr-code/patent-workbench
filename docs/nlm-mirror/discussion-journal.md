@@ -2704,3 +2704,33 @@ the drawnformula account. Audited numbers (audit_recall --since-ts scoped):
   docs too) — expected; follow-up status ranks below 'claimed' and feeds the
   funnel, never the ranking.
 t13 unknowns-sweep (1376 docs, 115 rounds) continues under quota auto-resume.
+
+## 2026-08-21 — canary clarification + t13 learnings extended to t11/t12/t14 (user directive)
+
+**User:** understood CN223926581 as a real 9/9 finding → corrected: it is the
+PLANTED CANARY (benchmark's own disclosure), 9/9 by construction — the change
+was in the MEASUREMENT (orphan re-keying + protocol fixes made existing
+coverage visible), not the corpus. Directive: study where the change happened
+and launch the learnings on t11/t12/t14, "different agents checking different
+points", especially where no perfect document was found.
+
+**Claude:** Audit evidence for the three tabs (from the standing verdict
+files): C1/C6 CLEAN everywhere — no orphaning, top bands current-key (the
+t13-killer does not apply). Measured recall t11 = 96% (89/93, quoted regime).
+The shared exposure is **S1 blind tails**: t11 100 · t12 219 · t14 231 docs
+staged truncated AND never deep-read — the CN116508192-class risk (tail-borne
+disclosure invisible to every instrument). Plan executed:
+- Controls registry extended to all five tabs (natural paraphrased canaries =
+  their opus champions: t11 CN117039286/CN220652165/CN116404323, t12
+  KR20260033205/KR20240099963/CN119833811, t14 EP4152472/CN103457003/
+  CN118318177).
+- **t12 blind-tail sweep LAUNCHED** (230 docs = 222 blind + 8 controls, ~20
+  rounds, work2 account, new protocol — multi-part staging shows the tails to
+  NLM for the FIRST time); **t14 chains automatically** (243 docs) when t12
+  finishes; **t11 (100 docs) queues behind t13** on the default account.
+- Watcher armed for 12+14; t13 unknowns-sweep still quota-paused (default
+  account), auto-resumes.
+- ⚑ Reminder surfaced: t11 CN219553754 upgraded 3.0→6.0 by the hygiene
+  driver (08-18, parked for user revisit) — with three 7.0 docs above it,
+  t11's champion picture should be re-reported through the supervisor gate
+  after its blind-tail sweep.
