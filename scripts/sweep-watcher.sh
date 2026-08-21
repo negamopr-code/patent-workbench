@@ -14,6 +14,9 @@ while :; do
     running=$(printf %s "$st" | grep -o '"running":[a-z]*' | cut -d: -f2)
     resumable=$(printf %s "$st" | grep -o '"resumable":[a-z]*' | cut -d: -f2)
     phase=$(printf %s "$st" | grep -o '"phase":"[^"]*"' | cut -d'"' -f4)
+    # quota_paused has its own in-app hourly probe — resuming every 5 min just
+    # burns attempts against the exhausted quota (churn seen 2026-08-21)
+    [ "$phase" = "quota_paused" ] && continue
     if [ "$running" != "true" ] && [ "$resumable" = "true" ]; then
       r=$(curl -s --max-time 30 -X POST "$API/api/tabs/$t/claims-audit" \
             -H 'Content-Type: application/json' -d '{"resume":true}')
