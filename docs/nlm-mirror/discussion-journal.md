@@ -2754,3 +2754,24 @@ become final-by-evidence only after this sweep + funnel + supervisor gate.
 Leverage-principle nuance recorded: "don't re-ask about opus-graded docs"
 stands; sonnet-graded docs are a WEAKER instrument's verdicts — a
 measured-100%-recall NLM pass is a legitimate second opinion there.
+
+## 2026-08-21 — VPS migration roadmap issued (future plan, approved, NOT executing now)
+
+**User:** "issue the detailed plan for the future (not for now) how to move
+patent benchmark app on VPS rails" → decisions via Q&A: hybrid-first (app+data
+first, Google browser sessions later), Claude Code installed on the VPS for
+auth, Hetzner ~€15-20/mo (CPX41-class, 16GB).
+
+**Claude:** Full phased plan written to **docs/vps-migration-plan.md**
+(also the approved plan file). Highlights: measured payload 2.1GB across 3
+named volumes; the decisive go/no-go is the **cookie-canary** (NLM CLI calls
+from the datacenter IP with transplanted cookies, run via the keeper's
+boot-quarantine so no browser touches Google from the new IP first); compose
+file replaces both serve.sh scripts (mem_limits so a leak kills a container,
+never the host — the WSL2 lesson); operation via `docker context` over
+Tailscale so every existing docker-exec audit/sweep command works unchanged;
+verification = the repo's own audit gates + 1-round sweep canary per account;
+Stage B (browser sessions to VPS) gated on 2 clean weeks + per-account
+re-login ladder; rollback = local volumes kept as cold standby, never
+deleted. Risk register headed by Google datacenter-IP rejection
+(medium-high; cheap IP swap before committing accounts).
