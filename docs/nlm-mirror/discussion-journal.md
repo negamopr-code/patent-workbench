@@ -2734,3 +2734,23 @@ disclosure invisible to every instrument). Plan executed:
   driver (08-18, parked for user revisit) — with three 7.0 docs above it,
   t11's champion picture should be re-reported through the supervisor gate
   after its blind-tail sweep.
+
+## 2026-08-21 — user challenge: "is t10 final?" → NO; sonnet-band cross-check launched
+
+**User:** "when you say t10 is nothing to run, does it mean that you declare
+the current documents choice as a final?"
+
+**Claude:** Corrected an imprecision: t10 is 100% READ but only ~726 docs by
+opus — 1288 are sonnet-only, and the measured under-grade case (US20220221016
+sonnet 3.0 → opus 6.0 champion) came from exactly that band. Champion set is
+gate-approved on current evidence, but "final" was premature while a second
+instrument's opinion on the sonnet band was affordable and missing. Now it
+is affordable: the v3 protocol measured 100% recall on t10's ground truth →
+**t10 sonnet-band cross-check sweep LAUNCHED** on the idle drawnformula
+account (1294 docs = 1288 sonnet-only + 6 blind GT controls, ~108 rounds,
+quoted, roster-12, follow-ups). Signature to watch: high verified-claim
+weight + low sonnet score = upgrade candidate → opus read. t10 champions
+become final-by-evidence only after this sweep + funnel + supervisor gate.
+Leverage-principle nuance recorded: "don't re-ask about opus-graded docs"
+stands; sonnet-graded docs are a WEAKER instrument's verdicts — a
+measured-100%-recall NLM pass is a legitimate second opinion there.
