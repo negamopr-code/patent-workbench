@@ -2667,3 +2667,20 @@ Watcher instances armed for both tabs; one session monitor covers both
 sweeps (completion / calibration-gate park / interruption / wedge). Both
 runs are quota-bound multi-day grinds with full self-recovery; post-sweep
 audits + supervisor gate before any results are reported.
+
+## 2026-08-21 — user correction: don't re-assess from zero — sweep the UNKNOWNS only
+
+**User:** "but it means that you make assessment by nlm from zero and not
+leverage info you already collected by nlm before?"
+
+**Claude:** Correct — design flaw, fixed at a cost of ~3 rounds. Both v3
+full-corpus sweeps stopped and relaunched scoped: t13 → 1365 never-read docs
++ 11 planted controls (canary, both paraphrased canaries, 8 random blind
+ground-truth probes), 115 rounds instead of 172; t10 → 36-doc stratified
+calibration sample (12 GT / 12 mid / 12 low), 3 rounds instead of 171 — t10
+is 100% opus-graded, a full re-sweep would have been days of quota for zero
+new knowledge. Leverage inventory: v2 positives fully harvested by the opus
+funnels; v2 negatives void by measurement; 178 v2 rounds remain in nlm_claims
+as free history; opus ground truth reused as the verification benchmark.
+Doctrine written into patent-search-pipeline lessons: sweep queue = unknowns
++ planted controls; protocol validation = small stratified sample.
