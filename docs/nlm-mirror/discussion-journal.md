@@ -2650,3 +2650,20 @@ implicit-labelled YES as a lead requiring the stored opus note before acting.
 docs). R6 queues for BOTH t10 and t13 are now fully verified — doctrine
 validation complete on both tabs that motivated the protocol: small-roster +
 per-doc follow-up recovers every known roster-35 miss, for free.
+
+## 2026-08-21 — overnight self-healing verified; t10 v3 re-sweep launched in parallel
+
+**User:** "continue"
+
+**Claude:** First overnight without a host incident in four days (container up
+10h). The quota-pause → auto-resume loop worked unattended: t13 v3 slept on
+NLM quota from ~22:10, the in-container watcher resumed it at 08:03Z, round 3
+staging by 08:09. Early-round validation stands (canary 9/9 quote-verified,
+both paraphrased canaries recovered via the follow-up stage, claim counts
+tracking opus scores) → per plan the **t10 v3 re-sweep launched 08:09Z** on
+its own NLM account (drawnformula, no quota contention): scope=corpus,
+quoted, roster-12, follow-ups, numeral-free spec, 2049 docs ≈ 171 rounds.
+Watcher instances armed for both tabs; one session monitor covers both
+sweeps (completion / calibration-gate park / interruption / wedge). Both
+runs are quota-bound multi-day grinds with full self-recovery; post-sweep
+audits + supervisor gate before any results are reported.
