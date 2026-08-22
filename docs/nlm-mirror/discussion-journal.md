@@ -2855,3 +2855,21 @@ safe (US20220221016 precedent: sonnet 3.0 → opus 6.0); 6 reads bought the
 calibration that the claim-weight top tier of the sonnet band is clean —
 which licenses raising the funnel bar for later batches. 6 reads for band
 confidence vs 1288 for certainty vs 0 for blindness.
+
+## 2026-08-22 — wedge #11: same-day repeat restart; recipe-#10 re-run confirmed
+
+**User:** "how is it going?"
+
+**Claude:** Status check surfaced a fresh wedge: patent-bench + nlm-keeper
+restarted ~19:57 UTC (second restart today), which per wedge-#10 doctrine
+strands all quota_paused tabs — probe threads die with the container while
+the status keeps saying "auto-resume armed", and the watcher (docker exec -d)
+dies too. State on /data was intact: t10 sonnet-band r11 132/1294 (131
+claimants), t12 blind-tail r7 84/230, t13 unknowns r7 84/1376 (20 claimants).
+Recovery 20:19–20:22 UTC, first repeat run of the extended recipe: one-time
+POST resume for t13→t10→t12, watcher re-armed for 10/12/13 (log 20:20:34Z),
+then verified all three re-parked quota_paused with LIVE probes (fresh
+quota_resume_at 21:21–21:22 UTC). All three NLM accounts (drawnformula /
+work2 / default) still quota-exhausted this evening; sweeps proceed
+automatically when quotas return. No rankings/results were interpreted —
+audit gates unchanged.
