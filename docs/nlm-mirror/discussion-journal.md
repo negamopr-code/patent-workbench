@@ -2795,3 +2795,27 @@ pre-fix version — fresh docker cp deployed the quota_paused-skipping one).
 Verified: t12 RUNNING (work2 quota alive, ingesting r4); t10/t13 re-parked
 quota_paused with fresh probes (~08:04 UTC). Memory healthy (3.4GB avail,
 patent-bench 1.1GiB under WEB_CONCURRENCY=1). Incident chronicle updated.
+
+## 2026-08-22 — user directives: t10/t13 priority + account exclusivity; incremental opus funnel expected
+
+**User:** (1) intermediate results should already yield an opus-read
+verification-ready list; (2) priority = t10 and t13 — do NOT share t10's
+account with anything until t10 finishes, same for t13; 3 NLM accounts total.
+
+**Claude:** Account map verified from DB bindings: t10=drawnformula
+(exclusive), t13=default, t12/t14=work2 — exclusivity already holds; the one
+risk was t11 (bound to default, "queued behind t13") — confirmed NO auto-chain
+exists (pending_trigger.json is only a supervisor flag), t11's 100-doc sweep
+was never launched and stays HELD until t13 completes. Slowness explained &
+measured: v3 protocol is ~5-8x costlier per doc by design (roster-12, quoted,
+multi-part staging, in-sweep follow-ups; bought 100% vs 58% recall); quota
+wall-clock dominates (t13's default account parked all morning; t10 got ~3h
+of quota; t12 unthrottled pace = ~90 min/round).
+**Incremental funnel STARTED (new working mode — don't wait for sweep end):**
+computed interim claim-weight ranking from t10's live state (132/1294 audited,
+Σmust=33): blind GT controls rank 1-2 (US20230337972 24.0👑, EP3970350 17.0 —
+canary healthy). Sonnet-band upgrade candidates → **opus reads LAUNCHED**
+(deep-compare, reading_model=opus, 6 docs): WO2020210283 (14.0👑 vs sonnet
+1.0 — the US20220221016-class signature), EP3909223 (13.0), EP3707525 (10.0),
+US20140247148 (10.0), CN105723590 (8.0), WO2021121629 (7.0). Verdicts land in
+stored scores; repeat per batch as the sweep advances.
