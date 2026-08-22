@@ -2819,3 +2819,16 @@ canary healthy). Sonnet-band upgrade candidates → **opus reads LAUNCHED**
 1.0 — the US20220221016-class signature), EP3909223 (13.0), EP3707525 (10.0),
 US20140247148 (10.0), CN105723590 (8.0), WO2021121629 (7.0). Verdicts land in
 stored scores; repeat per batch as the sweep advances.
+
+## 2026-08-22 — funnel batch #1 verdicts: ALL LOW — sonnet band holds so far
+
+**Claude:** Opus read all 6 upgrade candidates from t10 rounds 1-11:
+WO2021121629 2.0 · CN105723590 2.0 · EP3707525 2.0 · EP3909223 2.0 ·
+US20140247148 2.0 · WO2020210283 **1.0** (opus CONFIRMS sonnet's 1.0 despite
+the 14.0👑 claim weight — the crown claim rode generic microwave/RF wireless-
+power features). No US20220221016-class upgrade in this batch; sonnet's grades
+in this band look trustworthy so far, and "claim-weight = discovery, not
+relevance" (08-20 lesson) is re-confirmed at the funnel level. Policy: keep
+per-batch funnel as t10 advances; if the NEXT batch is also all-low, raise the
+entry bar (claim weight ≥10 or verified-quote weight only) — stop condition
+per the marginal≈0 standing rule.
