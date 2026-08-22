@@ -2832,3 +2832,26 @@ relevance" (08-20 lesson) is re-confirmed at the funnel level. Policy: keep
 per-batch funnel as t10 advances; if the NEXT batch is also all-low, raise the
 entry bar (claim weight ≥10 or verified-quote weight only) — stop condition
 per the marginal≈0 standing rule.
+
+## 2026-08-22 — user: "why opus-read them at all — why doesn't the sweep itself realise they're irrelevant?"
+
+**User:** If the funnel works, why don't we realise irrelevance during the
+NLM sweep itself instead of spending opus reads?
+
+**Claude:** Doctrine answer, now journaled explicitly: the sweep is a RECALL
+instrument — per-feature isolated questions, generous claim statuses,
+follow-up rescues; that tuning is what bought 58%→100% recall, and its flip
+side is honest over-claiming (generic docs really do mention mid-weight
+features; NLM never sees the benchmark as a weighted system). Claim weight =
+"touches features somewhere", not "close to the invention" (08-20:
+claimant-list ≠ relevance; t10 legacy: 857/1155 claimed something).
+Tightening the sweep to self-filter trades recall for precision at the wrong
+price: false positive = 1 cheap opus read; false negative = an invisible
+dropped champion, unrecoverable short of re-sweeping 1300 docs (the legacy
+protocol WAS effectively stricter — and missed 42% of GT). Hence NLM = wide
+net, opus = judge (patent-search-pipeline doctrine). And batch #1 wasn't
+wasted even though all-low: before it we did NOT know sonnet's 1.0s were
+safe (US20220221016 precedent: sonnet 3.0 → opus 6.0); 6 reads bought the
+calibration that the claim-weight top tier of the sonnet band is clean —
+which licenses raising the funnel bar for later batches. 6 reads for band
+confidence vs 1288 for certainty vs 0 for blindness.
