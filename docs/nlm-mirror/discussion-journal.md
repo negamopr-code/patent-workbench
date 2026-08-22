@@ -2775,3 +2775,23 @@ Stage B (browser sessions to VPS) gated on 2 clean weeks + per-account
 re-login ladder; rollback = local volumes kept as cold standby, never
 deleted. Risk register headed by Google datacenter-IP rejection
 (medium-high; cheap IP swap before committing accounts).
+
+## 2026-08-22 — wedge #10 recovery: quota_paused tabs are STRANDED after a restart
+
+**User:** "continue"
+
+**Claude:** patent-bench had restarted ~06:55 UTC (wedge #10; 8099 relay
+wedged again → docker-exec 127.0.0.1:8000 path). All three in-flight sweeps
+intact on /data: t10 sonnet-band r6 72/1294 · t12 blind-tail r4 48/230 ·
+t13 unknowns r4 48/1376. **New failure mode closed:** tabs parked in
+quota_paused show "auto-resume armed" after a restart, but the hourly probe
+lives as a THREAD inside the job — no startup re-arm exists, and the fixed
+watcher (d5bd910) deliberately skips quota_paused. Post-restart they are
+stranded forever. Recipe extended: one-time POST resume for quota_paused
+tabs too (job restarts, re-probes, re-parks with a LIVE probe thread — a
+re-arm, not churn). Executed: t13 resumed 07:03, t10+t12 resumed 07:06,
+watcher re-armed for 10/12/13 (the in-container watcher copy was still the
+pre-fix version — fresh docker cp deployed the quota_paused-skipping one).
+Verified: t12 RUNNING (work2 quota alive, ingesting r4); t10/t13 re-parked
+quota_paused with fresh probes (~08:04 UTC). Memory healthy (3.4GB avail,
+patent-bench 1.1GiB under WEB_CONCURRENCY=1). Incident chronicle updated.
