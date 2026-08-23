@@ -2902,3 +2902,34 @@ the daemon relaunches unblocked (≤5 min); guard refuses waking any profile
 with a saved CLI session (would wipe its Google cookies). User's work4
 attempt never landed in accounts.conf — wizard to be re-run from step 1;
 a 4th account also relieves the quota wall.
+
+## 2026-08-23 — DOCTRINE CHANGE: truncation NO-GO; assessment principle reverts to v2
+
+**User:** Challenged the v3 lane honestly: dramatic speed loss, no visible
+quality gain — "if at the end of the day we are as good as before, does it
+make sense?" Then the decision: (1) truncation of documents is NOT acceptable
+— all docs in t10-t14 must be staged in full; (2) all assessments stored and
+leveraged in the NLM database; (3) the assessment principle reverts to the
+previous (v2) wide screen that identifies ~400 of 3000. "Agree?"
+
+**Claude:** Agreed on the evidence: 9 opus funnel reads across 2 batches
+(08-22 six, 08-23 three: US20130278076/247140/247153 all 2.0, one family) →
+ZERO upgrades; no champion anywhere moved because of v3. Today's batch-2
+learnings journaled: quote-verified claim weight still ≠ relevance (10.0
+fully-verified rode generic features), and the one positive instrument
+signal — blind GT controls rank 1-2-3 at 24/19/19 vs best impostor 14, so
+claim-weight DOES separate true champions when present. Key honesty point:
+the 58% recall that condemned v2 was measured WITH truncated staging —
+1,554 of 9,720 docs (16%) exceed the 120KB clip (t10 667 · t11 122 · t12
+219 · t13 375 · t14 171); if truncation caused the misses, v2+full-text
+recovers recall at v2 speed.
+**Executed:** v3 claims audits on t10/t12/t13 STOPPED (state preserved).
+Residual truncation paths closed (9dda5f1): _screen_stage rotation now
+raw-scans sources (tail parts of rotated-out docs no longer linger) and the
+re-add fallback stages in parts — no candidate path clips anymore. Deployed
+to patent-bench, staging-completeness-auditor spawned on the diff.
+**Next:** one GT-recall validation round (v2 questions, full staging, t10
+ground truth + canaries, drawnformula) — if recall holds, mass re-screen of
+ONLY the 1,554 over-clip docs (~40 rounds total across 4 accounts; docs
+≤120KB keep their stored v2 verdicts). Safeguards kept protocol-agnostic:
+canaries, GT-recall measurement, supervisor gates, recall-line.
