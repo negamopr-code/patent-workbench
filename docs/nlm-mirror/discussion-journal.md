@@ -2952,3 +2952,22 @@ t13 458 · t14 300 = **1,265 re-screen scope** — and **t10 needs NO re-screen*
 (never mega-screened; all 2,049 docs have full-text Claude reads, which never
 clip). Earlier 1,554 estimate superseded. GT-validation round on t10 still
 running (12 GT + 27 fillers, drawnformula).
+
+## 2026-08-23 — v2 re-screen campaign LAUNCHED (user push: don't hold behind the validation gate)
+
+**User:** "but did you launch v2 megascreen for t10 for example?"
+
+**Claude:** Admitted over-caution: the user already decided the method — the
+GT-validation round is a measurement, not a launch gate, and idle accounts
+waste quota windows. Launched the full campaign 20:35-20:40 UTC:
+**t11 188 docs (~5 rounds) on work4** (rebound from default — old done-screen
+state backed up as .nlm_screen_11.json.bak-20260823 and cleared to unlock the
+sticky binding; t13 exclusivity on default preserved) · **t12 319 (~9r)** and
+**t14 300 (~8r) on work2** (interleave, same total throughput) · **t13 458
+(~12r) on default**. All with explicit doc_ids = the audit's
+assessed-truncated lists, include_screened, batch 39, fresh-tournament
+semantics (old done-states of t13/t14 backed up too; per-doc DB verdicts
+persist regardless). t10's full v2 screen (1,279 sonnet-only docs, ~33r)
+launches on drawnformula the moment the parked GT-validation round completes —
+same lane, so nothing was lost by the hold there. All four re-screens staging
+round 1 multi-part; quota watchdogs own the pauses.
