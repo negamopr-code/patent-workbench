@@ -3855,7 +3855,18 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
     # 1. delete candidate sources that are neither benchmark nor wanted (previous
     #    round's losers — safe HERE because the previous answer was accepted and
     #    persisted before this round began; a crash between rounds re-runs this).
-    stale = [sid for num, sid in num_map.items() if _shortlist_key(num) not in want_keys]
+    #    Rotation must scan RAW sources: a >120KB doc is staged in PARTS that all
+    #    share its number — the collapsed num_map sees one sid per number and would
+    #    leave rotated-out tail parts lingering (same fix as _claims_stage).
+    raw = nlm_bridge.list_sources(nb, force=True, profile=prof)
+    stale = []
+    for s in (raw.get("sources") or []):
+        t = s.get("title") or ""
+        if t.startswith("🎯 BENCHMARK"):
+            continue
+        nums = patents.extract_candidates(t)
+        if not nums or _shortlist_key(nums[0]) not in want_keys:
+            stale.append(s["id"])
     if stale:
         _screen_set(tab_id, status_text=f"🗑 rotating out {len(stale)} source(s)…")
         nlm_bridge.delete_source(stale, nb, profile=prof)
@@ -3890,9 +3901,9 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
     failed = []
     for k, did in want_keys.items():
         if k not in have:
-            d = docs_by_id[did]
-            nlm_bridge.add_source_text(nb, f"{d['number']} — {(d.get('title') or '')[:120]}",
-                                       _doc_source_text(d), profile=prof)
+            # re-add in PARTS too — the old single-source fallback silently
+            # truncated >120KB docs (truncation is a NO-GO, 2026-08-23 directive)
+            _add_doc_parts(nb, docs_by_id[did], prof)
     if any(k not in have for k in want_keys):
         nlm_bridge.wait_sources_ready(nb, timeout=60, known_ready=set(num_map.values()),
                                       profile=prof)
