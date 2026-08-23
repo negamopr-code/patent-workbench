@@ -96,11 +96,24 @@ def main():
             sys.exit(f"benchmark add failed: {r.get('error')}")
         for i, c in enumerate(picked):
             d = docs[c["id"]]
-            r = nlm_bridge.add_source_text(
-                nbid, f"{d['number']} — {(d['title'] or '')[:120]}",
-                doc_source_text(d), profile=PROFILE)
-            if not r.get("ok"):
-                sys.exit(f"source add {d['number']} failed: {r.get('error')}")
+            # stage in parts — truncation NO-GO (2026-08-23): >118KB docs must
+            # never lose their tail to the CLI's single-source clip
+            text = doc_source_text(d)
+            data = text.encode("utf-8")
+            base = f"{d['number']} — {(d['title'] or '')[:120]}"
+            parts, j = [], 0
+            while j < len(data):
+                chunk = data[j:j + 118_000].decode("utf-8", "ignore")
+                if not chunk:
+                    break
+                parts.append(chunk)
+                j += len(chunk.encode("utf-8"))
+            for k, p in enumerate(parts):
+                title = (base if k == 0 else
+                         f"{d['number']} (part {k + 1}/{len(parts)}) — {(d['title'] or '')[:100]}")
+                r = nlm_bridge.add_source_text(nbid, title, p, profile=PROFILE)
+                if not r.get("ok"):
+                    sys.exit(f"source add {d['number']} failed: {r.get('error')}")
             print(f"staged {i + 1}/{len(picked)}", flush=True)
         w = nlm_bridge.wait_sources_ready(nbid, timeout=900, profile=PROFILE)
         print("ingest:", w)

@@ -1240,13 +1240,29 @@ def _doc_source_parts(doc: dict) -> list[tuple[str, str]]:
 
 
 def _add_doc_parts(nb: str, doc: dict, profile: str | None) -> dict:
-    """Stage every part of a candidate; the first failing part's result wins."""
+    """Stage every part of a candidate; one retry per failing part; the first
+    still-failing part's result wins (truncation NO-GO: a lost tail part must
+    surface as an error, never as a silently shorter document)."""
     out = {"ok": True}
     for title, text in _doc_source_parts(doc):
         res = nlm_bridge.add_source_text(nb, title, text, profile=profile)
+        if not res.get("ok"):
+            res = nlm_bridge.add_source_text(nb, title, text, profile=profile)
         if not res.get("ok") and out.get("ok"):
             out = res
     return out
+
+
+def _restage_missing_parts(nb: str, doc: dict, prof: str | None,
+                           raw_titles: set[str]) -> int:
+    """Per-PART presence repair: re-add exactly the parts of `doc` whose titles
+    are absent from the notebook's raw source list. The per-number presence
+    check cannot see a lost tail part (part 1 keeps the canonical title), so
+    completeness must be verified at part granularity. Returns #re-added."""
+    missing = [(t, x) for t, x in _doc_source_parts(doc) if t not in raw_titles]
+    for t, x in missing:
+        nlm_bridge.add_source_text(nb, t, x, profile=prof)
+    return len(missing)
 
 
 def _verify_citations(tab_id: int, answer: str) -> str:
@@ -3904,7 +3920,18 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
             # re-add in PARTS too — the old single-source fallback silently
             # truncated >120KB docs (truncation is a NO-GO, 2026-08-23 directive)
             _add_doc_parts(nb, docs_by_id[did], prof)
-    if any(k not in have for k in want_keys):
+    # 4b. part-completeness: a doc counts as present when part 1 landed, but a
+    #     lost TAIL part is invisible to the per-number check — repair at part
+    #     granularity so no doc is ever questioned with a silently missing tail.
+    raw2 = nlm_bridge.list_sources(nb, force=True, profile=prof)
+    raw_titles = {(s.get("title") or "") for s in (raw2.get("sources") or [])}
+    repaired = 0
+    for k, did in want_keys.items():
+        if k in have:
+            repaired += _restage_missing_parts(nb, docs_by_id[did], prof, raw_titles)
+    if repaired:
+        _screen_set(tab_id, status_text=f"🩹 re-added {repaired} missing part(s)…")
+    if repaired or any(k not in have for k in want_keys):
         nlm_bridge.wait_sources_ready(nb, timeout=60, known_ready=set(num_map.values()),
                                       profile=prof)
         num_map, bm_sid = index()
@@ -7121,10 +7148,21 @@ def _benchmark_label(bm: dict) -> str:
 
 def _benchmark_fulltext(bm: dict) -> str:
     if bm.get("text"):
-        return bm["text"]
-    return "\n\n".join(filter(None, [
-        f"{bm.get('number') or ''} — {bm.get('title') or ''}",
-        bm.get("abstract"), bm.get("claims"), bm.get("description")]))
+        text = bm["text"]
+    else:
+        text = "\n\n".join(filter(None, [
+            f"{bm.get('number') or ''} — {bm.get('title') or ''}",
+            bm.get("abstract"), bm.get("claims"), bm.get("description")]))
+    # Truncation NO-GO guard: the benchmark is staged as a SINGLE source at every
+    # call site, so past the clip it would silently lose content — and it's the
+    # one document every question grounds on. All current benchmarks are ≤93KB
+    # (audited 2026-08-23); if one ever crosses the budget, fail loudly here so
+    # multi-part benchmark staging gets built instead of a quiet blind tail.
+    if len(text.encode("utf-8")) > STAGE_PART_BYTES:
+        raise RuntimeError("benchmark full-text exceeds the single-source budget "
+                           f"({STAGE_PART_BYTES}B) — implement multi-part benchmark "
+                           "staging before running this tab (truncation is a NO-GO)")
+    return text
 
 
 # Claude deep-read = the full-text MAP + REDUCE, run as a RELOAD-SAFE BACKGROUND
