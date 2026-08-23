@@ -2933,3 +2933,22 @@ ground truth + canaries, drawnformula) — if recall holds, mass re-screen of
 ONLY the 1,554 over-clip docs (~40 rounds total across 4 accounts; docs
 ≤120KB keep their stored v2 verdicts). Safeguards kept protocol-agnostic:
 canaries, GT-recall measurement, supervisor gates, recall-line.
+
+## 2026-08-23 — full-doc-staging-auditor born (user request): single-purpose truncation guard
+
+**User:** "probably you should create agent which single purpose to check that
+all tabs t10-t14 and further tabs in future contains docs in full, not truncated"
+
+**Claude:** Built and registered (b19a15f): agent `full-doc-staging-auditor`
+(.claude/agents/) + deterministic checker `scripts/audit_full_staging.py` —
+per-tab size census, assessment provenance vs the d4d8691 multi-part epoch
+(08-20 21:30 UTC), and --live per-part presence audit of lane-bound notebooks;
+verdict file /data/audits/audit_full_staging.json; added to the
+pipeline-integrity-supervisor cross-check roster. First run PASS (no live
+blind tails) and it CORRECTED the campaign census: composed sources (headers +
+digest included) put oversized at t10 833 · t11 188 · t12 319 · t13 458 ·
+t14 300. Assessed-truncated (screen verdict pre-epoch): t11 188 · t12 319 ·
+t13 458 · t14 300 = **1,265 re-screen scope** — and **t10 needs NO re-screen**
+(never mega-screened; all 2,049 docs have full-text Claude reads, which never
+clip). Earlier 1,554 estimate superseded. GT-validation round on t10 still
+running (12 GT + 27 fillers, drawnformula).
