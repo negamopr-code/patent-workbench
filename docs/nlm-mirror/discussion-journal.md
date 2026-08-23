@@ -2971,3 +2971,18 @@ persist regardless). t10's full v2 screen (1,279 sonnet-only docs, ~33r)
 launches on drawnformula the moment the parked GT-validation round completes —
 same lane, so nothing was lost by the hold there. All four re-screens staging
 round 1 multi-part; quota watchdogs own the pauses.
+
+## 2026-08-23 — t10 full v2 screen launched immediately (user: "why not start immediately?")
+
+**User:** Why wait for the validation round to finish before t10's full screen?
+
+**Claude:** No hard blocker existed — the endpoint only refuses while a job
+actively RUNS, and the validation was quota-parked. Folded the measurement
+into the campaign: t10 full v2 screen launched 20:5x UTC over 1,291 docs
+(12 opus-GT champions FIRST in the queue as canaries + 1,279 sonnet-only),
+~34 rounds, drawnformula. Round 1's answer = the GT-recall measurement, then
+the campaign continues seamlessly. Parked validation state backed up
+(.nlm_screen_10.json.bak-20260823-validation); its half-staged notebook
+7136bc0f deleted. ALL FIVE tabs now run v2 full-staging simultaneously:
+t10 1291 · t11 188 (work4) · t12 319 + t14 300 (work2) · t13 458 (default)
+— ~68 rounds total across 4 accounts.
