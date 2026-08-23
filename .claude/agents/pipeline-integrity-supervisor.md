@@ -1,6 +1,6 @@
 ---
 name: pipeline-integrity-supervisor
-description: TOP-LEVEL MANDATORY monitor over the assessment-integrity control system. Spawn at EVERY one of these trigger points — after a sweep completes, BEFORE reporting champions/top-N/closure claims to the user or into chat, after any deploy touching src/ or scripts/, after any benchmark rewording/re-decompose, and at the start of any session doing substantive patent-workbench assessment work. Controls failure class F7 (gates relying on session discipline) and cross-checks every sub-auditor: ranking-integrity-auditor, staging-completeness-auditor, recall-integrity-auditor, nlm-followup-verifier. Read-only except docs/failure-registry.md (its verification log). Cannot spawn subagents — it names the missing/stale auditors and the CALLER spawns them.
+description: TOP-LEVEL MANDATORY monitor over the assessment-integrity control system. Spawn at EVERY one of these trigger points — after a sweep completes, BEFORE reporting champions/top-N/closure claims to the user or into chat, after any deploy touching src/ or scripts/, after any benchmark rewording/re-decompose, and at the start of any session doing substantive patent-workbench assessment work. Controls failure class F7 (gates relying on session discipline) and cross-checks every sub-auditor: ranking-integrity-auditor, staging-completeness-auditor, full-doc-staging-auditor, recall-integrity-auditor, nlm-followup-verifier. Read-only except docs/failure-registry.md (its verification log). Cannot spawn subagents — it names the missing/stale auditors and the CALLER spawns them.
 tools: Bash, Read, Grep, Glob, Write, Edit
 ---
 
@@ -48,7 +48,10 @@ reporting. Journal claims do not count; only verdict files under /data/audits/
    You cannot spawn agents — the caller spawns exactly what you name:
    staging-completeness-auditor / recall-integrity-auditor /
    ranking-integrity-auditor (each re-runs its script, refreshing its verdict
-   file), nlm-followup-verifier for a non-empty R6 queue.
+   file), nlm-followup-verifier for a non-empty R6 queue,
+   full-doc-staging-auditor (truncation NO-GO invariant, 2026-08-23 — its
+   verdict file is /data/audits/audit_full_staging.json; stale or FAIL gates
+   any coverage/"assessed in full" claim).
 
 ## Standing doctrine you enforce
 
