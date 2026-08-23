@@ -2873,3 +2873,32 @@ quota_resume_at 21:21–21:22 UTC). All three NLM accounts (drawnformula /
 work2 / default) still quota-exhausted this evening; sweeps proceed
 automatically when quotas return. No rankings/results were interpreted —
 audit gates unchanged.
+
+## 2026-08-23 — morning status + add-account wizard fixed (quarantine wake step)
+
+**User:** (1) status of all three NLM accounts + is the keeper needed; (2)
+detailization of t10–t14 under the new NLM approach; (3) adding a 4th account
+via the slot-manager wizard fails with ERR_CONNECTION_REFUSED on
+notebooklm.google.com.
+
+**Claude:** Accounts: all three (work2 / bubu / drawnformula) healthy in
+quarantine mode — CLI sessions ALIVE, browsers parked off Google, login
+needed nowhere. Keeper's auto-resume sweep to :8099 fails (wedged Windows
+relay, known class) — low impact, manual docker-exec path covers it.
+**Boot re-arm fix VERIFIED WORKING:** the stack restarted 08:04 UTC and the
+module-level startup sweep in api.py re-armed live probe threads for the
+quota_paused tabs on its own (fresh quota_resume_at 09:04–09:05) — wedge-#10's
+stranding mode is closed in code, no manual recipe needed. Direct probes
+08:20 UTC: ALL THREE accounts still RESOURCE_EXHAUSTED → overnight standstill
+explained; t10 r11 132/1294 · t12 r7 84/230 · t13 r7 84/1376, canaries green
+(73% / 69% / 100% MUST weight), t11 blind-tail HELD behind t13, t14 queued
+behind t12. No results interpreted.
+**ERR_CONNECTION_REFUSED diagnosed:** the keeper launches every Chrome with
+`--host-resolver-rules="MAP *.google.com 127.0.0.1"` (quarantine) — the
+slot-manager wizard predates this and its login step dead-ends. Shipped
+nlm-slot-manager bdbbfe7 (pushed): wizard step 3 "Wake the new browser" —
+POST /api/keeper/wake drops the <name>.wake marker, polls wake-status until
+the daemon relaunches unblocked (≤5 min); guard refuses waking any profile
+with a saved CLI session (would wipe its Google cookies). User's work4
+attempt never landed in accounts.conf — wizard to be re-run from step 1;
+a 4th account also relieves the quota wall.
