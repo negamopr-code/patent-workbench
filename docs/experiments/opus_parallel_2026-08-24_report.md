@@ -122,16 +122,23 @@ pattern — every round's top-N is being filled with noise because the batch has
   `resumable=true`, quota=None. The observer did not resume them (outside its remit); the
   in-app watchdog does not cover this error class. They need a manual POST resume.
 
-## 8. Verdict (observer, pre-audit)
+## 8. Verdict (observer, pre-audit — AMENDED 2026-08-24 22:05 per pipeline-integrity-supervisor)
 
-The NLM v2 full-staging screen is **not a reliable relevance filter on its own**: where the
-slice contains real material (t14) it recovers roughly half to two-thirds of opus-grade
-champions (recall ≈ 0.55–0.63, lower band 0.34–0.44) at a fresh-graduate precision of 0.18
-(≥4) / 0.73 (≥3), and it misses old, non-boilerplate disclosures (US5686815, DE10158062)
-while ranking by claim-skeleton similarity rather than by the weight-5 inventive features.
-Where the slice is noise (t10, t12) it still graduates 13–15% of docs, all of which opus scores
-≤3 — precision ≈ 0 with no recall loss, i.e. harmless but wasteful. Viability therefore rests on
-NLM as a *recall pre-filter with mandatory opus (or opus-lite follow-up) verification of every
-graduate*, plus a cheap second lane for the reject pool (lexical/embedding or NLM follow-up on
-the reject set) to catch the ~5% ≥4 misses; the screen must not be used as the final ranking.
-Subject to auditor gating.
+**Scope correction.** This experiment measured NLM **stage-1 graduation** against blind opus.
+The defined pipeline is screen → **stage-2 per-feature citation follow-up on every graduate**
+(nlm-followup-verifier, failure class F3b — an existing, agreed stage, NOT a recommendation of
+this report) → opus funnel. "Pipeline recall/precision" is therefore undefined until the
+stage-2 ledgers exist; the numbers below characterise the screen alone.
+
+Stage-1 findings: where the slice contains real material (t14) the screen recovers roughly half
+to two-thirds of opus-grade champions (recall ≈ 0.55–0.63, lower band 0.34–0.44) at a
+fresh-graduate precision of 0.18 (≥4) / 0.73 (≥3); it misses US5686815 and DE10158062 (old,
+non-boilerplate disclosures) and ranks by claim-skeleton similarity rather than by the weight-5
+features. Where the slice is noise (t10, t12) it graduates 13–15% of docs, all opus ≤3 —
+harmless but wasteful. Graduation carries no ranking information.
+
+Admissibility (supervisor): fresh staging/recall/ranking/full-staging verdict files on the
+current head; per-tab `recall: X/Y` against REGISTERED controls with scope stated (t12 has no
+controls in its re-screen queue → corpus recall unmeasured); a three-way table per graduate
+(stage-1 → stage-2 citation verdict → blind opus); reject misses as exact counts; roster-39
+screen mode and the account-sharing decisions registered with user approval.
