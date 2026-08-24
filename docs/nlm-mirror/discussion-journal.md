@@ -3055,3 +3055,19 @@ t12 (319) and t14 (300) both staging round 1. t11/t13 (default) parked to
 on t10 (grads 20; GT-recall 9/12 banked this morning). Stored verdicts for
 all ≤120KB docs and every opus read remain valid throughout — this campaign
 only re-does the over-clip subset plus t10's sonnet-only wide screen.
+
+## 2026-08-24 — evening: host reboot 19:36 UTC killed all 5 lanes; all resumed 19:40
+
+**User:** "what is the progress" / "so?"
+
+**Claude:** Host rebooted ~19:36 UTC (uptime 3 min, patent-bench fresh start,
+restarts=0); all five screen threads died, /data state intact. Resumed all
+five via POST {resume:true} at 19:40 (locks already cleared by entrypoint,
+no backdate needed) and re-armed sweep-watcher for 10 11 12 13 14. Census
+at resume: t10 234/1291 r6→r7 (43 grads) · t14 78/300 r2→r3 (34) ·
+t12 39/319 r1→r2 (15) · t11 0/188 r1 staging · t13 0/458 r1 staging.
+Campaign total 351/2556 answered (14%). default (t11/t13) still has had no
+quota window since launch. Banked result unchanged: t10 GT-recall 9/12 (75%)
+full-staging vs 58% truncated — interim, unaudited. Caveat: sweep-watcher
+targets claims-audit endpoints; nlm-screen non-quota stalls may still need
+a manual resume.
