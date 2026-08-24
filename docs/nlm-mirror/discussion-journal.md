@@ -3231,3 +3231,39 @@ for hypothesis check, right?"
   matched rejects + a 30-doc random control per tab, nothing more.
 Conclusion = per-tab statement of these four, gated by the supervisor
 checklist (agent running) and the recall/ranking auditors after sweeps end.
+
+## 2026-08-24 — hypothesis-driver cycle 1 (21:45–21:50 UTC): add_failed = the real miss class
+
+**Agent (hypothesis-driver):** Read everything landed today (331 blind opus-5
+verdicts: t10 242, t14 59, t12 38; the 21:41 t10 job of 26 finished 21:45).
+Register updated to H1–H8 (docs/experiments/hypotheses.md); read ledger
+reconstructed (docs/experiments/read_ledger.jsonl, 6 jobs).
+
+- **H7 (new, SUPPORTED):** the "rejects" in the 20:44 experiment were mostly
+  `nlm_screen_state='add_failed'` — sources that never indexed in NotebookLM
+  and were silently dropped, never questioned, never re-queued. t14 this run:
+  78 screened = 34 graduates + 7 judged rejects + 37 add_failed. ALL six
+  non-graduates with opus ≥4 (CN107431369, US5686815, EP3930140, DE10158062,
+  CN105723559, US11397216) and 8/11 of the ≥3 are add_failed; the 7 judged
+  rejects: 0 ≥4, 3 at 3 (KR100221047, WO2023085906, CN119487405). Loss is
+  systemic per round: t10 11–18 of every 39 (168/468 = 36 %), t12 round 1
+  15/39 and the round-2 attempt 32/32 (17:44, now re-staging), t14 13/39 and
+  24/39. Not a >120 KB effect alone (t10 median add_failed size 70 KB).
+- **H1 REFUTED on t10** (30/30 profile-matched non-graduates ≤2 after the
+  21:41 job); on t14 the two "old non-CJK misses" are add_failed → confounded.
+- **H2 SUPPORTED** (t10 true rejects 94 read, 0 ≥3; t12 9/9 read, 0 ≥3).
+- **H8 (new):** t10 GT set partly stale — EP3005248, EP2417690, US20090108997,
+  US10027187, US9831029 re-read blind today at 1–2 under the 08-18 feature
+  set (their ≥4 verdicts predate it). The banked "GT-recall 9/12" mixes valid
+  and stale controls. Re-verifying the other 7 (+ US20230337972, 07-28)
+  overwrites registered verdicts → NEEDS USER APPROVAL, not launched.
+- **H3/H4 OPEN** (verifier ledgers hold doc lists only; default account still
+  0 rounds).
+- **Launched (cycle 1):** t12, 32 reads = the round-2 add_failed docs nobody
+  has scored (H7 generalisation; also a screen-vs-opus pair if the re-stage
+  succeeds). No t10/t14 reads: t14 fully covered, t10 marginal ≈ 0.
+- **Proposed improvements (not implemented):** re-queue add_failed instead of
+  terminal mark; log per-part add + strict-probe result to find the whole-round
+  loss mechanism; treat add_failed as F3c "not staged" in the gate matrix;
+  re-read registered controls after any feature update + keep score history.
+Pre-audit; supervisor + recall/ranking auditors gate all of it.
