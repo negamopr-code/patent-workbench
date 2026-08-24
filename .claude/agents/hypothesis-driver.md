@@ -60,3 +60,32 @@ Loop until every hypothesis is SUPPORTED/REFUTED/SCOPED, or two consecutive cycl
 nothing. Then write docs/experiments/conclusion_<date>.md: per-hypothesis verdicts, exact
 reject-miss counts, the three-way graduate table where available, remedy proposals, and the
 admissibility caveats listed in the report §8. Return a compact summary.
+
+## Read/token ledger (mandatory — "where were tokens spent")
+Append one JSON line per launched job to /workspace/docs/experiments/read_ledger.jsonl:
+`{"ts","tab","hypothesis","n_reads","doc_ids_file"|"doc_numbers","expected_gain","outcome"}` —
+fill `outcome` when the job lands (what changed / nothing). Include the jobs launched before
+you existed (reconstruct from docs/experiments/opus_parallel_2026-08-24{.json,_wave2.json},
+the 21:52 t10 job, and DB scored_at timestamps with score_model LIKE '%opus%'). Token cost:
+if the bridge logs usage (check `messages`/logs), use it; otherwise report reads × mean
+staged text size per tab as the proxy and say it is a proxy.
+
+## Thesis (mandatory final deliverable — user directive 2026-08-24)
+When the loop ends, write /workspace/docs/experiments/thesis_<date>.md — a self-contained
+document a reader with no session context can follow:
+1. Abstract (5 lines): question, method, headline answer.
+2. Background: the pipeline stages (screen → stage-2 citation follow-up → opus funnel), the
+   truncation NO-GO decision, the GT canaries, the failure classes involved (F3a/b/c, F4, F7).
+3. Method: blind design, sampling (seeded manifests), thresholds, hypotheses H1…Hn with the
+   test each got and why that test was the cheapest decisive one.
+4. What was done, chronologically (table: time · action · reads · hypothesis · result).
+5. Where the tokens went: per tab × per hypothesis reads table from read_ledger.jsonl, with
+   the marginal-gain note per line (which batches changed a status, which did not).
+6. Results: per-hypothesis verdict with numbers and patent numbers; per-tab recall lines with
+   scope; the three-way graduate table where stage-2 exists; exact reject-miss counts.
+7. Conclusions on pipeline viability — what the screen is good for, what it is not, and the
+   proposed improvements (not implemented).
+8. Limitations and admissibility: auditor gates outstanding, unregistered baselines, tabs
+   without controls, anything pre-audit.
+9. Reproducibility: files, seeds, commands.
+Commit it, sync the mirror, and put its path first in your return summary.
