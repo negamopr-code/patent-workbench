@@ -3089,3 +3089,31 @@ Known re-confirmations: t10 5 GT canaries; t14 12 opus-read/shortlisted
 graduate ≠ relevance (claimant-list lesson 08-20); nothing interpreted until
 recall-/ranking-integrity auditors run on complete ledgers. These form the
 opus-funnel queue (incremental by live claim-weight) after lanes finish.
+
+## 2026-08-24 — 20:44 UTC: OPUS-PARALLEL EXPERIMENT LAUNCHED (pipeline viability test)
+
+**User:** "I propose to run opus 5 on those in parallel to your nlm assessment,
+this way we can at the end independently compare the chosen shortlist by nlm
+pipeline and results given by opus, right? … would you agree?" → "go, all
+three tabs, you can go larger, the target is really to test our pipeline from
+all possible angles, so fire up the agent who will closely observe this
+parallel readings"
+
+**Claude:** Agreed with one design change: opus on graduates alone measures
+only PRECISION; viability hinges on RECALL, so the blind set also includes a
+seeded random sample of NLM REJECTS (docs screened and dropped). deep_map is
+blind (benchmark + features + doc text only, no NLM rank/score) → independent.
+Snapshot at cursors t10 351 / t12 39 / t14 78. Manifest
+docs/experiments/opus_parallel_2026-08-24.json (seed 20260824): t10 57 fresh
+grads + 100 of 289 rejects · t12 15 + 23 of 24 · t14 22 + 37 of 44 → 254
+opus-5 full reads (already-opus-read grads skipped; 10 live survivors per tab
+excluded as still in play). POST deep-compare reading_model=claude-opus-5,
+skip_scored=false; features present on all three (features_missing=false).
+Opus reads use the Claude bridge, not NLM quota — no interference with the
+five running screens. Supersedes the 08-22 "incremental by claim-weight"
+funnel rule for these tabs (user decision). Observer agent spawned: polls
+opus + NLM lanes, cross-checks every ~20 verdicts (patterns → journal),
+tracks post-snapshot graduates/rejects as wave-2, writes final per-tab
+confusion matrix + precision + reject-miss-rate (Wilson CI) + verdict to
+docs/experiments/opus_parallel_2026-08-24_report.md. Auditors gate the
+conclusion.
