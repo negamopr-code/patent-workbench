@@ -3163,3 +3163,19 @@ snapshot → wave-2). t11, t12, t13, t14 lanes are STOPPED with non-quota
 network errors ("could not list notebook sources" httpx / "Temporary failure
 in name resolution" on create notebook) since before 20:45 — reported, not
 resumed by the observer. Opus locks live (age <30 s).
+
+## 2026-08-24 — opus-parallel observer: FINAL (254/254 reads by 21:06 UTC)
+
+Report: docs/experiments/opus_parallel_2026-08-24_report.md (auditors still to gate).
+Headline (NLM bucket × blind opus, ≥4 / ≥3): t10 grads 0/57 / 1/57, rejects 0/100 / 0/100
+(miss-rate CI ≤3.7%) — noise slice. t12 grads 0/15 / 1/15, rejects 0/23 — noise slice.
+t14 grads 4/22 / 16/22 (precision 0.18 / 0.73), rejects 2/37 / 11/37 (miss 5.4%
+[1.5, 17.7] / 29.7% [17.5, 45.8]) → implied corpus recall 0.63 [0.34, 0.86] at ≥4,
+0.55 [0.44, 0.68] at ≥3. Misses: US5686815, DE10158062 (old non-CJK, substantive
+F9/F17/F18 YES, no CRM/processor claim skeleton). NLM keys on claim-category
+boilerplate (F27 0.74 vs 0.15, F2/F3 0.95 vs 0.6), never on the weight-5
+features (≈0 YES in both buckets); NLM rank does not order opus score. Verdict:
+usable only as recall pre-filter + mandatory verification of graduates + second
+lane over rejects; not as a ranking. Wave-2: 13 new t10 graduates (r10–11) + 65
+post-snapshot t10 rejects; t12/t14 unchanged. Lanes t11–t14 still STOPPED on
+network errors (non-quota, resumable) — not resumed by observer.
