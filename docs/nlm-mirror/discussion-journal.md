@@ -3117,3 +3117,49 @@ tracks post-snapshot graduates/rejects as wave-2, writes final per-tab
 confusion matrix + precision + reject-miss-rate (Wilson CI) + verdict to
 docs/experiments/opus_parallel_2026-08-24_report.md. Auditors gate the
 conclusion.
+
+## 2026-08-24 — opus-parallel observer: batch 1 (183/254 reads by 20:57 UTC)
+
+Reads land ~5/min per tab via the Claude bridge: t12 38/38 DONE, t14 53/59,
+t10 92/157. Cross-check of everything landed so far (blind opus-5 full-text,
+NLM bucket from the 20:44 snapshot; "≥4" = t12-ladder champion threshold):
+
+| tab | bucket | n | mean opus | ≥3 | ≥4 |
+|---|---|---|---|---|---|
+| t10 | NLM graduate | 38 | 1.29 | 0 | 0 |
+| t10 | NLM reject (sample) | 54 | 1.19 | 0 | 0 |
+| t12 | NLM graduate | 15 | 1.07 | 1 (KR20250094125=3, NLM rank 1) | 0 |
+| t12 | NLM reject (sample) | 23 | 0.65 | 0 | 0 |
+| t14 | NLM graduate | 19 | 2.84 | 14 | 3 (CN109073712, WO2022030912, CN110199452) |
+| t14 | NLM reject (sample) | 34 | 2.09 | 9 | 2 (US5686815, DE10158062) |
+
+Patterns so far:
+- t10 and t12: ZERO champions in either bucket — the fresh graduates score
+  exactly like the rejects (t10 1.29 vs 1.19). No YES on any feature above
+  ~4% frequency. The screen is not separating anything here because there is
+  nothing to separate: the whole post-snapshot corpus slice is noise for these
+  benchmarks (context: t10's 4.0-survivors are all from earlier rounds; tab
+  ceiling 6.0 US20230337972/US20220221016 found by opus earlier, t12 ceiling
+  8.0 KR20260033205 from the 08-17 chain). t12 graduate KR20250094125 (opus 3,
+  YES on F1+F2) is correctly NLM rank 1.
+- t14 is the only tab with signal: graduates ≥3 at 74% vs rejects 26%; ≥4 at
+  16% vs 6%. NLM rank does NOT order opus score inside the graduate set (4.0s
+  sit at ranks 3, 5 and 17; rank-2 JP7675383 = 3.0; rank-16 CA3217299 = 1.0).
+- t14 NLM misses (reject & opus ≥4): US5686815 (YES on 12 features incl. F9
+  voltage acquisition, F17/F18 charge sections) and DE10158062 (YES 10 incl.
+  F9, F17, F18) — both are OLD non-CJK patents (1997 / 2003). The nine
+  reject ≥3s are CN×4, JP×2, KR, DE, US; 19/34 rejects are CN vs 9/19
+  graduates, so CJK is over-represented among rejects but the two actual
+  misses are Western. Feature-level: rejects have YES on F27 (CRM claim) 15%
+  vs graduates 74%, F26 (apparatus) 47% vs 74%, F1 35% vs 58% — NLM appears
+  to key on claim-category boilerplate (system/apparatus/medium claims),
+  not on the discriminating features F5/F7/F11/F12 (weight 5, YES ≈ 0 in
+  both buckets).
+- t14 over-inclusion (graduate & opus ≤2): 5/19 — CA3217299 (1), EP4722023,
+  JP2024083972, CN117794779, EP3171186 (2).
+
+Lanes: t10 running (round 11→12, cursor 429/1291, ledger 75 = +8 since
+snapshot → wave-2). t11, t12, t13, t14 lanes are STOPPED with non-quota
+network errors ("could not list notebook sources" httpx / "Temporary failure
+in name resolution" on create notebook) since before 20:45 — reported, not
+resumed by the observer. Opus locks live (age <30 s).
