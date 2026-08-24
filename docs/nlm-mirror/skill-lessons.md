@@ -215,3 +215,11 @@ four structural gaps in the NLM side of the funnel:
    canary-only). NLM retrieval is vocabulary-bound. Only idea on the table:
    an embeddings-similarity recall lane over claims text, feeding the same
    opus-read queue as the lexical lane.
+
+## 2026-08-24 — lessons from the blind opus-parallel read (254 reads, t10/t12/t14)
+- **Measure misses, not just hits.** Opus over graduates alone measures precision; viability is recall → always include a seeded random sample of REJECTS in any verification lane. This was the only measurement of misses on non-canary docs the project ever had.
+- **Full staging is necessary, not sufficient.** Canary recall 58→75% after truncation fix, yet t14's reject sample shows ~1/3 of ≥4 champions still dropped (recall ≈0.63 [0.34, 0.86]).
+- **Systematic blind spot:** NLM keys on claim boilerplate (F27 YES 0.74 grads vs 0.15 rejects), weight-5 features ≈0 YES either bucket; misses are OLD non-CJK disclosures without processor/memory/CRM claim skeleton (US5686815 1997, DE10158062 2003). Needs a dedicated second lane (old-patent / non-boilerplate), not more re-screening.
+- **Graduation ≠ ranking.** 0/72 fresh t10/t12 graduates reach opus ≥4; NLM rank never orders opus score. Treat graduates as a set to verify in full, never as a read-order.
+- **Noise slices are informative:** all-≤3 on both sides = the over-clip subset holds no unread champions → re-screen there confirms coverage rather than discovers.
+- Cost reference: 254 opus-5 full reads ≈ 22 min wall-clock via the bridge, zero NLM quota.
