@@ -3204,3 +3204,30 @@ post-snapshot rejects = 117) already running. Projected: full coverage of the
 2 556-doc campaign ≈ 2 300 further opus reads (~22 min per 254 → ~3.5 h of
 reading spread over the screens' lifetime). Stop flag: /data/.opus_driver.stop.
 Recall then becomes an exact count per tab, not a Wilson band.
+
+## 2026-08-24 — 21:50 UTC: full coverage STOPPED → hypothesis-driven opus reads
+
+**User:** "but the target is not to read every single document, right? wisely
+means, that you should fire up the reads when you see that it is beneficial
+for hypothesis check, right?"
+
+**Claude:** Agreed — coverage driver stopped before it launched anything
+(/data/.opus_driver.stop); wave-2 t10 paused at 59/117 (11/22 new grads read,
+0 of ~48 post-snapshot rejects ≥3). Explicit hypotheses now drive reads:
+- **H1 — miss class = old non-CJK disclosures without processor/memory/CRM
+  claim skeleton.** t14 supports (2/4 profile matches ≥4, 1 at 3); t10
+  REFUTES so far (14 profile matches already opus-read, all ≤2) → profile is
+  benchmark-dependent (t14's heavy features are basic electrical/charging
+  content present in 1990s–2000s patents). Closing on t10 with the last 16
+  profile-matched rejects (+11 unread new graduates) = 27 reads launched.
+- **H2 — t10/t12 over-clip subsets hold no unread champions.** Supported:
+  t10 0/159 rejects ≥4 (0 ≥3 in wave-2), t12 0/23. No further random reject
+  reads on t10/t12; new graduates go to stage-2 citation pass first, opus only
+  on stage-2 positives/disagreements.
+- **H3 — stage-2 citation verdicts ≈ opus on graduates.** Two verifier agents
+  running (t10; t14→t12); agreement tables pending.
+- **H4 — does the t14 miss rate generalise to the default-account tabs
+  (t11/t13)?** When they finish screening their first ~150 docs: profile-
+  matched rejects + a 30-doc random control per tab, nothing more.
+Conclusion = per-tab statement of these four, gated by the supervisor
+checklist (agent running) and the recall/ranking auditors after sweeps end.

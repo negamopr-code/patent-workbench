@@ -61,3 +61,37 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   (t13 R1 misses are opus-read but sweep-unclaimed, coherent with C6 PASS).
   VERDICT: BLOCKED (t10 C6/R2; t13 R1/R2); t13 champion report would be
   PERMITTED+DISCLOSE, t13 closure SCOPED-ONLY.
+- 2026-08-24 (session-start + pre-conclusion check, opus-parallel experiment;
+  deploy head 76d3b09): supervisor run. audit_status: EVERY tab BLOCKED on all
+  three gates. Verdict files are pre-campaign vintage — audit_ranking +
+  audit_staging 08-20 21:45 on head 7322871 (STALE(deploy)), audit_recall
+  08-21 tab-10-only (MISSING(tab) for 11-14), audit_full_staging 08-23 19:28
+  (before the v2 re-screens launched; verdict PASS but assessed_truncated
+  t11 188 / t12 319 / t13 458 / t14 300 = the re-screen scope, not yet
+  re-measured). pending_trigger claims-audit-done t10 (08-23 19:14) never
+  cleared — the post-sweep audits for the stopped v3 claims audit never ran.
+  CONTROL GAP (F7-class): audit_recall/audit_staging/audit_ranking read only
+  .nlm_claims_* state; the v2 .nlm_screen_* lanes (t10 1291 / t11 188 /
+  t12 319 / t13 458 / t14 300, batch_size 39) are invisible to R1/R2/R3/R4/
+  R6/S3 — no deterministic backend can currently gate the campaign or the
+  opus-parallel conclusion. DOCTRINE CONFLICT: screens run roster 39 while the
+  registered R2 corridor (t10/t13 baselines) says "future sweeps run roster
+  ≤12 + follow-up stage"; the 08-23 v2 revert is user-approved in memory but
+  NOT recorded here — needs a dated entry (screen-mode exemption or new
+  corridor) before any screen result is admissible. Controls: t10 champion
+  controls US20230337972 (queue pos 542), US20220221016 (1131) and canary
+  EP3849091 (743) not yet reached (cursor 468); t12 has ZERO registered
+  controls in its re-screen queue (recall unmeasurable), t14 only
+  CN103457003 (survived), t11 none, t13 CN115166523 (pos 1) + CN116508192
+  (pos 110). Journal "t10 GT-recall 9/12" exists in no verdict file. Opus
+  reads today: t10 205 / t12 38 / t14 59 (claude-opus-5), deep_map verified
+  blind (title/abstract/claims/description only). Account rules: bindings
+  intact (t10 drawnformula, t11/t13 default, t12/t14 work2); but
+  nlm-followup-verifier t10 runs on drawnformula concurrently with the t10
+  priority screen, and t11 re-screen shares default with t13 (08-22
+  exclusivity/HELD rule; default has answered 0/646 in 24 h) — both need
+  explicit user confirmation or stop. Opus coverage driver (pid live, batch
+  150, poll 600 s) will keep max_scored_at moving → all audits STALE until it
+  is paused; followup_ledger.jsonl unchanged since 08-20 (verifier output not
+  yet landed). VERDICT: BLOCKED — experiment conclusion inadmissible until
+  screens are auditable and the corridor conflict is registered.
