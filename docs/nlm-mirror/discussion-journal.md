@@ -3004,3 +3004,23 @@ t13's 458). Hard rule saved to memory (feedback_never_switch_tab_account):
 a tab's account is fixed for the project's life — t10=drawnformula ·
 t11/t13=default · t12/t14=work2; the sticky lock is never to be bypassed;
 work4 takes no patent work.
+
+## 2026-08-24 — morning status: 4 tabs quota-parked, t11 crash found + resumed
+
+**User:** "where we are in the progress?"
+
+**Claude:** Campaign census 07:20 UTC: all four launched re-screens sit at
+round 0, quota-parked with auto-resume armed for 08:13 UTC (t10 1291 on
+drawnformula · t12 319 + t14 300 on work2 · t13 458 on default) — every
+account hit RESOURCE_EXHAUSTED within ~1-2h of last night's launch, so no
+round-1 answers exist yet; the GT-recall measurement (t10 round 1) is still
+pending. t11's relaunch-on-default (22:32 UTC) had CRASHED at startup:
+"could not list notebook sources: NOT_FOUND" — its state carried no notebook
+binding after the work4 revert and the strict source-index probe raised
+resumably. Verified DB bindings intact (t10=drawnformula, t11/t13=NULL=
+default, t12/t14=work2 — hard rule holds), then resumed via
+POST /nlm-screen {resume:true}: _screen_notebook self-healed onto a fresh
+default notebook 23cd3326 ("🔁 Screen — 40_387_2026"), rotated out 49 stale
+sources, staging round 1 of 188 multi-part. All five lanes live again;
+quota watchdogs own the schedule. No results interpreted — nothing to
+interpret until round answers land.
