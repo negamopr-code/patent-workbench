@@ -3024,3 +3024,22 @@ default notebook 23cd3326 ("🔁 Screen — 40_387_2026"), rotated out 49 stale
 sources, staging round 1 of 188 multi-part. All five lanes live again;
 quota watchdogs own the schedule. No results interpreted — nothing to
 interpret until round answers land.
+
+## 2026-08-24 — t10 round 1 GT-recall: 9/12 (75%) with full staging, up from 58% truncated
+
+**User:** "so how is going?"
+
+**Claude:** drawnformula got the morning's only quota window: t10 answered
+round 1 (the GT-recall measurement) and is in round 2 (78/1291, 20 graduates).
+Canary readout: 9/12 GT champions graduated — EP3970350 rank 1 ·
+JP2019221076 rank 2 · US20070021140 + WO2020026413 rank 3 · CN113924787,
+EP3005248, EP2417690, US20090108997, US10027187 also ranked; 6 of 10 survivor
+slots are GT-held. MISSED: US9831029, US20200021142, CN106104969 (final for
+this run — canaries only rode round 1). Recall-line: 75% vs the 58% (7/12)
+that condemned v2 under truncated staging — full multi-part staging recovered
+2 of 5 misses, so truncation explains PART of the gap; 3 champions still lose
+the 39-doc ranked-batch competition, which is the known screen limitation the
+opus funnel exists to backstop. Interim + unaudited: recall-integrity-auditor
+gates any conclusion when the sweep completes. Other lanes still parked:
+t12/t13/t14 retry 10:13 UTC, t11 10:39 UTC (work2 + default were still
+RESOURCE_EXHAUSTED at the 08:13 attempt).
