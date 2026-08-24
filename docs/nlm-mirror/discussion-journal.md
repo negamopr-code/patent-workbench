@@ -3071,3 +3071,21 @@ quota window since launch. Banked result unchanged: t10 GT-recall 9/12 (75%)
 full-staging vs 58% truncated — interim, unaudited. Caveat: sweep-watcher
 targets claims-audit endpoints; nlm-screen non-quota stalls may still need
 a manual resume.
+
+## 2026-08-24 — evening: graduate census (unaudited, funnel queue only)
+
+**User:** "you found some new graduates on the way, right?"
+
+**Claude:** 111 graduates so far (t10 62 · t14 34 · t12 15); 94 are FRESH
+(no prior opus read / shortlist / score≥6): t10 57 (sonnet-1.0-under-
+truncation docs now surviving full-text batches — incl. GT champions
+EP3005248, US20090108997, US10027187 that the truncated screen missed;
+CN107078561 rank-1, EP3281272, US8217782, CN109155536), t14 22 (never-read,
+several high earlier NLM scores: CN113646651 11, JP2024083972 11,
+JP2020036393 10, CN115498715 9, CA3217299 9, CN115911603 8), t12 15
+(KR20250094125, CN111919331, JP2021044135, DE112022005571, CN116583431…).
+Known re-confirmations: t10 5 GT canaries; t14 12 opus-read/shortlisted
+(CN103457003, WO2024029839, EP3968486, JP2018147827…). Caveats stated:
+graduate ≠ relevance (claimant-list lesson 08-20); nothing interpreted until
+recall-/ranking-integrity auditors run on complete ledgers. These form the
+opus-funnel queue (incremental by live claim-weight) after lanes finish.
