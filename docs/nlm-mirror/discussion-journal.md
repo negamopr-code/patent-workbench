@@ -3043,3 +3043,15 @@ opus funnel exists to backstop. Interim + unaudited: recall-integrity-auditor
 gates any conclusion when the sweep completes. Other lanes still parked:
 t12/t13/t14 retry 10:13 UTC, t11 10:39 UTC (work2 + default were still
 RESOURCE_EXHAUSTED at the 08:13 attempt).
+
+## 2026-08-24 — afternoon: t10 transient network error resumed; work2 window open (t12+t14 staging)
+
+**Claude (status ask):** 14:40 UTC census. t10 had stalled at round 3 with a
+NON-quota error ("peer closed connection ... incomplete chunked read" — one
+dropped HTTP response), which the quota watchdog does NOT auto-resume;
+resumed via POST {resume:true}, round 3 re-asks. work2's window opened:
+t12 (319) and t14 (300) both staging round 1. t11/t13 (default) parked to
+15:37/15:40 UTC. Campaign total answered so far: 78/2556 queued docs — all
+on t10 (grads 20; GT-recall 9/12 banked this morning). Stored verdicts for
+all ≤120KB docs and every opus read remain valid throughout — this campaign
+only re-does the over-clip subset plus t10's sonnet-only wide screen.
