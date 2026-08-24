@@ -3179,3 +3179,28 @@ usable only as recall pre-filter + mandatory verification of graduates + second
 lane over rejects; not as a ranking. Wave-2: 13 new t10 graduates (r10–11) + 65
 post-snapshot t10 rejects; t12/t14 unchanged. Lanes t11–t14 still STOPPED on
 network errors (non-quota, resumable) — not resumed by observer.
+
+## 2026-08-24 — 21:35 UTC: user escalates to FULL opus coverage; stage-2 correction
+
+**User:** "but that graduates needs the second passage where citations are asked
+it is not new, we have defined this already before!" → "the question is
+rather did you had in rejects something relevant which was discovered thanks
+to opus?" → "then you should read more documents with opus 5 to come to the
+end of the conclusion"
+
+**Claude:** Correction accepted: the per-feature citation follow-up
+(nlm-followup-verifier, F3b) IS the defined stage 2 for graduates; the
+observer report compared stage-1 graduation to opus and wrongly framed
+verification as new. Proper viability test = stage-2 verdicts vs opus on the
+same graduates → two verifier agents spawned (t10 on drawnformula; t14 then
+t12 on work2), blind until their ledgers are written, then agreement tables.
+Reject finds thanks to opus: t14 only — US5686815 (1997) + DE10158062 (2003)
+at opus 4.0 (heavy-feature YES), + 9 rejects at ≥3; t10 0/100, t12 0/23.
+To end the estimate instead of sampling: scripts/opus-coverage-driver.py
+armed inside patent-bench (tabs 10 12 14 11 13, poll 10 min, batch ≤150) —
+launches blind opus-5 on every screened doc not yet opus-read (live survivors
+excluded) whenever the tab's read lock is free. Wave-2 t10 (22 grads + 95
+post-snapshot rejects = 117) already running. Projected: full coverage of the
+2 556-doc campaign ≈ 2 300 further opus reads (~22 min per 254 → ~3.5 h of
+reading spread over the screens' lifetime). Stop flag: /data/.opus_driver.stop.
+Recall then becomes an exact count per tab, not a Wilson band.
