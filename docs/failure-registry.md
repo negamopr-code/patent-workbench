@@ -259,3 +259,34 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   still says "H5 SUPPORTED" while hypotheses.md cycle 3 says REFUTED — thesis not
   updated. Stale pending_trigger (t10 claims-audit-done 08-23 19:14) never cleared.
   Verdict: BLOCKED.
+- 2026-08-25 ~17:11 UTC container clock (session-start after the 17:02:36 Docker-wide
+  restart; watchdog auto-resumed t10/t12/t13 screens 17:02:49; deploy head defa67e):
+  supervisor run, scope t10–t14. Step 0 account gate PASS (A1 all five bindings match;
+  A2 one job per account: drawnformula t10, default t13, work2 t12; t11/t14 paused in
+  series). No verdict file written since 16:49–16:51 (head 911d1b3) → nothing changed
+  on the evidence side since the 17:00 entry; pending_trigger now consumed (file
+  renamed .consumed_2026-08-25, t10 claims-audit-done 08-23) — resolved. Freshness:
+  t12/t14 STALE(deploy) only (watermarks identical to anchors: max_scored_at, fetched,
+  claims ts/rounds, benchmark updated_at all equal) → a plain re-run on defa67e
+  refreshes them; t10/t11/t13 STALE by DATA — opus graduate reads landed after the
+  anchors (t10 36, t11 19, t13 28 docs, t13 last at 17:10:43 = still landing) and
+  of the 62 relaunched pending ids (t10 11 / t11 5 / t13 46) 33 already carry a
+  post-anchor score (t10 11/11, t11 5/5, t13 17/46; 0 ≥4 so far), 29 t13 still
+  in flight → re-audit only after the batch completes, else the verdicts go stale
+  again in minutes. Gate matrix: all three gates red on every tab t10–t14. Baseline compare
+  (verdict rows, not prose): WITHIN — t10 S5 172≤173, t12 S5 44≤47, t14 S5 37=37,
+  t13 C1 344≤401, t10 R2-corridor 59=59, t13 R2-corridor 119=119. UNREGISTERED gating
+  FAILs (unchanged from 17:00): S1-blind-tails t11 52 / t12 113 / t13 267 / t14 166;
+  R1-recall t13 7/20; R2-batch-corridor t11 46 / t12 61 / t14 80; full-doc FAIL
+  (audit_full_staging 16:51, epoch pre-defa67e) t12 WO2025044604 parts [1]/2, t13
+  US10115302 parts [1]/2 — defa67e fix still unevidenced. R6 queues non-empty: t10
+  [US20120007441, CN103683526], t13 [CN218958581, CN220510820, CN120073105,
+  CN120433348]. C5: canary only on t13 (SCOPED); t10/t11/t12/t14 no verbatim canary →
+  corpus-wide negatives scoped only. Cross-checks: S5 rows t11/t13 "no add_failed"
+  agree with live nlm_screen_state (t11/t13 pools now empty) — registered S5 baselines
+  t11 40 / t13 13 are over-registered, retire on next user approval; no
+  contradiction between verdict files; the t14 S1 165→166 growth noted at 17:00 is
+  not reconstructible (history.jsonl stores worst-only) — re-run will settle it.
+  Caller-report "53 landed" vs DB 83 docs scored after the anchors = 53 + the 33
+  relaunched ones already landed (consistent); caller's "17:12 relaunch" vs
+  container clock 17:10 at audit time — timestamps from different clocks. Verdict: BLOCKED.
