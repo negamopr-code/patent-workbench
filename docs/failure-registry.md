@@ -241,3 +241,21 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   under one threading.Lock — three screens share one CLI pipe regardless of account (the
   11-min "waiting for ingest" on t12 was lock queueing, not a stall). Candidate fix: a
   per-profile lock (src change → deploy → needs a quiet window).
+- 2026-08-25 ~17:00 UTC (post-deploy defa67e dedupe-rotation; cycle-3 b2ffa13):
+  supervisor run. Step 0 account gate PASS (A1 t10 drawnformula / t11,t13 default /
+  t12,t14 work2; A2 one job per account: t10, t12, t13 nlm-screen running). Verdict
+  files 16:49–16:51 all on 911d1b3 → STALE(deploy) for t10/t11/t12/t14; t13 STALE by
+  data (t13_b2 opus leftovers + screen rotation in flight — legitimate). Gate matrix:
+  every gate red on every tab. Within baselines: S5 t10 172≤173 / t12 44≤47 / t14
+  37=37 (t11, t13 no S5 row); t13 C1 344≤401; t10/t13 R2 59/119 registered. UNREGISTERED
+  gating FAILs: S1-blind-tails t11 52 / t12 113 / t13 267 / t14 166 (t14 GREW 165→166,
+  unexplained); R1-recall t13 7/20 (GT grew 14→20 = the six H8 crossers; F6: R1 counts
+  must-followup hits as sweep hits — split pending); R2-batch-corridor t11 46 / t12 61 /
+  t14 80; R6 queue t10 [US20120007441, CN103683526] + t13 [CN218958581, CN220510820,
+  CN120073105, CN120433348] (= H8 crossers, consistent); full-doc FAIL: t12
+  WO2025044604 parts [1]/2, t13 US10115302 parts [1]/2 (ghost-duplicate root cause,
+  fix defa67e, not yet evidenced). No C5 canary on t10–t14 → corpus-wide negatives
+  scoped only. Cross-checks: no contradictions between verdict files; thesis_2026-08-25.md
+  still says "H5 SUPPORTED" while hypotheses.md cycle 3 says REFUTED — thesis not
+  updated. Stale pending_trigger (t10 claims-audit-done 08-23 19:14) never cleared.
+  Verdict: BLOCKED.
