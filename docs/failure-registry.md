@@ -206,3 +206,27 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   106/458, t14 r2 78/337 (totals grew by the re-queued add_failed docs). Live
   S5: t11 0 / t13 0 (their 08-23 round-0 failures were re-screened today) —
   baselines 40/13 stay as maxima. Deploy head for all verdicts: 911d1b3.
+- 2026-08-25 ~11:51 UTC (session-start, after the 09:54 container restart;
+  scope t10–t14 only): supervisor run. Step 0 audit_accounts PASS (A1 all five
+  bindings match; A2 no running NLM job; /data/audits/audit_accounts.json
+  11:49). audit_status on 911d1b3: t10 staging/recall/ranking STALE (data
+  watermark: documents t10 n=2136 vs anchor 2049, max_scored_at moved);
+  t11–t14 STALE(deploy) — recall/ranking verdicts still carry 76d3b09
+  (06:20/06:21), staging 196f40e (08:46); nothing has been re-run on 911d1b3.
+  pending_trigger claims-audit-done t10 (08-23 19:14) still unconsumed.
+  audit_full_staging.json 07:16 = FAIL (t12 KR20150138127 1/5 parts; t14
+  CN103457003 1/3, CN110679056 1/2, JP2020036393 1/2; assessed_truncated
+  t11 110 / t12 248 / t13 421 / t14 222). Baseline check: S5 t10 173 / t12
+  47 / t14 37 = registered maxima; t13 C1 387 ≤ 401 KNOWN; t10/t13 R2 59/119
+  registered. UNREGISTERED gating FAILs: S1-blind-tails t11 66 / t12 144 /
+  t13 327 / t14 165; R1-recall t13 5/14; R2-batch-corridor t11 46 / t12 61 /
+  t14 80; R5-lane-controls t10 (lexical lane); full-staging FAIL above.
+  Cross-check: no verdict-vs-verdict contradiction found (R1 t10 9/9 vs C6
+  t10 PASS consistent; S1 t10 blind=0 consistent with 757 truncated-but-read).
+  Live state: screens t10 r14 / t12 r3 / t13 r8 died mid-round at 09:54
+  (step=round, no lock; t11 r8 / t14 r3 paused per series rule). A t10 opus
+  read batch IS ALREADY RUNNING: /data/.claude_read_10.lock started 11:49
+  (50 ids, claude-opus-5) + 4 live `claude -p` processes since 11:50 — the
+  caller must NOT launch a second batch. Verdict: BLOCKED for any reporting;
+  screen resumes t10/t12/t13 cleared by the account gate only (default
+  t13 first, work2 t12 first; t11/t14 stay paused).
