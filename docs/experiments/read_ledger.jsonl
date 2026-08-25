@@ -27,3 +27,4 @@
 {"ts": "2026-08-25T17:16Z", "tab": 10, "hypothesis": "2nd relaunch — 17:13 Docker-wide restart (openday rendering 2 full videos concurrently, 3g cap insufficient) cut the 17:12 batch; 0/11 had landed; pending ids in /data/audits/graduate_reads_pending2_2026-08-25.json", "n_reads": 11}
 {"ts": "2026-08-25T17:16Z", "tab": 11, "hypothesis": "2nd relaunch after 17:13 restart (0/5 landed)", "n_reads": 5}
 {"ts": "2026-08-25T17:16Z", "tab": 13, "hypothesis": "2nd relaunch after 17:13 restart (5/46 landed, all <4)", "n_reads": 41}
+{"ts": "2026-08-25T17:31Z", "tab": "10/11/13", "hypothesis": "OUTCOME graduate batch complete: 115/115 read (t10 36, t11 19, t13 60), 0 >=4 across all relaunches; last 57: t10 max 3.0 (1 doc), t11 max 2.0, t13 max 2.0 — today's v2 graduates add no champion (supports H10)", "n_reads": 0}
