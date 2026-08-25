@@ -16,7 +16,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 docker build -f "$ROOT/deploy/Dockerfile" -t patent-bench "$ROOT"
 docker rm -f patent-bench 2>/dev/null || true
-docker run -d --name patent-bench --restart unless-stopped -p 8099:8000 \
+docker network create nlm-net 2>/dev/null || true   # shared with nlm-slot-manager (watchdog reaches us without the Windows relay)
+docker run -d --name patent-bench --restart unless-stopped -p 8099:8000 --network nlm-net \
   -e WEB_CONCURRENCY="${WEB_CONCURRENCY:-1}" \
   -e PB_AUTO_FIGURES="${PB_AUTO_FIGURES:-0}" \
   -e PB_REDUCE_TIMEOUT="${PB_REDUCE_TIMEOUT:-1800}" \

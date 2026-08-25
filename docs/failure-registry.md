@@ -230,3 +230,14 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   caller must NOT launch a second batch. Verdict: BLOCKED for any reporting;
   screen resumes t10/t12/t13 cleared by the account gate only (default
   t13 first, work2 t12 first; t11/t14 stay paused).
+- 2026-08-25 12:07:57 UTC — INCIDENT (F7-class, tooling): the new nlm-slot-manager watchdog
+  restarted patent-bench because its "0 jobs running" probe set timed out and was counted
+  as idle (fail-open). Killed t10/t12/t13 screens (auto-resumed by the same watchdog at
+  12:09–12:10, rounds 16/5/10) and the in-flight t12 (86/99) / t13 (57/113) opus read
+  batches (leftovers relaunched 12:14: t12 4, t13 50). Fix deployed in the slot manager:
+  fail-closed job check (any unanswered probe → no restart), 2-cycle relay confirmation,
+  serial probes with 30 s timeout, nlm-rate/status (17 s DB query) sampled once per 10 min.
+  Root cause of the slow probes: nlm_bridge._run serialises EVERY NLM CLI call app-wide
+  under one threading.Lock — three screens share one CLI pipe regardless of account (the
+  11-min "waiting for ingest" on t12 was lock queueing, not a stall). Candidate fix: a
+  per-profile lock (src change → deploy → needs a quiet window).
