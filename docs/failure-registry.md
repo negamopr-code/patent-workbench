@@ -15,6 +15,7 @@ closure was computed while a FAIL was being waved through as "known baseline").
 | F3a | Sweep batch-35 answer-budget competition (roster-35 → 0/9 vs roster-10 → 7/9, proven by repro) | recall-integrity-auditor | audit_recall R2 | after every sweep | fix: batch ≤12 corridor |
 | F3b | No follow-up questions (per-doc follow-up = near-opus verdicts, free) | nlm-followup-verifier | nlm_followup.py + audit_recall R6 | non-empty R6 queue | fix: in-sweep follow-up stage |
 | F3c | 120KB staging clip (t13: 392 truncated / 309 blind tails; t10: 689 / 0) | staging-completeness-auditor | audit_staging S1/S2 | after staging; before interpreting notebook answers | fix: multi-part staging |
+| F3c-ns | **Not staged** (`documents.nlm_screen_state='add_failed'`: source never indexed in NotebookLM, doc silently dropped from the screen and counted as "rejected"; 2026-08-25: t10 173 / t11 40 / t12 47 / t13 13 / t14 37 = 310 docs, 138 oversized; mechanism candidates: 50-source-cap mid-doc rollover + ingestion timeout — under test, hypotheses.md H7) | staging-completeness-auditor (+ recall R1 labels GT docs in this pool "unstaged", not "miss") | audit_staging S5 (TO PATCH: scripts do not yet partition on `nlm_screen_state`) | after staging; before ANY reject-pool negative | registered 2026-08-25 (user approved); every recall/coverage line carries "among docs that reached NotebookLM" + the add_failed count; fix: re-queue add_failed instead of terminal mark |
 | F3d | Verbatim canary ≠ recall control | recall-integrity-auditor | audit_recall R3/R4 | every sweep | paraphrased canaries NOT yet planted (standing WARN) |
 | F3e | No post-sweep recall measurement (t13 0/14, t10 7/12 found only manually) | recall-integrity-auditor | audit_recall R1 | after every sweep, before results posted | control shipped |
 | F4 | Rolling-notebook confound (answer interpreted after source rotation) | staging-completeness-auditor | audit_staging S3 | before interpreting ANY notebook answer | control shipped |
@@ -32,10 +33,26 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
 {
   "13": {
     "C1-orphaned-reads": {"count": 401, "approved": "2026-08-18 user; 2026-08-20 accepted as scoped end-state (Claude recommendation, user 'go ahead') — all probes/lanes at marginal≈0 in the ≤2.0 orphan tail; re-read only on explicit user request. Closure wording stays 'among current-key reads'.", "scope": "pre-v2 feature_scores keyed to v1 names; top band + canary + sunk-13 re-read 08-20 (387 remain, all in the weak tail)"},
-    "R2-batch-corridor": {"count": 119, "approved": "2026-08-20 user 'go ahead'", "scope": "the COMPLETED legacy v2 sweep ran roster-35 before the corridor doctrine — its results are discovery-only forever and every conclusion carries recall: 1/14; future sweeps run roster ≤12 + follow-up stage"}
+    "R2-batch-corridor": {"count": 119, "approved": "2026-08-20 user 'go ahead'", "scope": "the COMPLETED legacy v2 sweep ran roster-35 before the corridor doctrine — its results are discovery-only forever and every conclusion carries recall: 1/14; future sweeps run roster ≤12 + follow-up stage"},
+    "S5-not-staged-add_failed": {"count": 13, "approved": "2026-08-25 user", "scope": "F3c-ns, see tab 10"},
+    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"}
   },
   "10": {
-    "R2-batch-corridor": {"count": 59, "approved": "2026-08-20 user 'go ahead'", "scope": "the COMPLETED legacy sweep ran roster-35 — discovery-only forever, conclusions carry recall: 7/12; future sweeps run roster ≤12 + follow-up stage"}
+    "R2-batch-corridor": {"count": 59, "approved": "2026-08-20 user 'go ahead'", "scope": "the COMPLETED legacy sweep ran roster-35 — discovery-only forever, conclusions carry recall: 7/12; future sweeps run roster ≤12 + follow-up stage"},
+    "S5-not-staged-add_failed": {"count": 173, "approved": "2026-08-25 user 'register F3c … approved'", "scope": "F3c-ns: docs never indexed in NotebookLM; NOT screened, NOT rejected — reported as a separate 'not staged' class; every recall/coverage line states the reached-NotebookLM denominator + this count; 7 of the 12 t10 GT docs (both 6.0 champions) are in this pool"},
+    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user 'register … the roster-39 baseline, approved'", "scope": "the v2 SCREEN stage runs roster 39 by design on every tab (t10–t14); it is a discovery/graduation pass, not the claims sweep — the ≤12 corridor (F3a) binds the claims/must-rounds and the follow-up stage only. Screen verdicts are discovery-only; per-doc relevance comes from follow-up or opus"}
+  },
+  "11": {
+    "S5-not-staged-add_failed": {"count": 40, "approved": "2026-08-25 user", "scope": "F3c-ns, see tab 10"},
+    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"}
+  },
+  "12": {
+    "S5-not-staged-add_failed": {"count": 47, "approved": "2026-08-25 user", "scope": "F3c-ns, see tab 10; 32 of these opus-read 08-24/25: 0 ≥3"},
+    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"}
+  },
+  "14": {
+    "S5-not-staged-add_failed": {"count": 37, "approved": "2026-08-25 user", "scope": "F3c-ns, see tab 10; all 6 opus ≥4 non-graduates on t14 are in this pool"},
+    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"}
   }
 }
 ```
@@ -95,3 +112,43 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   is paused; followup_ledger.jsonl unchanged since 08-20 (verifier output not
   yet landed). VERDICT: BLOCKED — experiment conclusion inadmissible until
   screens are auditable and the corridor conflict is registered.
+- 2026-08-25 (session-start, pre hypothesis-driver cycle 2; deploy head
+  76d3b09): supervisor run. Gate matrix ALL RED, every tab, every gate.
+  Freshness t10 staging/recall/ranking STALE; t12 staging STALE (32-read
+  add_failed batch moved max_scored_at to 08-25 00:59), recall MISSING,
+  ranking STALE; t11/t13/t14 staging FRESH, recall MISSING(tab), ranking
+  STALE / STALE(deploy). Pending trigger t10 claims-audit-done (08-23 19:14)
+  still unresolved — recall (08-21) and ranking (08-20, head 7322871) verdicts
+  predate it. audit_full_staging.json 08-24 21:44 = FAIL (t14 graduates
+  CN103457003/CN110679056/JP2020036393 confirmed assessed-truncated 1/N
+  parts; live blind tails t11 JP7332073, t12 KR20150138127, t13 x3) and now
+  stale vs t12/t10 watermarks. Baselines: t13 C1 387 <= 401 registered OK;
+  t10 R2 recall verdict PASS covers only the since_ts window — screen rounds
+  at roster 39 remain UNREGISTERED vs the corridor baseline (08-24 finding,
+  still no dated entry). add_failed pools (DB, nlm_screen_state): t10 173,
+  t11 40, t12 47, t13 13, t14 37 = 310 docs. NO audit script distinguishes
+  add_failed: audit_staging pools status='fetched' (add_failed >120 KB land
+  in S1 blind-tails as if staged), audit_recall counts an add_failed GT doc
+  as a plain miss, audit_ranking ignores state, audit_full_staging merely
+  excludes add_failed from assessed-truncated. Failure class F3c ("not
+  staged, never indexed") is UNREGISTERED and UNGATED — the 310 docs are
+  silently folded into "screened, not claimed". t12 H7 outcome (32/32 opus
+  0 >=3, max 1.0) is discovery only. H8: 5/12 t10 GT docs re-read 1-2 under
+  08-18 features — the recall verdict's R1 12/12 was computed on a GT set
+  that has since changed; blind re-read of the 7 remaining + US20230337972
+  overwrites documents.score = the R1 GT set itself; prior scores must be
+  snapshotted in the ledger before launch. VERDICT: BLOCKED — cycle-2 opus
+  reads may proceed (discovery), no conclusion reportable until all
+  auditors re-run on 76d3b09 and F3c is registered.
+- 2026-08-25 (session, deploy head 76d3b09, HEAD 85b824b) — REGISTRY UPDATE, user
+  approved verbatim: "register F3c and the roster-39 baseline, approved".
+  (1) New class F3c-ns "not staged" (`nlm_screen_state='add_failed'`) with per-tab
+  baselines `S5-not-staged-add_failed` t10 173 / t11 40 / t12 47 / t13 13 / t14 37.
+  Scripts still emit no S5 row (audit_staging/audit_recall/audit_ranking do not
+  partition on the flag) — the baseline is documentary until they are patched;
+  until then every recall/coverage line must hand-state the reached-NotebookLM
+  denominator + the add_failed count. (2) `R2-screen-roster39` = 39 on t10–t14:
+  the v2 screen runs roster 39 by design; the ≤12 corridor binds claims/must-rounds
+  and follow-up only. NOT registered (not approved): the unregistered nlm_claims R2
+  counts t11 46/78, t12 61/118, t14 80/139; t7 EP3282551 rank=null; t3 C6 gaps;
+  t11 R1 89/93 (4 judged misses) — all still gating.
