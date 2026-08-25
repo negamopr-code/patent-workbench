@@ -67,3 +67,17 @@ are against the *re-verified* controls, not yet REGISTERED ones (registry update
 t12 has no controls; the three-way table is missing; roster-39 mode and the account-sharing
 decisions are not user-registered; all verdicts are opus-5 single reads (no repeat-read
 variance measured); the token figures are a chars/4 proxy (bridge logs no usage).
+
+## Addendum 2026-08-25 07:19 UTC — t10 add_failed pool fully read (user-approved)
+User directive: "you can read documents in t10 for clean up if needed". The 97 t10
+`add_failed` docs with no opus verdict (8.10 M chars, live count verified read-only) were
+opus-read blind via `/api/tabs/10/deep-compare` in two batches (60 + 37, 07:03–07:19 UTC,
+after the 196f40e redeploy answered). Result: **0 at ≥4, 2 at 3 (US20160099611,
+US10223717), 19 at 2, 64 at 1, 12 at 0.** The t10 add_failed pool is now 173/173
+opus-read; its exact champion content is 5 docs (US20230337972 5.0, US20220221016 5.0,
+US10996236 4, EP3849091 4, CA2552849 4), all from the earlier lane-selected part — none in
+the never-read remainder. H7 (t10 champion cost) is now exactly scoped at 5/9 of t10's
+opus champions unstaged; H9 is closed (exact reject-miss count 5, the 0–1 expectation for
+the remainder held). Token proxy for this addendum: 97 reads, 8.10 M chars ≈ 2.0 M input
+tokens (chars/4; bridge logs no usage). Ledger total: 11 jobs, 520 reads, ≈ 53.1 M chars.
+Pre-audit, as for everything above. No NLM screen was touched; t10 only.
