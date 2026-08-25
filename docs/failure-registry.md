@@ -290,3 +290,12 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   Caller-report "53 landed" vs DB 83 docs scored after the anchors = 53 + the 33
   relaunched ones already landed (consistent); caller's "17:12 relaunch" vs
   container clock 17:10 at audit time — timestamps from different clocks. Verdict: BLOCKED.
+- 2026-08-25 17:13:19 UTC — SECOND Docker-wide restart of the evening (all 30 containers
+  started the same second). Cause: openday-serve rendering TWO whole-period videos at once
+  (SPY_sl0.25_tps0.5 + tps2 progress files written 17:12:53); its 3g cap did not protect the
+  10 GB VM with ~5.3 GB baseline. Mitigation: `docker update --memory 2g --memory-swap 2g
+  openday-serve` + serve.sh patched to 2g. Effects: the 17:12 graduate relaunch cut again
+  (5/62 landed, all <4); 17:16 relaunched 57 (t10 11 / t11 5 / t13 41, ids in
+  /data/audits/graduate_reads_pending2_2026-08-25.json). Watchdog auto-resumed t10/t12/t13
+  screens 17:13:xx (t11/t14 paused); account gate A1/A2 PASS 17:15 (default t13, drawnformula
+  t10, work2 t12). Deploy head defa67e unchanged → all verdict freshness unchanged (red).

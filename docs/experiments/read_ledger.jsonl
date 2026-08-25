@@ -24,3 +24,6 @@
 {"ts": "2026-08-25T17:12Z", "tab": 10, "hypothesis": "relaunch of graduate reads cut by the 17:02 Docker-wide restart (53/115 had landed 16:5x-17:01, all <4); pending ids in /data/audits/graduate_reads_pending_2026-08-25.json", "n_reads": 11}
 {"ts": "2026-08-25T17:12Z", "tab": 11, "hypothesis": "relaunch of graduate reads cut by the 17:02 Docker-wide restart (14/19 landed, all <4)", "n_reads": 5}
 {"ts": "2026-08-25T17:12Z", "tab": 13, "hypothesis": "relaunch of graduate reads cut by the 17:02 Docker-wide restart (14/60 landed, all <4)", "n_reads": 46}
+{"ts": "2026-08-25T17:16Z", "tab": 10, "hypothesis": "2nd relaunch — 17:13 Docker-wide restart (openday rendering 2 full videos concurrently, 3g cap insufficient) cut the 17:12 batch; 0/11 had landed; pending ids in /data/audits/graduate_reads_pending2_2026-08-25.json", "n_reads": 11}
+{"ts": "2026-08-25T17:16Z", "tab": 11, "hypothesis": "2nd relaunch after 17:13 restart (0/5 landed)", "n_reads": 5}
+{"ts": "2026-08-25T17:16Z", "tab": 13, "hypothesis": "2nd relaunch after 17:13 restart (5/46 landed, all <4)", "n_reads": 41}
