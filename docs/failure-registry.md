@@ -189,3 +189,11 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   (with --deploy-head), staging-completeness-auditor, full-doc-staging-auditor
   on t10/t11/t13; thesis may be circulated only as discovery with the F3c-ns
   denominator wording and no closure/coverage claim.
+- 2026-08-25 07:05 UTC — DEPLOY 196f40e (src/patentbench/web/api.py `_screen_fill_roster`):
+  cap-aware screen roster fill — the F3c-ns root cause (parts rolling over the
+  50-source cap → tail parts dropped → index probe fails → add_failed). Every
+  verdict in /data/audits is now STALE(deploy); staging-completeness +
+  full-doc-staging auditors to re-run after the first cap-aware rounds on
+  t11/t13 (resumed 07:08; first rosters 23 and 24 docs vs 39). Expected
+  observable: zero new add_failed and screen notebooks at parts have/expected
+  equal. Existing add_failed docs remain terminal (re-queue NOT built yet).
