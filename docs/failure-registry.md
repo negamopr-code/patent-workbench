@@ -299,3 +299,31 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   /data/audits/graduate_reads_pending2_2026-08-25.json). Watchdog auto-resumed t10/t12/t13
   screens 17:13:xx (t11/t14 paused); account gate A1/A2 PASS 17:15 (default t13, drawnformula
   t10, work2 t12). Deploy head defa67e unchanged → all verdict freshness unchanged (red).
+- 2026-08-25 ~17:18 UTC container clock (session-start after the 17:13:19 Docker-wide
+  restart #2; deploy head defa67e unchanged): supervisor run, scope t10–t14. Step 0
+  account gate PASS (A1 five bindings match; A2 one job per account: drawnformula t10,
+  default t13, work2 t12; t11/t14 paused, series order intact). Restart did NOT corrupt
+  screen state: .nlm_screen_{t}.json/.lock all present, rounds monotonic vs earlier
+  entries (t10 r14→r16→now r20 "staging round 21" lock 29 s old, cursor 671/1459;
+  t12 r3→r5→now r7 cursor 88/363, unmatched 26, requeued 44 = live add_failed 44;
+  t13 r8→r10→now r13 cursor 187/458; t11 r8 / t14 r3 still "⏸ paused"). t12/t13 locks
+  17:13:32 (age ~4 min, TTL 1200 s) both "waiting for NotebookLM to ingest the batch" —
+  not yet a stall, re-check if no progress by ~17:35. Screen notebooks unchanged (t12
+  460a3ffe, t13 22f46fa9 = the ones named by audit_full_staging live_problems); claims
+  jobs all step=done. Evidence side unchanged: audit_staging/recall/ranking ts 16:49
+  head 911d1b3, audit_full_staging 16:51 — all pre-defa67e; pending_trigger none.
+  Freshness: t12/t14 STALE(deploy) only; t10/t11/t13 STALE by DATA (reads landing).
+  57-read relaunch (17:16, pending2 file) landing: t10 7/11, t11 3/5, t13 12/41 = 22/57
+  scored after 17:16, 0 ≥4, rest in flight → re-audit ONLY after the batch completes.
+  Gate matrix: all three gates red on every tab t10–t14. Baseline compare (verdict rows):
+  WITHIN — t10 S5 172≤173, t12 S5 44≤47, t14 S5 37=37, t13 C1 344≤401, t10 R2 59=59,
+  t13 R2 119=119. UNREGISTERED gating FAILs (unchanged): S1-blind-tails t11 52 / t12 113 /
+  t13 267 / t14 166; R1-recall t13 7/20; R2-batch-corridor t11 46 / t12 61 / t14 80;
+  full-doc FAIL t12 WO2025044604 [1]/2, t13 US10115302 [1]/2 (defa67e fix unevidenced
+  until full-doc-staging-auditor re-runs on defa67e). R6 queues non-empty: t10
+  [US20120007441, CN103683526], t13 [CN218958581, CN220510820, CN120073105, CN120433348].
+  C5: canary only t13 (SCOPED, 9/9); t10/t11/t12/t14 none → negatives scoped only.
+  Cross-checks: no contradiction — t13 C6 PASS vs R1 misses is consistent (all six misses
+  hold opus reads 4.0–5.0, i.e. sweep misses of READ ground truth, not unread); live S5
+  counts equal verdict rows on t10/t12/t14; t11/t13 no add_failed live (registered S5
+  t11 40 / t13 13 remain over-registered — retire on user approval). Verdict: BLOCKED.
