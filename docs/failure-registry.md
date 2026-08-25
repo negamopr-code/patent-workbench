@@ -152,3 +152,40 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   and follow-up only. NOT registered (not approved): the unregistered nlm_claims R2
   counts t11 46/78, t12 61/118, t14 80/139; t7 EP3282551 rank=null; t3 C6 gaps;
   t11 R1 89/93 (4 judged misses) — all still gating.
+- 2026-08-25 (post hypothesis-driver cycle 2, pre-thesis report; deploy head
+  76d3b09, HEAD b3762f1): supervisor run. audit_status consumes the fc6e576
+  baselines syntactically, but NO verdict row carries `S5-not-staged-add_failed`
+  or `R2-screen-roster39` (staging/recall scripts 2026-08-20.1 emit S1–S4 /
+  R1–R6 only) — both baselines are inert/documentary; t12/t14 FRESH gates are
+  unchanged by them. Live add_failed = registered exactly (t10 173 / t11 40 /
+  t12 47 / t13 13 / t14 37, no growth). Freshness: t10/t11/t13 staging+recall+
+  ranking ALL STALE — verdicts written 05:58:42–05:59:04 UTC, driver reads
+  landed 05:59–06:07 (max_scored_at t10 06:02:43 +14 docs, t11 06:06:59 +31,
+  t13 06:01:03 +7); ranking verdict also has deploy_head=null (run without
+  --deploy-head). t12/t14 FRESH: post_sweep BLOCKED (R2-batch-corridor
+  unregistered t12 61/118, t14 80/139), champion PERMITTED+DISCLOSE (S1),
+  closure SCOPED-ONLY. Pending trigger t10 claims-audit-done (08-23 19:14)
+  STILL unresolved after two audit cycles. audit_full_staging FAIL (05:59):
+  live blind tails t11 JP7332073, t12 KR20150138127, t13 CN115166523/
+  CN116130803/WO2024077056, t14 x3; assessed-truncated t11 110 / t12 248 /
+  t13 445 / t14 222 — now stale vs t10/t11/t13 watermarks too. Cross-file:
+  t10 recall R1 "12/12" was computed on the pre-overwrite GT; the H8 re-read
+  changed the live GT set to score>=4 = 9 docs (5 of them add_failed:
+  US20230337972, US20220221016, US10996236, EP3849091, CA2552849) — the R1 row
+  is invalid by construction, not merely stale. t13 R1 5/14 FAIL (msg lists 6
+  missed, data lists 9 — script inconsistency) and R6 queue t11 x4 / t13 x3
+  still WARN in the verdict although followup_ledger.jsonl shows both queues
+  worked 06:04/06:09 — recall must re-run to consume them. t11 full_staging
+  assessed_truncated=110 vs staging S1 truncated=186 — different denominators,
+  not a contradiction. Thesis admissibility: H7 mechanism (cap-overflow
+  4/4…9/11) rests on screen-state files + code inspection, no auditor
+  instrument measures it — discovery only; H8 (valid GT 4/12) and H9/H7-cost
+  (t10 5/9 champions add_failed) are DB-verifiable and match live state but
+  their recall lines are unaudited until recall re-runs on the new GT; H10
+  (v2 judged-miss 0/114) is a partition of the STALE recall verdict's misses
+  (t11 4 / t13 9 all v1-epoch) — reportable only as "among v2 rejects opus-read
+  so far, t11/t13 screens stalled at round 0, roster-39 discovery pass".
+  VERDICT: BLOCKED — spawn recall-integrity-auditor, ranking-integrity-auditor
+  (with --deploy-head), staging-completeness-auditor, full-doc-staging-auditor
+  on t10/t11/t13; thesis may be circulated only as discovery with the F3c-ns
+  denominator wording and no closure/coverage claim.
