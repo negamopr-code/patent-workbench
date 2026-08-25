@@ -1,123 +1,134 @@
 {
-  "_doc": "Controls as DATA (not prose) for the audit scripts — pass via --registry \"$(cat docs/controls-registry.json)\". verbatim_canary: planted doc in the benchmark's own wording (validates plumbing ONLY, never recall). paraphrased_canaries: known-relevant docs re-worded/translated away from the feature phrasing (the ONLY valid recall control) — standing WARN until planted and user-confirmed. champion_controls: real opus-verified strong docs each recall lane must rank within expect_lane_rank_max, else the lane is blind to paraphrase (measured: embed lane ranked CN116508192 at 1778/2058 because it embedded claims text only).",
-  "tabs": {
-    "13": {
-      "verbatim_canary": "CN223926581",
-      "paraphrased_canaries": [
-        "CN205265271",
-        "CN116508192"
-      ],
-      "_paraphrased_note": "natural paraphrased canaries (user-approved 2026-08-20): opus-proven strong docs worded away from the feature phrasing — the legacy sweep missed both; every future sweep must claim them or its recall is broken",
-      "champion_controls": [
-        {
-          "number": "CN205265271",
-          "expect_lane_rank_max": 200,
-          "why": "opus 6.0, 6/9 MUST full — missed by the sweep at roster-35, claimed 7/9 at roster-10"
-        },
-        {
-          "number": "CN116508192",
-          "expect_lane_rank_max": 400,
-          "why": "opus 5.0, full trigger chain [1][5][6][7] — decisive paragraph beyond the 120KB staging clip"
-        },
-        {
-          "number": "CN115166523",
-          "expect_lane_rank_max": 400,
-          "why": "opus 6.0, 3F/6P MUST"
-        },
-        {
-          "number": "CN118056137",
-          "expect_lane_rank_max": 400,
-          "why": "opus 5.0, 4F/5P MUST"
-        }
-      ],
-      "ground_truth_min_score": 4.0
+ "_doc": "Controls as DATA (not prose) for the audit scripts — pass via --registry \"$(cat docs/controls-registry.json)\". verbatim_canary: planted doc in the benchmark's own wording (validates plumbing ONLY, never recall). paraphrased_canaries: known-relevant docs re-worded/translated away from the feature phrasing (the ONLY valid recall control) — standing WARN until planted and user-confirmed. champion_controls: real opus-verified strong docs each recall lane must rank within expect_lane_rank_max, else the lane is blind to paraphrase (measured: embed lane ranked CN116508192 at 1778/2058 because it embedded claims text only).",
+ "tabs": {
+  "13": {
+   "verbatim_canary": "CN223926581",
+   "paraphrased_canaries": [
+    "CN205265271",
+    "CN116508192"
+   ],
+   "_paraphrased_note": "natural paraphrased canaries (user-approved 2026-08-20): opus-proven strong docs worded away from the feature phrasing — the legacy sweep missed both; every future sweep must claim them or its recall is broken",
+   "champion_controls": [
+    {
+     "number": "CN205265271",
+     "expect_lane_rank_max": 200,
+     "why": "opus 6.0, 6/9 MUST full — missed by the sweep at roster-35, claimed 7/9 at roster-10"
     },
-    "10": {
-      "verbatim_canary": null,
-      "paraphrased_canaries": [
-        "CN113924787",
-        "JP2019221076",
-        "EP3849091"
-      ],
-      "_paraphrased_note": "natural paraphrased canaries (user-approved 2026-08-20): opus 4.0 docs from the sweep's measured non-US miss cluster",
-      "champion_controls": [
-        {
-          "number": "US20230337972",
-          "expect_lane_rank_max": 200,
-          "why": "opus 6.0, mand 7.42 (7F/3P of 11)"
-        },
-        {
-          "number": "US20220221016",
-          "expect_lane_rank_max": 200,
-          "why": "opus 6.0, 8F/0P of 11 — was 3.0 under sonnet (sonnet-band lesson)"
-        },
-        {
-          "number": "CN113924787",
-          "expect_lane_rank_max": 500,
-          "why": "opus 4.0, missed by the sweep (non-US-origin miss cluster)"
-        }
-      ],
-      "ground_truth_min_score": 4.0
+    {
+     "number": "CN116508192",
+     "expect_lane_rank_max": 400,
+     "why": "opus 5.0, full trigger chain [1][5][6][7] — decisive paragraph beyond the 120KB staging clip"
     },
-    "11": {
-      "verbatim_canary": null,
-      "paraphrased_canaries": [
-        "CN117039286",
-        "CN220652165",
-        "CN116404323"
-      ],
-      "_paraphrased_note": "natural paraphrased canaries (user directive 2026-08-21: apply t13 learnings to other tabs): opus-proven strong docs — future sweeps must claim them",
-      "champion_controls": [
-        {
-          "number": "CN117039286",
-          "expect_lane_rank_max": 300
-        },
-        {
-          "number": "CN220652165",
-          "expect_lane_rank_max": 300
-        }
-      ],
-      "ground_truth_min_score": 4.0
+    {
+     "number": "CN115166523",
+     "expect_lane_rank_max": 400,
+     "why": "opus 6.0, 3F/6P MUST"
     },
-    "12": {
-      "verbatim_canary": null,
-      "paraphrased_canaries": [
-        "KR20260033205",
-        "KR20240099963",
-        "CN119833811"
-      ],
-      "_paraphrased_note": "natural paraphrased canaries (user directive 2026-08-21: apply t13 learnings to other tabs): opus-proven strong docs — future sweeps must claim them",
-      "champion_controls": [
-        {
-          "number": "KR20260033205",
-          "expect_lane_rank_max": 300
-        },
-        {
-          "number": "KR20240099963",
-          "expect_lane_rank_max": 300
-        }
-      ],
-      "ground_truth_min_score": 4.0
-    },
-    "14": {
-      "verbatim_canary": null,
-      "paraphrased_canaries": [
-        "EP4152472",
-        "CN103457003",
-        "CN118318177"
-      ],
-      "_paraphrased_note": "natural paraphrased canaries (user directive 2026-08-21: apply t13 learnings to other tabs): opus-proven strong docs — future sweeps must claim them",
-      "champion_controls": [
-        {
-          "number": "EP4152472",
-          "expect_lane_rank_max": 300
-        },
-        {
-          "number": "CN103457003",
-          "expect_lane_rank_max": 300
-        }
-      ],
-      "ground_truth_min_score": 4.0
+    {
+     "number": "CN118056137",
+     "expect_lane_rank_max": 400,
+     "why": "opus 5.0, 4F/5P MUST"
     }
+   ],
+   "ground_truth_min_score": 4.0
+  },
+  "10": {
+   "verbatim_canary": null,
+   "paraphrased_canaries": [
+    "CN113924787",
+    "JP2019221076",
+    "EP3849091"
+   ],
+   "_paraphrased_note": "natural paraphrased canaries (user-approved 2026-08-20): opus 4.0 docs from the sweep's measured non-US miss cluster",
+   "champion_controls": [
+    {
+     "number": "US20230337972",
+     "expect_lane_rank_max": 200,
+     "why": "opus 6.0, mand 7.42 (7F/3P of 11)"
+    },
+    {
+     "number": "US20220221016",
+     "expect_lane_rank_max": 200,
+     "why": "opus 6.0, 8F/0P of 11 — was 3.0 under sonnet (sonnet-band lesson)"
+    },
+    {
+     "number": "CN113924787",
+     "expect_lane_rank_max": 500,
+     "why": "opus 4.0, missed by the sweep (non-US-origin miss cluster)"
+    }
+   ],
+   "ground_truth_min_score": 4.0
+  },
+  "11": {
+   "verbatim_canary": null,
+   "paraphrased_canaries": [
+    "CN117039286",
+    "CN220652165",
+    "CN116404323"
+   ],
+   "_paraphrased_note": "natural paraphrased canaries (user directive 2026-08-21: apply t13 learnings to other tabs): opus-proven strong docs — future sweeps must claim them",
+   "champion_controls": [
+    {
+     "number": "CN117039286",
+     "expect_lane_rank_max": 300
+    },
+    {
+     "number": "CN220652165",
+     "expect_lane_rank_max": 300
+    }
+   ],
+   "ground_truth_min_score": 4.0
+  },
+  "12": {
+   "verbatim_canary": null,
+   "paraphrased_canaries": [
+    "KR20260033205",
+    "KR20240099963",
+    "CN119833811"
+   ],
+   "_paraphrased_note": "natural paraphrased canaries (user directive 2026-08-21: apply t13 learnings to other tabs): opus-proven strong docs — future sweeps must claim them",
+   "champion_controls": [
+    {
+     "number": "KR20260033205",
+     "expect_lane_rank_max": 300
+    },
+    {
+     "number": "KR20240099963",
+     "expect_lane_rank_max": 300
+    }
+   ],
+   "ground_truth_min_score": 4.0
+  },
+  "14": {
+   "verbatim_canary": null,
+   "paraphrased_canaries": [
+    "EP4152472",
+    "CN103457003",
+    "CN118318177"
+   ],
+   "_paraphrased_note": "natural paraphrased canaries (user directive 2026-08-21: apply t13 learnings to other tabs): opus-proven strong docs — future sweeps must claim them",
+   "champion_controls": [
+    {
+     "number": "EP4152472",
+     "expect_lane_rank_max": 300
+    },
+    {
+     "number": "CN103457003",
+     "expect_lane_rank_max": 300
+    }
+   ],
+   "ground_truth_min_score": 4.0
   }
+ },
+ "nlm_accounts": {
+  "10": "drawnformula",
+  "11": "default",
+  "12": "work2",
+  "13": "default",
+  "14": "work2"
+ },
+ "nlm_account_rules": {
+  "A1": "tab account fixed for project life (user 2026-08-23)",
+  "A2": "one running NLM job per account, in series: default t13→t11, work2 t12→t14 (user 2026-08-25)"
+ }
 }

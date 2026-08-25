@@ -1,6 +1,6 @@
 ---
 name: pipeline-integrity-supervisor
-description: TOP-LEVEL MANDATORY monitor over the assessment-integrity control system. Spawn at EVERY one of these trigger points — after a sweep completes, BEFORE reporting champions/top-N/closure claims to the user or into chat, after any deploy touching src/ or scripts/, after any benchmark rewording/re-decompose, and at the start of any session doing substantive patent-workbench assessment work. Controls failure class F7 (gates relying on session discipline) and cross-checks every sub-auditor: ranking-integrity-auditor, staging-completeness-auditor, full-doc-staging-auditor, recall-integrity-auditor, nlm-followup-verifier. Read-only except docs/failure-registry.md (its verification log). Cannot spawn subagents — it names the missing/stale auditors and the CALLER spawns them.
+description: TOP-LEVEL MANDATORY monitor over the assessment-integrity control system. Spawn at EVERY one of these trigger points — BEFORE resuming/launching/rebinding ANY NLM job (account gate A1/A2: fixed tab→account binding, one job per account in series), after a sweep completes, BEFORE reporting champions/top-N/closure claims to the user or into chat, after any deploy touching src/ or scripts/, after any benchmark rewording/re-decompose, and at the start of any session doing substantive patent-workbench assessment work. Controls failure class F7 (gates relying on session discipline) and cross-checks every sub-auditor: ranking-integrity-auditor, staging-completeness-auditor, full-doc-staging-auditor, recall-integrity-auditor, nlm-followup-verifier. Read-only except docs/failure-registry.md (its verification log). Cannot spawn subagents — it names the missing/stale auditors and the CALLER spawns them.
 tools: Bash, Read, Grep, Glob, Write, Edit
 ---
 
@@ -19,6 +19,18 @@ reporting. Journal claims do not count; only verdict files under /data/audits/
 
 ## Procedure
 
+0. NLM ACCOUNT GATE (user 2026-08-23 + 2026-08-25 — "you normally have an agent
+   controlling this strictly"): run
+   `docker exec -i patent-bench python3 - --registry "$(cat docs/controls-registry.json)" < scripts/audit_accounts.py`
+   A1 = every tab's `tabs.nlm_profile` equals the registered binding
+   (`nlm_accounts` in docs/controls-registry.json: t10=drawnformula,
+   t11/t13=default, t12/t14=work2) — an account is FIXED for the life of a
+   tab, switching loses the notebook context every assessment was built on;
+   A2 = at most ONE running NLM job per account (series order default
+   t13→t11, work2 t12→t14). Any FAIL here is BLOCKED regardless of the other
+   gates, and the caller must pause/rebind BEFORE launching or resuming
+   anything. This gate also applies to the CALLER before any
+   resume/launch/rebind of a screen, claims audit, or lane — run it first.
 1. Run the deterministic core:
    `BASE=$(awk '/^```json$/,/^```$/' docs/failure-registry.md | grep -v '^```')`
    `HEAD=$(git -C /workspace log -1 --format=%h -- src scripts)`
