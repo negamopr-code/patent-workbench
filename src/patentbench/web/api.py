@@ -1245,6 +1245,31 @@ def _doc_part_count(doc: dict) -> int:
     return max(1, -(-n // STAGE_PART_BYTES))
 
 
+def _rotate_out_ids(raw_sources: list[dict], want_keys) -> tuple[list[str], int]:
+    """Sources to delete before a round is staged: (a) candidates whose number is
+    not wanted (previous round's losers) and (b) DUPLICATES — the same title
+    staged more than once. Duplicates appear when an `add` times out client-side
+    but lands server-side and the crash-safe re-entry adds again (2026-08-25
+    15:05 DNS outage: t12 held JP5011645 ×3 per part, WO2025044604 part 1 ×3
+    and part 2 nowhere — nine ghost slots ate the 50-source cap and the tail
+    part was lost although the fill was cap-aware). Keeps the first copy of
+    every title, including the benchmark. Returns (ids, n_duplicates)."""
+    ids, seen, dups = [], set(), 0
+    for s in raw_sources or []:
+        t = s.get("title") or ""
+        if t in seen:
+            ids.append(s["id"])
+            dups += 1
+            continue
+        seen.add(t)
+        if t.startswith("🎯 BENCHMARK"):
+            continue
+        nums = patents.extract_candidates(t)
+        if not nums or _shortlist_key(nums[0]) not in want_keys:
+            ids.append(s["id"])
+    return ids, dups
+
+
 def _screen_fill_roster(queue: list[int], cursor: int, batch: int,
                         survivors: list[int], docs_by_id: dict[int, dict]) -> tuple[list[int], int]:
     """Cap-aware round roster: take queue docs from `cursor` while the notebook
@@ -3932,14 +3957,7 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
     #    share its number — the collapsed num_map sees one sid per number and would
     #    leave rotated-out tail parts lingering (same fix as _claims_stage).
     raw = nlm_bridge.list_sources(nb, force=True, profile=prof)
-    stale = []
-    for s in (raw.get("sources") or []):
-        t = s.get("title") or ""
-        if t.startswith("🎯 BENCHMARK"):
-            continue
-        nums = patents.extract_candidates(t)
-        if not nums or _shortlist_key(nums[0]) not in want_keys:
-            stale.append(s["id"])
+    stale, n_dup = _rotate_out_ids(raw.get("sources") or [], want_keys)
     if stale:
         _screen_set(tab_id, status_text=f"🗑 rotating out {len(stale)} source(s)…")
         nlm_bridge.delete_source(stale, nb, profile=prof)
@@ -3981,6 +3999,11 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
     #     lost TAIL part is invisible to the per-number check — repair at part
     #     granularity so no doc is ever questioned with a silently missing tail.
     raw2 = nlm_bridge.list_sources(nb, force=True, profile=prof)
+    dup_ids, n_dup2 = _rotate_out_ids(raw2.get("sources") or [], want_keys)
+    if n_dup2:                       # ghost copies hold cap slots the tails need
+        _screen_set(tab_id, status_text=f"🗑 removing {n_dup2} duplicate source(s)…")
+        nlm_bridge.delete_source(dup_ids, nb, profile=prof)
+        raw2 = nlm_bridge.list_sources(nb, force=True, profile=prof)
     raw_titles = {(s.get("title") or "") for s in (raw2.get("sources") or [])}
     repaired = 0
     for k, did in want_keys.items():
@@ -4661,14 +4684,7 @@ def _claims_stage(tab_id: int, st: dict, want_ids: list[int],
     # share its number — the collapsed num_map sees only one sid per number and
     # would leave rotated-out parts lingering in the notebook.
     raw = nlm_bridge.list_sources(nb, force=True, profile=prof)
-    stale = []
-    for s in (raw.get("sources") or []):
-        t = s.get("title") or ""
-        if t.startswith("🎯 BENCHMARK"):
-            continue
-        nums = patents.extract_candidates(t)
-        if not nums or _shortlist_key(nums[0]) not in want_keys:
-            stale.append(s["id"])
+    stale, n_dup = _rotate_out_ids(raw.get("sources") or [], want_keys)
     if stale:
         _claims_set(tab_id, status_text=f"🗑 rotating out {len(stale)} source(s)…")
         nlm_bridge.delete_source(stale, nb, profile=prof)
