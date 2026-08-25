@@ -197,3 +197,12 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   t11/t13 (resumed 07:08; first rosters 23 and 24 docs vs 39). Expected
   observable: zero new add_failed and screen notebooks at parts have/expected
   equal. Existing add_failed docs remain terminal (re-queue NOT built yet).
+- 2026-08-25 07:55 UTC — DEPLOY 911d1b3: add_failed re-queue (one extra pass per doc,
+  tracked in screen state `requeued`; on resume, default start, per round).
+  scripts/audit_staging.py 2026-08-25.1: emits `S5-not-staged-add_failed` (gates
+  against the baselines above) and part-aware S1 (blind tails = upper bound;
+  docs verified full in live notebooks excluded). All five screens POST-resumed
+  07:57 on 911d1b3: t10 r12 468/1459, t11 r7 100/188, t12 r1 39/334, t13 r7
+  106/458, t14 r2 78/337 (totals grew by the re-queued add_failed docs). Live
+  S5: t11 0 / t13 0 (their 08-23 round-0 failures were re-screened today) —
+  baselines 40/13 stay as maxima. Deploy head for all verdicts: 911d1b3.

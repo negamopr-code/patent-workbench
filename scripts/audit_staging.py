@@ -21,6 +21,13 @@ Checks (per tab with an nlm_claims sweep state or nlm-screen history):
      DIGEST) and measure UTF-8 BYTES vs the 120_000 clip.
      truncated AND never deep-read (score is null) = BLIND TAILS -> FAIL;
      truncated but deep-read (full text seen by a model)          -> WARN.
+     Part-aware since 2026-08-25: docs >118_000 B are staged as K parts
+     ('NUM — title' + 'NUM (part k/K) — title', api._doc_source_parts, 9dda5f1);
+     a doc whose K parts are ALL present in one of the tab's LIVE screen/claims
+     notebooks is NOT a blind tail (parts_verified_full). Docs assessed only in
+     rotated-out notebooks stay counted -> the count is an UPPER BOUND.
+     add_failed docs (never reached NotebookLM) are excluded from both pools
+     and reported by S5 instead.
   S2 cut-point report — which section the clip lands in (INFO, top examples).
   S3 live inventory — the sweep state's notebook must currently hold exactly
      the last roster's sources (+ benchmark); any answer interpreted against a
@@ -28,6 +35,10 @@ Checks (per tab with an nlm_claims sweep state or nlm-screen history):
      list failure / quota -> WARN, never a crash).
   S4 claims-within-audited guard — every claimed doc id must be inside the
      audited prefix of the sweep queue (parser/state regression guard).
+  S5 not-staged add_failed — fetched docs with nlm_screen_state='add_failed'
+     (the screen stage could not index them; F3c-ns). FAIL when > 0; gated by
+     audit_status.gating_fail against the failure-registry baseline keyed by
+     the check name `S5-not-staged-add_failed`.
 
 Exit: 0 PASS, 1 WARN, 2 FAIL, 3 audit could not complete (= missing evidence).
 """
@@ -41,8 +52,10 @@ import time
 DB = "file:/data/workbench.db?mode=ro"
 AUDIT_DIR = "/data/audits"
 CLIP = 120_000
+STAGE_PART_BYTES = 118_000     # mirror of api.STAGE_PART_BYTES (per-part budget)
+LIST_CAP = 50                  # max doc numbers embedded in a row's data
 SCHEMA = 1
-SCRIPT_VERSION = "2026-08-20.1"
+SCRIPT_VERSION = "2026-08-25.1"
 
 
 def jload(s, default):
@@ -61,6 +74,15 @@ def compose_blob(num, title, ab, cl, de, dg):
         ("CLAIMS:\n" + cl) if cl else None,
         ("DESCRIPTION:\n" + de) if de else None,
         ("FULL-TEXT DIGEST:\n" + dg) if dg else None]))
+
+
+def part_titles(num, title, nbytes):
+    """Mirror of api._doc_source_parts() TITLES: part 1 keeps 'NUM — title[:120]',
+    overflow parts are 'NUM (part k/K) — title[:100]'. K = ceil(bytes/118_000)."""
+    k = max(1, -(-nbytes // STAGE_PART_BYTES))
+    t = title or ""
+    return [f"{num} — {t[:120]}"] + [f"{num} (part {i}/{k}) — {t[:100]}"
+                                     for i in range(2, k + 1)]
 
 
 def cut_section(blob):
@@ -87,8 +109,8 @@ class Report:
         return 2 if "FAIL" in lv else (1 if "WARN" in lv else 0)
 
 
-def sweep_state(tab):
-    p = f"/data/.nlm_claims_{tab}.json"
+def sweep_state(tab, kind="claims"):
+    p = f"/data/.nlm_{kind}_{tab}.json"
     if os.path.exists(p):
         try:
             with open(p) as fh:
@@ -109,39 +131,99 @@ def anchors(cx, tab):
             "max_claims_ts": nc[0], "claims_rounds": nc[1]}
 
 
+def live_titles(cx, tab, nb, no_live):
+    """Raw source titles of a LIVE notebook via nlm_bridge.list_sources (listing
+    only — no AI query, no DB write). Returns (titles|None, error|None)."""
+    if not nb or no_live:
+        return None, None
+    try:
+        sys.path.insert(0, "/app/src")
+        from patentbench import nlm_bridge  # noqa: PLC0415
+        # the tab's pinned NLM account — listing with the wrong profile
+        # returns PERMISSION_DENIED (t10 lives on a per-tab account)
+        prow = cx.execute("select nlm_profile from tabs where id=?", (tab,)).fetchone()
+        prof = prow[0] if prow else None
+        res = nlm_bridge.list_sources(nb, force=True, profile=prof)
+        if res.get("error"):
+            return None, res["error"][:120]
+        return [s.get("title") or "" for s in (res.get("sources") or [])], None
+    except Exception as e:  # noqa: BLE001 — audit reports, never crashes
+        return None, str(e)
+
+
 def audit_tab(cx, rep, tab, no_live):
-    docs = [dict(zip(("id", "number", "score", "title", "ab", "cl", "de", "dg"), r))
+    docs = [dict(zip(("id", "number", "score", "title", "ab", "cl", "de", "dg", "scr"), r))
             for r in cx.execute(
-                "select id, number, score, title, abstract, claims, description, digest "
-                "from documents where tab_id=? and status='fetched'", (tab,))]
+                "select id, number, score, title, abstract, claims, description, digest, "
+                "nlm_screen_state from documents where tab_id=? and status='fetched'",
+                (tab,))]
     if not docs:
         return
 
+    # ---- live source inventories (screen + claims notebooks), listed ONCE ----
+    st = sweep_state(tab)
+    scr_st = sweep_state(tab, "screen") or {}
+    live, errs = {}, {}   # notebook_id -> raw title list | listing error
+    for nb in {scr_st.get("notebook_id"), (st or {}).get("notebook_id")} - {None}:
+        titles, err = live_titles(cx, tab, nb, no_live)
+        if titles is not None:
+            live[nb] = titles
+        elif err:
+            errs[nb] = err
+    claims_nb = (st or {}).get("notebook_id")
+    claims_titles = live.get(claims_nb)
+    live_sets = [set(t) for t in live.values()]
+
+    # ---- S5: add_failed = never reached NotebookLM at all ---------------------
+    add_failed = sorted(d["number"] for d in docs if d["scr"] == "add_failed")
+    if add_failed:
+        rep.add("FAIL", tab, "S5-not-staged-add_failed",
+                f"{len(add_failed)} fetched doc(s) are add_failed (screen stage could "
+                f"not index them — NotebookLM never saw them). E.g. {add_failed[:5]}",
+                data={"count": len(add_failed), "docs": add_failed[:LIST_CAP]})
+    else:
+        rep.add("PASS", tab, "S5-not-staged-add_failed", "no add_failed doc")
+
     # ---- S1 + S2: truncation census over the composed staged blob ------------
-    trunc, blind, cuts = [], [], {}
+    trunc, blind, cuts, full = [], [], {}, []
     for d in docs:
+        if d["scr"] == "add_failed":
+            continue   # not staged at all: neither truncated nor a blind tail (S5)
         blob = compose_blob(d["number"], d["title"], d["ab"], d["cl"], d["de"], d["dg"])
         n = len(blob.encode("utf-8"))
         if n > CLIP:
+            # part-aware: all K parts present in ONE live notebook = staged in full
+            want = part_titles(d["number"], d["title"], n)
+            if any(all(t in s for t in want) for s in live_sets):
+                full.append(d["number"])
+                continue
             sec = cut_section(blob)
             cuts[sec] = cuts.get(sec, 0) + 1
             trunc.append((d["number"], n, sec))
             if d["score"] is None:
                 blind.append(d["number"])
+    excl = (f"; {len(add_failed)} add_failed excluded" if add_failed else "")
+    s1_data = {"parts_verified_full": len(full), "add_failed_excluded": len(add_failed),
+               "live_notebooks_listed": len(live)}
     if blind:
         rep.add("FAIL", tab, "S1-blind-tails",
                 f"{len(blind)} doc(s) staged TRUNCATED at {CLIP} bytes AND never "
-                f"deep-read — their tails were never seen by ANY instrument. "
-                f"E.g. {blind[:5]}",
-                data={"blind": len(blind), "truncated": len(trunc)})
+                f"deep-read — their tails were never seen by ANY instrument — "
+                f"upper bound (older notebooks; screen stage multi-part since "
+                f"2026-08-23; {len(full)} oversized doc(s) verified full in live "
+                f"notebooks{excl}). E.g. {blind[:5]}",
+                data={"blind": len(blind), "truncated": len(trunc),
+                      "blind_docs": blind[:LIST_CAP], **s1_data})
     if trunc and len(blind) < len(trunc):
         rep.add("WARN", tab, "S1-truncated-read",
                 f"{len(trunc) - len(blind)} truncated doc(s) do have a full-length "
-                f"deep read (tails seen by a model, invisible to NLM only)",
-                data={"truncated_with_read": len(trunc) - len(blind)})
+                f"deep read (tails seen by a model, invisible to NLM only){excl}",
+                data={"truncated_with_read": len(trunc) - len(blind), **s1_data})
     if not trunc:
         rep.add("PASS", tab, "S1-truncation",
-                f"no fetched doc exceeds the {CLIP}-byte staging clip")
+                f"no staged doc exceeds the {CLIP}-byte clip unverified "
+                f"({len(full)} oversized doc(s) verified full in live notebooks{excl})",
+                data=s1_data)
     if trunc:
         ex = sorted(trunc, key=lambda t: -t[1])[:3]
         rep.add("INFO", tab, "S2-cut-points",
@@ -149,46 +231,33 @@ def audit_tab(cx, rep, tab, no_live):
                 + ", ".join(f"{n} ({b} B, cut in {s})" for n, b, s in ex))
 
     # ---- S3: live notebook inventory vs last roster --------------------------
-    st = sweep_state(tab)
     if st:
-        nb = st.get("notebook_id")
+        nb = claims_nb
         roster = st.get("roster") or []
         if nb and roster and not no_live:
-            try:
-                sys.path.insert(0, "/app/src")
-                from patentbench import nlm_bridge  # noqa: PLC0415
-                # the tab's pinned NLM account — listing with the wrong profile
-                # returns PERMISSION_DENIED (t10 lives on a per-tab account)
-                prow = cx.execute("select nlm_profile from tabs where id=?",
-                                  (tab,)).fetchone()
-                prof = prow[0] if prow else None
-                res = nlm_bridge.list_sources(nb, force=True, profile=prof)
-                if res.get("error"):
+            if claims_titles is None:
+                rep.add("WARN", tab, "S3-live-inventory",
+                        f"could not list sources of {nb}: {errs.get(nb)} — "
+                        "do NOT interpret answers from this notebook until verified")
+            else:
+                nums_live = {t.split(" — ")[0].split(" (part")[0].strip()
+                             for t in claims_titles if not t.startswith("🎯")}
+                by_id = {d["id"]: d["number"] for d in docs}
+                roster_nums = {by_id.get(i) for i in roster if by_id.get(i)}
+                missing = sorted(roster_nums - nums_live)
+                extra = sorted(nums_live - roster_nums)
+                if missing:
+                    rep.add("FAIL", tab, "S3-live-inventory",
+                            f"notebook {nb} is MISSING {len(missing)} of the last "
+                            f"roster's sources (rotation happened): {missing[:5]} — "
+                            "any answer interpreted now is VOID for those docs")
+                elif extra:
                     rep.add("WARN", tab, "S3-live-inventory",
-                            f"could not list sources of {nb}: {res['error'][:120]} — "
-                            "do NOT interpret answers from this notebook until verified")
+                            f"notebook holds {len(extra)} source(s) beyond the last "
+                            f"roster: {extra[:5]}")
                 else:
-                    titles = [s.get("title") or "" for s in (res.get("sources") or [])]
-                    nums_live = {t.split(" — ")[0].split(" (part")[0].strip()
-                                 for t in titles if not t.startswith("🎯")}
-                    by_id = {d["id"]: d["number"] for d in docs}
-                    roster_nums = {by_id.get(i) for i in roster if by_id.get(i)}
-                    missing = sorted(roster_nums - nums_live)
-                    extra = sorted(nums_live - roster_nums)
-                    if missing:
-                        rep.add("FAIL", tab, "S3-live-inventory",
-                                f"notebook {nb} is MISSING {len(missing)} of the last "
-                                f"roster's sources (rotation happened): {missing[:5]} — "
-                                "any answer interpreted now is VOID for those docs")
-                    elif extra:
-                        rep.add("WARN", tab, "S3-live-inventory",
-                                f"notebook holds {len(extra)} source(s) beyond the last "
-                                f"roster: {extra[:5]}")
-                    else:
-                        rep.add("PASS", tab, "S3-live-inventory",
-                                f"notebook sources == last roster ({len(roster_nums)} docs)")
-            except Exception as e:  # noqa: BLE001 — audit reports, never crashes
-                rep.add("WARN", tab, "S3-live-inventory", f"live check failed: {e}")
+                    rep.add("PASS", tab, "S3-live-inventory",
+                            f"notebook sources == last roster ({len(roster_nums)} docs)")
         elif nb and roster:
             rep.add("INFO", tab, "S3-live-inventory", "skipped (--no-live)")
 
