@@ -396,3 +396,21 @@ def test_screen_fill_roster_is_cap_aware(monkeypatch):
     # batch_size still bounds the roster
     roster, consumed = api._screen_fill_roster([2, 5], 0, 1, [], docs)
     assert roster == [2] and consumed == 1
+
+
+def test_screen_requeue_add_failed_once(monkeypatch):
+    """add_failed docs get exactly one more pass: appended to the queue tail,
+    remembered in st['requeued'], never appended twice; pending ids untouched."""
+    from patentbench.web import api
+    st = {"queue": [1, 2, 3, 4], "cursor": 2, "requeued": []}
+    assert api._screen_requeue_add_failed(7, st, [3, 5, 6]) == 2      # 3 still pending
+    assert st["queue"] == [1, 2, 3, 4, 5, 6] and st["requeued"] == [5, 6]
+    st["cursor"] = 6
+    assert api._screen_requeue_add_failed(7, st, [5, 6, 8]) == 1      # 5/6 already had their pass
+    assert st["queue"] == [1, 2, 3, 4, 5, 6, 8] and st["requeued"] == [5, 6, 8]
+    monkeypatch.setattr(api.db, "list_documents", lambda tid: [
+        {"id": 9, "status": "fetched", "nlm_screen_state": "add_failed"},
+        {"id": 8, "status": "fetched", "nlm_screen_state": "add_failed"},
+        {"id": 10, "status": "fetched", "nlm_screen_state": "rejected"}])
+    assert api._screen_requeue_add_failed(7, st) == 1                 # only 9 is new
+    assert st["queue"][-1] == 9

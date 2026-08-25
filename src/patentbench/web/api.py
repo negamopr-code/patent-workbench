@@ -1276,6 +1276,26 @@ def _screen_fill_roster(queue: list[int], cursor: int, batch: int,
     return roster, consumed
 
 
+def _screen_requeue_add_failed(tab_id: int, st: dict, doc_ids: list[int] | None = None) -> int:
+    """Give add_failed docs (staged but never indexed — F3c-ns) ONE more pass
+    through the screen instead of leaving them terminal: append them to the
+    queue tail and remember them in st['requeued'] so a doc that fails twice
+    stays add_failed and is never re-queued again. `doc_ids` = this round's
+    fresh failures; None = every add_failed doc of the tab (start/resume).
+    Returns how many were appended (the caller persists the state)."""
+    if doc_ids is None:
+        doc_ids = [d["id"] for d in db.list_documents(tab_id)
+                   if d["status"] == "fetched" and d.get("nlm_screen_state") == "add_failed"]
+    queue = list(st.get("queue") or [])
+    pending = set(queue[int(st.get("cursor", 0)):])
+    done = set(st.get("requeued") or [])
+    fresh = [i for i in doc_ids if i not in pending and i not in done]
+    if fresh:
+        st["queue"] = queue + fresh
+        st["requeued"] = sorted(done | set(fresh))
+    return len(fresh)
+
+
 def _add_doc_parts(nb: str, doc: dict, profile: str | None) -> dict:
     """Stage every part of a candidate; one retry per failing part; the first
     still-failing part's result wins (truncation NO-GO: a lost tail part must
@@ -4066,7 +4086,14 @@ def _run_nlm_screen(tab_id: int) -> None:
             db.mark_screened(tab_id, list(named), "graduate")
             db.mark_screened(tab_id, [i for i in roster
                                       if i not in named and i not in set(failed)], "rejected")
+            requeued = _screen_requeue_add_failed(tab_id, st, list(failed)) if failed else 0
+            if requeued:
+                queue = st["queue"]
+                db.append_message(tab_id, "s",
+                    f"🔬 Mega-screen round {rnd}: {len(failed)} doc(s) never got indexed by "
+                    f"NotebookLM — {requeued} re-queued for one more pass (F3c-ns).")
             st = _screen_set(tab_id, survivors=new_survivors, ledger=ledger,
+                             queue=queue, requeued=st.get("requeued") or [],
                              cursor=cursor + consumed, round=rnd,
                              unmatched=(st.get("unmatched") or []) + unmatched, error=None,
                              status_text=f"round {rnd} done — {len(ledger)} graduate(s) so far")
@@ -4235,7 +4262,13 @@ def nlm_screen_start(tab_id: int, body: schemas.NlmScreenRequest):
         st = _screen_read(tab_id)
         if not st or st.get("step") not in ("round", "finalize"):
             raise HTTPException(400, "no interrupted mega-screen to resume")
-        _screen_set(tab_id, error=None, quota=None, stop=False, status_text="▶️ resuming…")
+        n = _screen_requeue_add_failed(tab_id, st)
+        _screen_set(tab_id, error=None, quota=None, stop=False, status_text="▶️ resuming…",
+                    queue=st["queue"], requeued=st.get("requeued") or [])
+        if n:
+            db.append_message(tab_id, "s",
+                f"🔬 Mega-screen resume: {n} add_failed doc(s) (never indexed by NotebookLM) "
+                "appended to the queue for one more pass.")
         started = _screen_launch(tab_id)
         return {"started": started, "resumed": True, **_screen_status(tab_id)}
     bm = db.get_benchmark(tab_id)
@@ -4247,7 +4280,10 @@ def nlm_screen_start(tab_id: int, body: schemas.NlmScreenRequest):
         want = set(body.doc_ids)
         cands = [d for d in cands if d["id"] in want]
     if not body.include_screened:
-        cands = [d for d in cands if not d.get("nlm_screened_at")]
+        # add_failed docs were stamped screened but never judged — they belong
+        # in a default run (F3c-ns), the requeue bookkeeping caps them at one pass
+        cands = [d for d in cands if not d.get("nlm_screened_at")
+                 or d.get("nlm_screen_state") == "add_failed"]
     if not cands:
         raise HTTPException(400, "no fetched candidates to screen"
                             + ("" if body.include_screened
@@ -4270,6 +4306,7 @@ def nlm_screen_start(tab_id: int, body: schemas.NlmScreenRequest):
         seed_survivors = [int(k) for k, v in sorted(seed_ledger.items(),
                           key=lambda kv: kv[1][0])[:body.survivor_cap]]
     _screen_set(tab_id, step="round", queue=[d["id"] for d in cands], cursor=0, round=0,
+                requeued=sorted(d["id"] for d in cands if d.get("nlm_screen_state") == "add_failed"),
                 roster=[], survivors=seed_survivors, ledger=seed_ledger, unmatched=[],
                 params={"batch_size": body.batch_size, "survivor_cap": body.survivor_cap,
                         "target": body.target},
