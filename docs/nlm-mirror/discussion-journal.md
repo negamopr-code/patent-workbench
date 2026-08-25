@@ -3267,3 +3267,134 @@ reconstructed (docs/experiments/read_ledger.jsonl, 6 jobs).
   loss mechanism; treat add_failed as F3c "not staged" in the gate matrix;
   re-read registered controls after any feature update + keep score history.
 Pre-audit; supervisor + recall/ranking auditors gate all of it.
+
+## 2026-08-25 — nlm-followup-verifier: R6 queue t11 (4) + t13 (3), default account, 06:00–06:13 UTC
+
+**Trigger:** recall auditor 05:59 UTC (`/data/audits/audit_recall.json`) R6 WARN —
+quiet ground-truth docs without follow-up coverage: t11 CN223245862, CN115051084,
+CN220420731, CN223471682; t13 CN206076985, CN104760550, CN224152886. Both tabs =
+default NLM account (never switched — hard rule).
+
+**Quota gate first (one cheap probe, no work queued blind):** default account
+answered "OK" on the mirror notebook in 10.6 s, `quota=False`. The account is NOT
+quota-blocked. The "zero rounds in >24 h" on t11/t13 is a different failure: both
+rolling screens sit at `⏳ waiting for NotebookLM to ingest the batch…`, round 0,
+cursor 0, `quota: None`, `error: None`, since 08-23 (t13 started 1787517393, t11
+1787524340). That is a stalled ingest/watcher, not quota — needs the resume recipe,
+not a quota wait. Default account also holds 99 notebooks (cap ~100): the two
+follow-up notebooks were created and deleted fine, but a third concurrent one would
+likely hit the cap.
+
+**Mechanics:** `scripts/nlm_followup.py`, dedicated `🔁 follow-up — tab N`
+notebooks (sweep notebooks untouched, F4). All 7 docs fetched; all ≤118 KB so
+single-part (byte-split path not needed). Question angles: (a) one broad checklist
+question (numerals stripped from feature names), (b) one per-doc
+"YES/PARTIAL/NO + cite where" follow-up. Ledger appended (2 rows, ts 1787637840
+t11 nb b308b921…, ts 1787638172 t13 nb 23e04d5d…); notebooks deleted. Exit 0 both.
+
+**Per-doc outcome (NLM evidence, NOT scores; opus verdict on file in brackets):**
+
+t11 — MUST: F1 outer pole injection-molded with cover (5) · F2 inner pole separated
+from outer (4) · F3 inner connected to outer (4) · F4 inner pole inside cover body (3)
+· F5 collector disk connected to inner pole (3) · F6/F7 category/cover body (1).
+- CN223245862 [opus 5.0]: F3 YES, F4 YES, F5 YES (pole welded to current-collecting
+  plate, integrated assembly); F1 NO (terminal + plastic member + seal, not molded);
+  F2 NO — but NLM reads "separated" as "not connected", i.e. conflates F2 with ¬F3
+  (opus has F2 yes). F6/F7 NO ("lower shell", not cover plate). 3×YES on core.
+- CN115051084 [opus 4.0]: **F1 YES** (PPS injection-molded seal 72 between conductive
+  cover 3 and terminal 4 — the weight-5 trigger; opus had partial), F4 YES (implicit:
+  extending portion 43 + boss 510 inward), F5 YES, F6 YES, F7 YES; F2/F3 NO (single
+  terminal, no separate inner pole — agrees with opus). 5×YES incl. F1.
+- CN220420731 [opus 4.0]: F3 YES (panel 1131 + column 1132 + ring 1133), F4 YES,
+  F6 YES, F7 YES; F1 NO (insulator 112 is what is over-molded, not the pole), F2 NO
+  (same "separated" conflation), F5 NO (tab welded directly, no disk — opus partial).
+- CN223471682 [opus 4.0]: F3 YES (connecting piece 15 welded to pole body 131),
+  **F4 YES** (piece 15 in receiving groove 1412 inside mounting groove 121 — opus had
+  F4 NO: a lead that opus was conservative here), F6/F7 YES; F1/F2/F5 NO.
+
+t13 — MUST: F1 control module + wired CAN/LIN to BMS (5) · F2 signals with BMS over
+wire (5) · F3 target message triggers battery start-up/output (5) · F4 wireless +
+control module (4) · F5 wireless link to input device (4) · F6 input device + msg
+device with controller (3) · F7 controller stores modifiable target data (3) · F8
+transceiver → CANH/CANL (3) · F9 battery triggering device category (1).
+- CN206076985 [opus 4.0]: **F2 YES** (data conversion module 3 ↔ BMS 1 over CAN,
+  bidirectional), F1/F4/F5/F7/F8 PARTIAL (Bluetooth PC terminal, parameter design
+  module 10, CAN conversion w/o transceiver detail); F3 NO, F6 NO, F9 NO. Tracks
+  opus (F2 yes; NLM F5 partial vs opus yes).
+- CN104760550 [opus 4.0]: F4 YES, F7 YES (STM32F103 + stored CANBUS IDs configured
+  from upper computer), F8 YES (TJA1042 CAN transceiver, CANH/CANL); F6 PARTIAL;
+  F1/F2/F3/F5/F9 NO (car-door converter, no BMS). Tracks opus (F8 yes, rest partial).
+- CN224152886 [opus 4.0]: F4/F5/F6/F7/F8 YES (2.4 GHz RF to OBD module, nonvolatile
+  key-map storage, CAN chip U6 → CANH/CANL), F1 PARTIAL (CAN/LIN to vehicle system,
+  not BMS); F2/F3/F9 NO. Tracks opus, NLM slightly more generous on F4/F6.
+
+**Grouping:**
+- Recommend opus read: none NEW — all 7 already carry opus ≥4.0 verdicts (that is
+  why they are ground truth). Optional re-check leads: CN223471682 F4 (NLM YES w/
+  citation vs opus NO) and CN115051084 F1 (NLM YES vs opus partial) — cheap targeted
+  re-reads if the t11 ranking at the 4.0 boundary matters.
+- Consistent with weak: none.
+- Inconclusive: none. Every one of the 7 "quiet" docs yields ≥1 core-element YES
+  with a component-level citation at roster-3/4. The quiet status is a sweep recall
+  failure (roster-39 rounds, R2 corridor FAIL), not a property of the docs.
+
+**Lessons for the loop:**
+1. The BROAD answer indexes documents by NLM source order ("Source 2" = CN206076985,
+   which was doc #1 in `--docs`; t11 "1" ≠ CN223245862). Never read the broad line
+   by position — only the per-doc follow-ups are attributable. Script improvement:
+   demand publication numbers verbatim and reject index-only replies.
+2. "Separated from" features get read as "not connected" by NLM (F2/F3 pair on
+   t11) — a paired-feature wording that needs "distinct piece" phrasing.
+3. Zero rounds ≠ quota: probe before assuming. Both default-account screens are
+   stalled at ingest with quota=None.
+
+**Orphan check:** `/data/audits/fu_t14_b1.json` (tab 14, work2, 10 docs, status
+`running`, ts 1787607883 = 08-24 21:44) is ORPHANED — no follow-up process in the
+container, and the container's PID 1 started at 1787608311 (21:51), i.e. the run
+died in the 21:51 restart before its broad question. Its notebook
+`b1fef05f-71de-4235-bb7b-7f8cb678849e` ("🔁 follow-up — tab 14", 21 sources) still
+exists on work2. Not touched (t14 ≠ my tabs); owner should rerun and delete it.
+
+## 2026-08-25 — hypothesis-driver cycle 2 (05:50–06:30 UTC)
+
+**User directive:** "record the t12 outcome and run cycle 2 and make reads you need";
+H8 GT re-read approved (snapshot first → docs/experiments/gt_snapshot_2026-08-25.json).
+
+- **t12 32-doc add_failed batch (cycle 1) recorded:** 32/32 read, 0 ≥3, max 1.0
+  (KR20240056998, US20080253085, WO2011125505), 22/32 at 0.0 → H2 holds on t12
+  for every bucket; H7's champion cost does not generalise to t12.
+- **Launched 52 reads (cap 60), all landed 05:59–06:06 UTC:** t10 14 (H8 8 + H9 6),
+  t11 31 (H7), t13 7 (H7).
+- **H8 SUPPORTED — t10 GT set 8/12 invalid:** hold at 4: EP3970350, JP2019221076,
+  US20070021140, CN113924787; WO2020026413 4→3; US20200021142, CN106104969 = 1;
+  (+ cycle 1: EP3005248, EP2417690, US9831029 = 1, US20090108997, US10027187 = 2).
+  US20230337972 6→5. GT-recall recomputed: 4/4 valid controls graduated (ranks
+  1, 2, 3, ≤10); pipeline 4/9 champions staged.
+- **H9 REFUTED — t10 add_failed champions are real:** US20220221016 5.0, US10996236,
+  EP3849091, CA2552849 4.0 hold; TW201717523, CN113287245 → 3. So staging lost 5 of
+  t10's 9 current champions (4 of the 5 single-part docs).
+- **H7 mechanism found (H7b, analytic from /data/.nlm_screen_10.json + DB):**
+  50-source notebook cap: 39 new + 10 survivors + benchmark, multi-part docs take
+  extra slots → `Σparts+11−50` docs evicted per round. Predicted vs observed
+  add_failed t10 r1–r12: 4/4, 11/12, 13/15, 17/17, 17/17, 18/14, 18/18, 14/15,
+  17/15, 19/17, 12/13, 9/11. Auditor's "notebooks at exactly 50 raw sources, short
+  2–4 parts" is the same mechanism seen from the notebook side (t12/t14 all-multi-part
+  rounds: part 1 lands, tails evicted → blind tails). Secondary: `_screen_stage` gives
+  re-added stragglers only 60 s (H7a).
+- **H7 champion cost is value-neutral:** t11 0/31 (3 at 3: CN116666849, CN118231940,
+  CN118843975), t13 0/7 (EP3709432 at 3) — consistent with each tab's ≥4 base rate
+  (t11 4.8 %, t13 0.7 %); t10 5/9, t14 6/17 likewise ≈ loss fraction.
+- **H10 (new, from recall audit):** the audit's judged misses (t11 CN223245862 …,
+  t12 KR20260033205, CN119833811, t13 CN114690685, CN101639686) all carry v1-screen
+  dates (08-06…08-09, truncated staging). v2 rejects read with ≥4: 0/114
+  (t10 0/96, t11 0/2, t12 0/9, t14 0/7).
+- H3 (stage-2 ledgers = doc lists only), H4 (default quota), H6 unchanged; no reads.
+- **Loop ends:** remaining read lines are blocked or marginal ≈ 0; t10's 97 unread
+  add_failed listed under "needs user approval".
+- **Deliverables:** docs/experiments/hypotheses.md (register), conclusion_2026-08-25.md,
+  thesis_2026-08-25.md, read_ledger.jsonl (9 jobs, 423 reads, ≈ 45 M chars ≈ 11.2 M
+  input tokens proxy). Proposed remedies (not implemented): cap-aware batch fill;
+  re-queue add_failed as F3c "not staged" with its own denominator; full-timeout
+  second-chance wait + per-round loss logging; GT hygiene + re-registered canary set;
+  audits partition on screen state and v1/v2 epoch.
+Pre-audit; supervisor + auditors gate all of it.
