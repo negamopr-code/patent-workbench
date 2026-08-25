@@ -3412,3 +3412,24 @@ Pre-audit; supervisor + auditors gate all of it.
 - **H10 scope:** registry fc6e576 registers F3c-ns + roster-39 baseline; v2 is outside
   the F3a ≤12 corridor, so a v2 judged-miss class remains possible on t11/t13.
 - Register, conclusion_2026-08-25.md and thesis_2026-08-25.md amended accordingly.
+
+## 2026-08-25 — hypothesis-driver cycle 3 (16:55 UTC)
+
+Scope t10–t14. 0 new reads launched (t13 5-doc leftover job landed 16:50, all ≤1; t13
+H5/H10 batch complete 70/70, 0 ≥4). Register docs/experiments/hypotheses.md rewritten;
+ledger outcomes filled for jobs 12–20 (368 reads today, proxy ≈ 31.7 M chars).
+
+Status changes: H5 REFUTED as stated (v2 graduate ordinal × opus, n=341: top-3 43 %
+champions, 4–10 8 %, 11+ 3.5 %) with the corollary that rank is not a recall cut-off
+(10/22 champions at ordinal 11+, WO2014110477 at 22). H8 extended to t13 (10/114 stale
+3.0 verdicts crossed to ≥4; CN116130803 3→5). H7 remedy partially verified (US20230337972
+re-queued → v2 graduate ordinal 11, round 16). H10 v2 judged-miss count = 0/129 read v2
+rejects; the 11 docs that reached ≥4 today are 2 v2 graduates, 9 never seen by v2. H4
+SCOPED (t11/t13 rejects 17 read, 0 ≥4). New: H11 (v2 scope excludes champions — the four
+t10 crossers are outside the 1291-doc queue; 255 out-of-queue t10 docs are >118 KB, so
+scope ≠ multi-part) and H12 (nlm_bridge single global lock = serialisation, not stall).
+All pre-audit (auditors re-ran 16:49 on 911d1b3, worst FAIL).
+
+Next cheapest tests (proposals only): H8 stale-2.0 seeded sample 10+10 (≤20 reads);
+H4/H10 t11/t13 reject sweep 44 reads once the screens progress; H11/H12 are 0-read
+auditor/log questions.
