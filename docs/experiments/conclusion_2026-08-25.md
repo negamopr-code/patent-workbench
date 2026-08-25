@@ -11,8 +11,8 @@ docs/experiments/thesis_2026-08-25.md.
 |---|---|---|
 | H1 old non-CJK miss class | REFUTED (t10), confounded (t14) | t10 30/30 profile non-graduates ≤2; t14 US5686815, DE10158062 were add_failed |
 | H2 over-clip slices hold no unread champions | SUPPORTED (t12 all buckets; t10 among 376 read) | t12 add_failed 32/32: 0 ≥3, max 1.0 (KR20240056998, US20080253085, WO2011125505) |
-| H3 stage-2 ≈ opus | OPEN | no per-doc stage-2 verdict journaled; three-way table impossible yet |
-| H4 t14 miss rate on t11/t13 | OPEN | default account quota: t11 one v2 round, t13 none |
+| H3 stage-2 ≈ opus | SUPPORTED on 7/7 (small n) | verifier 06:00–06:13: every R6 doc gets ≥1 core YES with citations; 3 weight-5 single-feature disagreements with opus |
+| H4 t14 miss rate on t11/t13 | OPEN — blocked on STALLED screens, not quota | default account answered a probe in 10.6 s; t11/t13 sit at "waiting to ingest", round 0, since 08-23 (user's call to resume) |
 | H5 rank ≠ relevance | SUPPORTED (weak counter-signal: 4 valid GT ranked 1,2,3,≤10) | US9991741 ordinal 4 |
 | H6 keys on F27 boilerplate | SCOPED (t14, n=7) | needs true-reject recomputation |
 | H7 add_failed = staging loss, not judgement | SUPPORTED; mechanism = 50-source cap overflow (H7b) | t10 per-round predicted vs observed: 4/4 11/12 13/15 17/17 17/17 18/14 18/18 14/15 17/15 19/17 12/13 9/11 |
@@ -34,10 +34,22 @@ Recall lines (screen among docs that reached NotebookLM, opus ≥4 as truth):
 t10 4/4 (valid GT) · t14 11/11 among v2 grads+rejects read · t11 1/1 · t12 0 champions in
 scope · t13 unmeasured. Pipeline recall incl. staging: t10 4/9 (44 %) · t14 11/17 (65 %).
 
-## Three-way graduate table
-Not available: stage-2 ledgers (t10 08-16 5 docs, t13 08-16 10 docs, t10 08-24 10 docs,
-t14 fu_t14_b1 "running") contain doc lists only. Column 3 (blind opus) exists for all 25
-listed docs; column 2 must come from the nlm-followup-verifier.
+## Three-way table (where stage-2 verdicts exist — 7 docs, verifier 2026-08-25 06:00–06:13)
+
+| doc | tab | stage-1 (v1 screen, epoch 08-07…08-09) | stage-2 citation follow-up (roster 3–4) | blind opus |
+|---|---|---|---|---|
+| CN223245862 | 11 | rejected | F3, F4, F5 YES (core); F1, F2 NO | 5.0 |
+| CN115051084 | 11 | rejected | F1 (w5) YES, F4, F5, F6, F7 YES; F2, F3 NO | 4.0 (F1 partial) |
+| CN220420731 | 11 | rejected | F3, F4, F6, F7 YES; F1, F2, F5 NO | 4.0 |
+| CN223471682 | 11 | rejected | F3, F4, F6, F7 YES; F1, F2, F5 NO | 4.0 (F4 NO) |
+| CN206076985 | 13 | graduate | F2 (w5) YES; F1, F4, F5, F7, F8 PARTIAL | 4.0 |
+| CN104760550 | 13 | graduate | F4, F7, F8 YES | 4.0 |
+| CN224152886 | 13 | rejected | F4–F8 YES; F1 PARTIAL | 4.0 |
+
+Stage-2 and opus agree at champion level 7/7; single-feature disagreements on 3 weight-5
+features (stage-2 stricter on CN223245862 F2 conflation, more generous on CN115051084 F1
+and CN223471682 F4). The 25 earlier stage-2 docs (t10 5+10, t13 10) still have doc lists
+only; fu_t14_b1.json is orphaned (08-24 21:51 restart).
 
 ## Remedy proposals (not implemented)
 1. Cap-aware batch fill: shrink the roster until Σparts(roster+survivors)+1 ≤ 50, carry

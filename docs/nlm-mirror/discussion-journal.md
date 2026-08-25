@@ -3398,3 +3398,17 @@ H8 GT re-read approved (snapshot first → docs/experiments/gt_snapshot_2026-08-
   second-chance wait + per-round loss logging; GT hygiene + re-registered canary set;
   audits partition on screen state and v1/v2 epoch.
 Pre-audit; supervisor + auditors gate all of it.
+
+### 2026-08-25 — hypothesis-driver cycle 2 addendum (verifier + registry fold-in, 06:45 UTC)
+
+- **H3 SUPPORTED on 7/7 (n small):** the nlm-followup-verifier's R6 pass gives a partial
+  three-way table (v1 screen → stage-2 citations → blind opus): t11 CN223245862 rejected
+  → F3/F4/F5 YES → 5.0; CN115051084 → F1(w5)/F4–F7 YES → 4.0; CN220420731 → F3/F4/F6/F7
+  → 4.0; CN223471682 → F3/F4/F6/F7 → 4.0; t13 CN206076985 graduate → F2(w5) → 4.0;
+  CN104760550 graduate → F4/F7/F8 → 4.0; CN224152886 rejected → F4–F8 → 4.0.
+- **H4 corrected:** default account is NOT quota-blocked (probe 10.6 s); t11/t13
+  screens are stalled at "waiting to ingest", round 0, since 08-23 — resume is the
+  user's call; no screen state touched.
+- **H10 scope:** registry fc6e576 registers F3c-ns + roster-39 baseline; v2 is outside
+  the F3a ≤12 corridor, so a v2 judged-miss class remains possible on t11/t13.
+- Register, conclusion_2026-08-25.md and thesis_2026-08-25.md amended accordingly.
