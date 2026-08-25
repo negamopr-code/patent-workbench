@@ -368,3 +368,31 @@ def test_source_index_strict_raises_on_list_failure(monkeypatch):
     assert len(calls) == 2                       # retried once before raising
     calls.clear()
     assert api._notebook_source_index("nb1") == ({}, None)   # non-strict: old behavior
+
+
+def test_screen_fill_roster_is_cap_aware(monkeypatch):
+    """Multi-part docs count as several sources: the roster shrinks so
+    benchmark + survivors' parts + roster parts never exceed SOURCE_LIMIT,
+    and the doc that does not fit is held for the next round (never clipped)."""
+    from patentbench.web import api
+    from patentbench import nlm_bridge
+    monkeypatch.setattr(nlm_bridge, "SOURCE_LIMIT", 10)
+    big = "x" * (api.STAGE_PART_BYTES * 2 + 10)          # 3 parts
+    docs = {1: {"number": "S1", "description": "a"},     # survivor, 1 part
+            2: {"number": "D2", "description": "b"},     # 1 part
+            3: {"number": "D3", "description": big},     # 3 parts
+            4: {"number": "D4", "description": big},     # 3 parts -> would overflow
+            5: {"number": "D5", "description": "c"}}
+    # budget = 10 - 1 - 1(survivor) = 8 parts: D2(1)+D3(3)=4, D4 would make 7 <= 8 ok,
+    # D5 makes 8 ok -> all fit with cap 10; tighten to 6 to force a hold.
+    monkeypatch.setattr(nlm_bridge, "SOURCE_LIMIT", 6)   # budget 4
+    roster, consumed = api._screen_fill_roster([2, 3, 4, 5], 0, 39, [1], docs)
+    assert roster == [2, 3] and consumed == 2            # D4 held for next round
+    roster, consumed = api._screen_fill_roster([2, 3, 4, 5], 2, 39, [1], docs)
+    assert roster == [4, 5] and consumed == 2
+    # unknown ids are skipped but consumed; a lone oversized first doc still goes in
+    roster, consumed = api._screen_fill_roster([99, 4], 0, 39, [1, 1, 1, 1], docs)
+    assert roster == [4] and consumed == 2
+    # batch_size still bounds the roster
+    roster, consumed = api._screen_fill_roster([2, 5], 0, 1, [], docs)
+    assert roster == [2] and consumed == 1

@@ -1239,6 +1239,43 @@ def _doc_source_parts(doc: dict) -> list[tuple[str, str]]:
              p) for k, p in enumerate(parts)]
 
 
+def _doc_part_count(doc: dict) -> int:
+    """How many notebook SOURCES the candidate occupies when staged in full."""
+    n = len(_doc_source_text(doc).encode("utf-8"))
+    return max(1, -(-n // STAGE_PART_BYTES))
+
+
+def _screen_fill_roster(queue: list[int], cursor: int, batch: int,
+                        survivors: list[int], docs_by_id: dict[int, dict]) -> tuple[list[int], int]:
+    """Cap-aware round roster: take queue docs from `cursor` while the notebook
+    stays within nlm_bridge.SOURCE_LIMIT counting every PART (benchmark + the
+    carried survivors' parts + this roster's parts). A fixed slice of `batch`
+    ids ignored that >118KB docs are several sources each, so the fill rolled
+    over the 50-source cap mid-round and NotebookLM silently dropped the tail
+    parts — the docs then failed the index probe and were marked add_failed
+    (t10: 11–18 of every 39 lost, 173 docs; F3c-ns). Returns (roster, consumed)
+    where consumed is how far the cursor advances (ids absent from docs_by_id
+    are skipped but consumed). A doc that does not fit is held for the next
+    round, never clipped; the first doc of a round always goes in."""
+    budget = nlm_bridge.SOURCE_LIMIT - 1 - sum(_doc_part_count(docs_by_id[i])
+                                               for i in survivors if i in docs_by_id)
+    roster, used, consumed = [], 0, 0
+    for did in queue[cursor:]:
+        if len(roster) >= batch:
+            break
+        d = docs_by_id.get(did)
+        if d is None:
+            consumed += 1
+            continue
+        parts = _doc_part_count(d)
+        if roster and used + parts > budget:
+            break
+        roster.append(did)
+        used += parts
+        consumed += 1
+    return roster, consumed
+
+
 def _add_doc_parts(nb: str, doc: dict, profile: str | None) -> dict:
     """Stage every part of a candidate; one retry per failing part; the first
     still-failing part's result wins (truncation NO-GO: a lost tail part must
@@ -3983,10 +4020,14 @@ def _run_nlm_screen(tab_id: int) -> None:
             queue, cursor = st.get("queue") or [], int(st.get("cursor", 0))
             if cursor >= len(queue):
                 break
-            roster = [i for i in queue[cursor:cursor + batch] if i in docs_by_id]
             survivors = [i for i in st.get("survivors") or [] if i in docs_by_id]
+            roster, consumed = _screen_fill_roster(queue, cursor, batch, survivors, docs_by_id)
+            if not roster:                                # only unknown ids left in this slice
+                st = _screen_set(tab_id, cursor=cursor + consumed)
+                continue
             st = _screen_set(tab_id, roster=roster,
-                             status_text=f"round {st.get('round', 0) + 1}: staging…")
+                             status_text=f"round {st.get('round', 0) + 1}: staging "
+                                         f"{len(roster)} doc(s) (cap-aware)…")
             nb, bm_sid, key_map, failed = _screen_stage(
                 tab_id, st, survivors + roster, docs_by_id)
             _screen_set(tab_id, status_text=f"📓 round {st.get('round', 0) + 1}: asking NotebookLM…")
@@ -4026,7 +4067,7 @@ def _run_nlm_screen(tab_id: int) -> None:
             db.mark_screened(tab_id, [i for i in roster
                                       if i not in named and i not in set(failed)], "rejected")
             st = _screen_set(tab_id, survivors=new_survivors, ledger=ledger,
-                             cursor=cursor + len(queue[cursor:cursor + batch]), round=rnd,
+                             cursor=cursor + consumed, round=rnd,
                              unmatched=(st.get("unmatched") or []) + unmatched, error=None,
                              status_text=f"round {rnd} done — {len(ledger)} graduate(s) so far")
             _screen_heartbeat(tab_id)
