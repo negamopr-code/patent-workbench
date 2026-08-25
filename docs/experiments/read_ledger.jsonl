@@ -17,3 +17,4 @@
 {"ts": "2026-08-25T12:10Z", "tab": 14, "hypothesis": "H5/H10: v2-epoch screen rejects / graduates re-read blind with opus (does the v2 screen miss any opus>=4?) \u2014 user-approved 12:09 ('go ahead')", "n_reads": 8, "chars": 1162245, "note": "doc_ids in docs/experiments/reread_batches_t10-t14_2026-08-25.json"}
 {"ts": "2026-08-25T12:14Z", "tab": 12, "hypothesis": "H5/H10(+H8-boundary t13) relaunch of the leftovers after the slot-manager watchdog restarted patent-bench at 12:07:57 (fail-open job check; fixed) \u2014 no new reads beyond the approved set", "n_reads": 4}
 {"ts": "2026-08-25T12:14Z", "tab": 13, "hypothesis": "H5/H10(+H8-boundary t13) relaunch of the leftovers after the slot-manager watchdog restarted patent-bench at 12:07:57 (fail-open job check; fixed) \u2014 no new reads beyond the approved set", "n_reads": 50}
+{"ts":"2026-08-25T16:50Z","tab":13,"hypothesis":"H5/H10 t13_b2 last 5 leftovers (cut by 15:05 DNS outage)","n_reads":5}
