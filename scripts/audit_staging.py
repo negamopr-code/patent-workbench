@@ -126,9 +126,15 @@ def anchors(cx, tab):
                     "where tab_id=? and status='fetched'", (tab,)).fetchone()
     nc = cx.execute("select max(ts), count(*) from nlm_claims where tab_id=?",
                     (tab,)).fetchone()
+    # 2026-08-26 (supervisor finding): screen rounds write nlm_screened_at /
+    # nlm_screen_state only — without this anchor a verdict stayed FRESH while
+    # hundreds of docs were screened and rosters rotated underneath it.
+    sc = cx.execute("select max(nlm_screened_at), count(nlm_screened_at) from documents "
+                    "where tab_id=?", (tab,)).fetchone()
     return {"benchmark_updated_at": bm[0] if bm else None,
             "max_scored_at": mx[0], "fetched_docs": mx[1],
-            "max_claims_ts": nc[0], "claims_rounds": nc[1]}
+            "max_claims_ts": nc[0], "claims_rounds": nc[1],
+            "max_screened_at": sc[0], "screened_docs": sc[1]}
 
 
 def live_titles(cx, tab, nb, no_live):

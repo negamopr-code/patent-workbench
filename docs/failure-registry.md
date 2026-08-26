@@ -327,3 +327,40 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   hold opus reads 4.0–5.0, i.e. sweep misses of READ ground truth, not unread); live S5
   counts equal verdict rows on t10/t12/t14; t11/t13 no add_failed live (registered S5
   t11 40 / t13 13 remain over-registered — retire on user approval). Verdict: BLOCKED.
+- 2026-08-26 ~14:55 UTC container clock (session-start after the 14:35 Docker-wide restart;
+  watchdog auto-resume 14:36 died "could not list notebook sources", re-resumed 14:51):
+  ACCOUNT GATE PASS 14:53 (A1 all five bindings match registry; A2 drawnformula t10 /
+  default t13 / work2 t12 one job each; t11/t14 paused, series order intact). Screen state
+  intact after restart: t10 r28 cursor 846/1459 requeued 168, t12 r18→"staging round 19
+  3/11 added" cursor 225/363 unmatched 26 requeued 44, t13 r23 cursor 319/458; locks
+  14:51–14:54 fresh; t11 r8 / t14 r3 "⏸ paused". Live add_failed: t10 170 (≤173), t12 44
+  (≤47), t14 37 (=37), t11/t13 0 — WITHIN. Graduate batch EVIDENCED in DB (not journal):
+  manifest ids t10 36 / t11 19 / t13 60 = 115 all scored 17:03–17:22 08-25, max score 3.0,
+  0 ≥4. Evidence files: audit_recall 17:27:52 + audit_staging 17:28:18 (both defa67e,
+  anchors == live on t10–t14 → audit_status prints FRESH); audit_ranking 16:49 head 911d1b3
+  → STALE(deploy) t12/t14 and STALE-by-data t10/t11/t13 (115 reads landed after it);
+  audit_full_staging 16:51, pre-defa67e, FAIL live_problems t12 WO2025044604 [1]/2 +
+  t13 US10115302 [1]/2 — the defa67e fix is STILL unevidenced. pending_trigger none.
+  WATERMARK GAP (named, not overridden): live_anchors() reads benchmark/scored_at/doc
+  count/nlm_claims only; the screen writes documents.nlm_screened_at/nlm_screen_state
+  and .nlm_screen_{t}.json, which no anchor covers. Since the 17:27 recall run: t10 185 /
+  t12 134 / t13 129 docs newly screened (max nlm_screened_at 20:41/21:03/20:54 08-25) and
+  rosters rotated → staging S3-live-inventory and the graduate sets are NOT what the
+  FRESH label implies. Supervisor treats staging as STALE-by-screen on t10/t12/t13 until
+  re-run after the screens finish; recommend adding max(nlm_screened_at) to
+  live_anchors in scripts/audit_status.py (src/scripts edit = caller, not supervisor).
+  Gate matrix (audit_status, defa67e): post_sweep_results t10/t13 PERMITTED (nominal —
+  see gap), t11/t12/t14 BLOCKED R2-batch-corridor (unregistered 46/61/80);
+  champion_report + closure_claim BLOCKED on all five (ranking stale). Baseline compare:
+  t10 R2 59=59, t13 R2 119=119, t13 C1 344≤401, S5 within (above). UNREGISTERED gating
+  FAILs unchanged: S1-blind-tails t11 52 / t12 115 / t13 219 / t14 166; R1 t13 7/20;
+  R2 t11/t12/t14. Cross-checks: t13 S1 267→219 between 16:49 and 17:28 is consistent
+  with the 60 t13 reads landing (truncated docs gaining a deep read); t12 S1 113→115 in
+  the same window with ZERO new t12 reads (max scored_at 12:12 08-25) and no fetch
+  change (1824) is UNEXPLAINED — staging auditor must name the two docs that joined on
+  its next run (if it is screen-staged truncation it is an F-class regression of the
+  08-23 multi-part invariant). t13 C6 PASS vs R1 misses still consistent (misses are
+  READ GT). R6 queues non-empty: t10 [US20120007441, CN103683526], t13 [CN218958581,
+  CN220510820, CN120073105, CN120433348] — nlm-followup-verifier is an NLM job on
+  drawnformula/default, A2-blocked while those screens run. C5: t13 SCOPED (9/9),
+  others none → negatives scoped only. Verdict: BLOCKED.
