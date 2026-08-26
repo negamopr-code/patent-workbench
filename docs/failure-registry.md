@@ -364,3 +364,46 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   CN220510820, CN120073105, CN120433348] — nlm-followup-verifier is an NLM job on
   drawnformula/default, A2-blocked while those screens run. C5: t13 SCOPED (9/9),
   others none → negatives scoped only. Verdict: BLOCKED.
+- 2026-08-26 ~19:45 UTC container clock (session-start after the 14:35 + ~15:42 Docker-wide
+  restarts; deploy head 7874470 docs-only, code head 38492c8 = defa67e app + new screen anchor
+  in the 4 audit scripts): ACCOUNT GATE PASS 19:38 (A1 five bindings; A2 one job each on
+  drawnformula t10 / default t13 / work2 t12; t11 r8 / t14 r3 "⏸ paused", error null, stop
+  false). EVIDENCE: audit_staging 08-25 17:28 + audit_recall 08-25 17:27 + audit_ranking
+  08-26 14:57 (all defa67e) — ALL THREE STALE on t10–t14: (a) written before 38492c8, so no
+  max_screened_at/screened_docs anchor is recorded (the 14:55 watermark gap, now closed in
+  code, is what flips them); (b) real drift: reads landed 15:07–15:09 on t10/t11/t12/t13
+  (job 26 + graduate batch, all BEFORE the user pause 16:20/16:25 — no read after it),
+  screens rotated (max nlm_screened_at t10 19:24 / t12 19:36 / t13 19:18; t10 1033 screened,
+  t12/t13 fully screened once, requeues in flight). audit_full_staging 08-25 16:51
+  pre-defa67e FAIL unchanged → every "assessed in full"/coverage claim stays gated.
+  pending_trigger none. Gate matrix (audit_status 38492c8): post_sweep_results,
+  champion_report, closure_claim BLOCKED on all five. Baselines: add_failed t10 170 ≤173,
+  t12 31 ≤47 (117 t12 docs re-screened today — add_failed requeue works), t14 37 = 37,
+  t11/t13 0; R2 t10 59 = 59, t13 119 = 119 (no claims round since 08-25, max_claims_ts
+  unchanged); C1 t13 330 ≤401. UNREGISTERED gating FAILs unchanged: S1-blind-tails t11 52 /
+  t12 115 / t13 219 / t14 166 (08-25 numbers, to be re-measured); R1 t13 7/20; R2 t11 46 /
+  t12 61 / t14 80; the t12 S1 113→115 anomaly of 08-25 is still unexplained (staging not
+  re-run). ORPHANED STATE after the two restarts: none active — locks .nlm_screen_{10,12,13}
+  0–6 min old = the three running screens, no lock for t11/t14; processes = 2 gunicorn +
+  one nlm CLI child of a screen; opus driver stop-flag 08-24, no deep-compare in flight (max
+  scored_at 15:09 < pause). Latent: /data/.auto_refetch.lock created 15:43 by the boot sweep
+  (O_EXCL, never removed in api.py) → the NEXT restart's auto-refetch will silently skip;
+  harmless now (no 'pending' docs on t10–t14; the 87/150/90/132/162 'error' docs are the
+  standing fetch-failed set). DRIVER CYCLE-4 FLAG: sync-nlm-mirror wrote 1 source to
+  35690175-d37d-4de8-ac92-8254017063b5 (mirror notebook) at ~15:07 while t13 screened on
+  default; t13's rolling notebook is 22f46fa9-dc19-495a-b505-6934f15dfd35 — a different
+  notebook, so NO content contamination; the t13 round in flight (15:01→15:28) landed 14
+  docs (13 graduate / 1 rejected, unmatched unchanged ['LM7805'], requeued 0) — no add
+  loss observed. Classified as an A2 process breach (second write on a screening account =
+  the F3c timed-out-add mechanism) with no measured data effect; sync-nlm-mirror must go
+  through audit_accounts.py like any NLM write (caller's script edit). Note: tabs.nlm_profile
+  is NULL for t11/t13 and audit_accounts reads NULL as 'default' — consistent with the
+  registry, recorded for the record. AUDITORS DUE: ranking-integrity-auditor +
+  recall-integrity-auditor now (DB-only; t11/t14 will stay FRESH, t10/t12/t13 re-stale as
+  the screens rotate — say so); staging-completeness-auditor now for t11/t14 (paused,
+  static) and for t10/t12/t13 only after their screens finish (S3-live-inventory reads the
+  rotating notebook); full-doc-staging-auditor after the screens finish;
+  nlm-followup-verifier (R6 t10 [US20120007441, CN103683526], t13 [CN218958581,
+  CN220510820, CN120073105, CN120433348]) = NLM job on drawnformula/default → A2-blocked
+  while t10/t13 screen AND user-blocked (no NLM jobs this session). C5: t13 SCOPED (9/9),
+  others none → negatives scoped only. Verdict: BLOCKED.

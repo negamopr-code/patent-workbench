@@ -3466,3 +3466,15 @@ User 16:25: all opus reads paused (306-graduate batch at 164/306); my read allow
 cycle closed on existing evidence. Note: the mirror sync (step 6) wrote one source to the
 default-account mirror notebook 35690175 at ~15:07 while t13 (default) was screening —
 flagged for the account gate; not repeated this cycle.
+
+## 2026-08-26 — hypothesis-driver cycle 5 (analysis-only, 19:40–20:10 UTC)
+
+Constraint: user paused opus reads 16:20 and revoked the driver's allowance 16:25 — 0 reads, 0 NLM jobs, no mirror sync this cycle (cycle 4 flagged an A2 write to 35690175 while t13 screened).
+
+- Job 25 reconciled from the DB: 176 opus verdicts on manifest ids since cut (t10 62, t12 62, t13 52), all stamped 15:00:29–15:09:18 UTC, none after → the 15:42 restart cut nothing and nothing was relaunched. t10's "62/91" is complete: the other 29 have sonnet 0.0 verdicts and the job ran skip_scored=true. Remainder 101 unscored graduates (t12 57, t13 44).
+- The 176: 1 champion (t13 AU2022338850 4.0, ordinal 15), 1 borderline (t10 TW201528644 3.0), 174 ≤2 — 0.6 % tail rate, as H5 predicted. Graduate-tail line stopped. Pooled ordinal × opus now n=701: top-3 36 % champions, 4–10 7 %, 11+ 1.9 %; 12/24 champions at 11+.
+- Judged-miss detector over the new rounds (t10 r29→37, t12 r19→27, t13 r23→32): no new rejected doc with stored opus ≥3 on any tab; the EP3849091 class did not recur. Judged recall 25/26 champions (96.2 %): t13 gained AU2022338850 and the GT canary CN120433348 (graduated 18:56 at ordinal 12). Power caveat: t13 46/63 and t12 18/31 v2 rejects unscored.
+- H7 remedy verified on t12: cursor entered the re-queued tail, 13/13 recovered (9 graduate, 4 rejected), 0 add_failed recurrence; t12 add_failed 44→31.
+- H13 partly refuted: graduates per round vary 4–23 (not fixed) while max score stays ≤1. New H15: t10 graduation rate 0.29 → 0.63 after the 14:35 restart (post-restart rounds graduate 6–23 of 17–31, max score 1.0 in 7/8) — for the supervisor (notebook source count before/after restart).
+- t12 S1 +2: US20160057394 / CN103059118 (ids 6004/6005) confirmed rejected 17:22:42 08-25, 206 KB each, never deep-read — consistent with the auditor-artefact reading; staging auditor to confirm.
+- Proposed next test (not launched): batch A′ = t13 46 + t12 18 unscored v2 rejects (64 reads) — closes both reject pools at near-complete screens.
