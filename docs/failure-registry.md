@@ -407,3 +407,42 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   CN220510820, CN120073105, CN120433348]) = NLM job on drawnformula/default → A2-blocked
   while t10/t13 screen AND user-blocked (no NLM jobs this session). C5: t13 SCOPED (9/9),
   others none → negatives scoped only. Verdict: BLOCKED.
+- 2026-08-26 ~21:10 UTC container clock (session-start after the 20:57:01 Docker-wide
+  restart #5; git HEAD 72e0235 NOT deployed, container still defa67e — no rebuild):
+  supervisor run. Step 0 audit_accounts 21:02 PASS (A1 t10 drawnformula / t11,t13 default /
+  t12,t14 work2; A2 one NLM job per account: t10, t12, t13 nlm-screen). Restart forensics:
+  watchdog POSTed exactly ONE nlm-screen resume per tab (t10 20:57:17, t13 :18, t12 :18) —
+  no double-resume; screen locks single; t13 accounting closes exactly (queue 458 = ledger
+  392 + 66 DB-rejected; survivors+roster inside the ledger, all 12 marked graduate 21:01:18
+  by the finalize step — "staging round 35: 3/37" is finalize, not a lost round); t10
+  round 39 staging (roster 21, requeued 168 ≤ S5 baseline 173), t12 round 28 asking (roster
+  8, requeued 44); no in-flight round lost its source list. /data/.auto_refetch.lock was
+  present with mtime 20:58:04 = THIS boot's sweep (startup 20:57:05 + 60 s), i.e. the boot
+  sweep DID run and the lock was not stale; because the 72e0235 fix is undeployed it would
+  have silenced the NEXT boot's sweep, so the supervisor removed it (rm) at 21:03 — the
+  entrypoint's "cleared stale background-job locks" does not cover this file (code-fix
+  candidate: add it there; WEB_CONCURRENCY=1 makes the O_EXCL sibling rationale moot).
+  Deep-compare: t12 (57 ids) and t13 (44 ids) opus-5 reads are RUNNING since 21:03:34/37
+  (POST from 127.0.0.1) — NOT orphans: user 21:08 (session-log time) "resume the 101
+  graduate reads", relaunched from the manifest; ids == graduate_reads_remaining, 0
+  duplicates, 0 already opus-scored before launch; 15/16 landed by 21:06. These reads are
+  in flight → t12/t13 recall/ranking watermarks will move legitimately. Freshness vs
+  defa67e: t10/t13 staging+recall+ranking STALE (data: t10 screened 19:52 after the 19:51
+  verdicts; t13 12 docs screened 21:01 + finalize; opus scores landing); t11/t12/t14
+  recall+ranking FRESH; staging STALE(deploy) on t11/t12/t14 is a LABEL mismatch (verdict
+  records 38492c8, container is defa67e, procedure HEAD is 72e0235; no audit script changed
+  since 38492c8) — not overridden, disclosed; recall/ranking record deploy_head=None and are
+  exempt from that check (inconsistency = code-fix candidate: one head label sourced from
+  the running container). full-doc-staging verdict still 08-25 16:51 → STALE. No pending
+  trigger. Cross-checks: t13 C6 PASS vs R1 FAIL 7/21 is NOT a contradiction (R1 misses are
+  opus-read GT by definition); S1 blind shrink t11 52→40 / t12 115→90 / t13 219→174 /
+  t14 166→166 matches reads that landed (job 26 = 12 on t11; 62/52 graduate reads on
+  t12/t13; none on t14) — no shrink-without-reads. Baselines: t13 C1 330≤401, R2 119≤119;
+  t10 R2 59≤59; S5 t10 170≤173 / t12 31≤47 / t14 37≤37 / t11,t13 0 — no growth, no new
+  unregistered class. Still-gating unregistered FAILs: S1 t11 40 / t12 90 / t13 174 / t14
+  166; R1 t13 7/21; R2 t11 46 / t12 61 / t14 80; R5 t10 lexical lane. C5: t13 SCOPED (9/9
+  canary), others no canary → negatives scoped only. R6 queue non-empty: t10
+  [US20120007441, CN103683526], t13 [CN218958581, AU2022338850, CN220510820, CN120073105,
+  CN120433348]. Heads-up: t13 screen is in finalize → default account frees → watchdog
+  series rule will resume t11 r8 = a new NLM launch; run audit_accounts around it.
+  Verdict: BLOCKED.
