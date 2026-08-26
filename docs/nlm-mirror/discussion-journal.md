@@ -3433,3 +3433,29 @@ All pre-audit (auditors re-ran 16:49 on 911d1b3, worst FAIL).
 Next cheapest tests (proposals only): H8 stale-2.0 seeded sample 10+10 (≤20 reads);
 H4/H10 t11/t13 reject sweep 44 reads once the screens progress; H11/H12 are 0-read
 auditor/log questions.
+
+## 2026-08-26 — hypothesis-driver cycle 4 (15:05 UTC)
+
+Scope t10–t14; constraints: no NLM jobs, no champion/closure claims, ≤20 opus reads outside
+the parent's 306-graduate manifest. Launched 12 reads (job 26, t11 unscored v2 rejects →
+closes the t11 reject pool 27/27 at cursor 113). Parent's 306-graduate batch (15:12) noted
+as PENDING.
+
+Headline: first v2 JUDGED MISS — t10 EP3849091 (opus 4.0, current features, re-read 06:01
+08-25) staged in the 27-doc round of 18:33:37 08-25, answered, rejected; 7 docs ≤1
+graduated from the same round. H10 SCOPED → SUPPORTED (1/134 read v2 rejects). H2 REFUTED
+on t10 as stated. H6 REFUTED for this case (EP3849091 had the HIGHEST lexical overlap with
+the benchmark in its round, 0.296 vs 0.14–0.20). New H13: fixed-count graduation per round
+(t10 4–10/round over 29 rounds regardless of round quality) → lone champion in a weak
+round is dropped; needs per-round rosters (not persisted). New H14: graduation rate
+t10 25 % / t11 76 % / t12 69 % / t13 87 % / t14 52 % — on t12/t13 the screen forwards
+nearly everything. H5 re-pooled n=493: top-3 37 %, 4–10 7 %, 11+ 2.3 %, 10/22 champions at
+11+. H7: 168 t10 re-queued tail copies pending; queue order ≠ screening order (EP3849091
+re-staged outside `requeued`; CA2552849/US20220221016 at positions > cursor). Judged
+recall line 22/23 champions that reached a v2 judgement (lane-selected, pre-audit).
+t12 S1 +2: screen-staging event in the 17:22 08-25 round, most plausibly the two rejected
+>120 KB docs US20160057394 / CN103059118 (parts removed on rejection → unverifiable),
+not a read and not evidence of truncation.
+
+Awaiting user: batch A (t13 28 + t12 16 unscored rejects, 44 reads), batch B (seeded 40
+of t10's 385 sonnet-≤1 rejects), H8 stale-2.0 sample (20). Register + thesis §7a updated.
