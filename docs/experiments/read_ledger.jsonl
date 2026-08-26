@@ -28,3 +28,4 @@
 {"ts": "2026-08-25T17:16Z", "tab": 11, "hypothesis": "2nd relaunch after 17:13 restart (0/5 landed)", "n_reads": 5}
 {"ts": "2026-08-25T17:16Z", "tab": 13, "hypothesis": "2nd relaunch after 17:13 restart (5/46 landed, all <4)", "n_reads": 41}
 {"ts": "2026-08-25T17:31Z", "tab": "10/11/13", "hypothesis": "OUTCOME graduate batch complete: 115/115 read (t10 36, t11 19, t13 60), 0 >=4 across all relaunches; last 57: t10 max 3.0 (1 doc), t11 max 2.0, t13 max 2.0 — today's v2 graduates add no champion (supports H10)", "n_reads": 0}
+{"ts": "2026-08-26T15:12Z", "tab": "10/12/13", "hypothesis": "user 08-26: read all remaining unread v2 graduates — t10 91 / t12 119 / t13 96 = 306 opus-5 deep-compare (blind, skip_scored=true); ids /data/audits/graduate_reads_2026-08-26.json; ~7.5M tokens est. at ~25k/read; H10 test on todays screen graduates", "n_reads": 306}
