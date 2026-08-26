@@ -9,6 +9,29 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NOTEBOOK="${NLM_MIRROR_NOTEBOOK:-35690175-d37d-4de8-ac92-8254017063b5}"
 
+# NLM account gate (feedback_nlm_account_gate, 2026-08-25): this is a WRITE on the
+# default account; a second concurrent writer while t11/t13 screen is the F3c
+# timed-out-add mechanism (A2 breach logged 2026-08-26 15:07). Refuse unless the
+# gate passes; NLM_MIRROR_FORCE=1 overrides deliberately.
+if [ "${NLM_MIRROR_FORCE:-0}" != "1" ]; then
+  if ! docker exec -w /app patent-bench python3 - < "$ROOT/scripts/audit_accounts.py"; then
+    echo "sync-nlm-mirror: account gate FAILED — not writing to NotebookLM (NLM_MIRROR_FORCE=1 to override)" >&2
+    exit 2
+  fi
+  # gate passes when no job runs on the default account; an active default-account
+  # screen is still a concurrent writer for us, so check that separately
+  busy=$(docker exec patent-bench python3 -c '
+import urllib.request, json
+for t in (11, 13):
+    d = json.load(urllib.request.urlopen(f"http://127.0.0.1:8000/api/tabs/{t}/nlm-screen/status", timeout=10))
+    if d.get("running"): print(t)
+' 2>/dev/null)
+  if [ -n "$busy" ]; then
+    echo "sync-nlm-mirror: default-account screen running on t$busy — refusing concurrent write (NLM_MIRROR_FORCE=1 to override)" >&2
+    exit 2
+  fi
+fi
+
 sync_one() {
   file="$1"; title="$2"
   docker exec -i -e NB="$NOTEBOOK" -e TITLE="$title" patent-bench python3 -c '

@@ -1933,6 +1933,17 @@ def _auto_refetch_sweep() -> None:
     pendings. O_EXCL lock so only ONE gunicorn worker sweeps."""
     time.sleep(float(os.environ.get("PB_AUTO_REFETCH_DELAY", "60")))
     lock = os.path.join(os.path.dirname(db.DB_PATH) or ".", ".auto_refetch.lock")
+    # The lock is never unlinked (unlinking at the end would let the sibling
+    # worker sweep a second time), so a lock left by a PREVIOUS boot would make
+    # every later boot sweep silently return (found 2026-08-26 after two Docker
+    # restarts: lock from 15:43 still present at 19:40). Both workers of one boot
+    # reach this point within seconds of each other, so a lock older than 10 min
+    # cannot be this boot's — treat it as absent.
+    try:
+        if time.time() - os.path.getmtime(lock) > 600:
+            os.unlink(lock)
+    except OSError:
+        pass
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.close(fd)
