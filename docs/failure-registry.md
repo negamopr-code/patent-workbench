@@ -446,3 +446,31 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   CN120433348]. Heads-up: t13 screen is in finalize → default account frees → watchdog
   series rule will resume t11 r8 = a new NLM launch; run audit_accounts around it.
   Verdict: BLOCKED.
+- **2026-08-26 21:20 UTC — supervisor session-start pass after WSL reboot #6 (~21:15; uptime 213 s
+  at 21:19).** Gate `audit_accounts` PASS at 21:19 (A1 t10 drawnformula / t11,t13 default /
+  t12,t14 work2; A2 exactly one NLM job per account: t13 / t10 / t12 screens; t11 r8 and t14
+  r3 correctly parked per series rule). No double-resume: one `.nlm_screen_{10,12,13}.lock`
+  each (21:17–21:18), screens report a single runner per tab (t10 r38 staging, t12 r28→29,
+  t13 r34→35), no nlm_claims rows since boot (screens are staging, not finalizing).
+  Stale `/data/.auto_refetch.lock` (0 B, 21:17 = this boot; 72e0235 still undeployed on
+  defa67e) REMOVED as in the 21:02 pass. Deep-compare launches cross-checked against DB
+  (`documents.score_model/scored_at`, boot ≈ 21:16:40): t12 lock 12 ids == remaining manifest,
+  0 opus-scored before launch, 9 landed by 21:19, 3 in flight (6002/6003/6006); t13 lock 4 ids,
+  0 pre-scored, 4/4 landed; batch A′ (t12 27 / t13 49) has ZERO overlap with the in-flight
+  locks and its waiter is alive (pid 235), driver alive (pid 229) — no duplicate launches.
+  Disclosure: the driver's t10 batch (100 ids) contains 92 docs already scored by
+  claude-sonnet-4-6 (pre-boot) — that is the intended opus-5 re-read of graduates
+  (skip_scored skips opus-scored only); 8 opus scores landed post-boot, all opus, none
+  overwritten twice. Freshness vs procedure HEAD da0463f: t10/t12/t13 staging+recall+ranking
+  STALE by DATA (opus scores landing 21:18–21:19 + screens staging) — legitimately moving,
+  NOT overridden; t11/t14 recall+ranking FRESH, staging STALE(deploy) is still the label
+  mismatch (verdict 38492c8 / container defa67e / HEAD da0463f; `git diff 38492c8..HEAD`
+  touches only src/patentbench/web/api.py, no audit script) — disclosed, not overridden.
+  full-doc-staging verdict still 08-25 16:51 → STALE (FAIL on t11–t14 assessed_truncated
+  75/231/271/209). No pending trigger. Cross-checks unchanged from 21:02 (no new verdicts).
+  Baselines: no growth, no new class; still-gating unregistered FAILs unchanged (S1 t11 40 /
+  t12 90 / t13 174 / t14 166; R1 t13 7/21; R2 t11 46 / t12 61 / t14 80; R5 t10). R6 queue
+  non-empty: t10 [US20120007441, CN103683526]; t13 [CN218958581, AU2022338850, CN220510820,
+  CN120073105, CN120433348]. Re-run guidance: auditors on t10/t12/t13 should wait for the
+  t12 3 in-flight + t10 100-batch opus reads to land (t10 driver batch ≈ 92 remaining) —
+  re-running now only produces another STALE set. Verdict: BLOCKED.
