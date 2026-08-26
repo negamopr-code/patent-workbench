@@ -3459,3 +3459,10 @@ not a read and not evidence of truncation.
 
 Awaiting user: batch A (t13 28 + t12 16 unscored rejects, 44 reads), batch B (seeded 40
 of t10's 385 sonnet-≤1 rejects), H8 stale-2.0 sample (20). Register + thesis §7a updated.
+
+Job 26 outcome (15:07): 12/12 landed, max 2.0 → t11 v2 reject pool 27/27 read, 0 ≥4, 2 at 3;
+H4-on-t11 measured 0/27 at cursor 113; marginal 0, t11 reject line stopped. H10 = 1/153.
+User 16:25: all opus reads paused (306-graduate batch at 164/306); my read allowance revoked —
+cycle closed on existing evidence. Note: the mirror sync (step 6) wrote one source to the
+default-account mirror notebook 35690175 at ~15:07 while t13 (default) was screening —
+flagged for the account gate; not repeated this cycle.
