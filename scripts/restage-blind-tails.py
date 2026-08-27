@@ -16,16 +16,41 @@ The notebook is DELETED after each chunk (nlm_followup default): NotebookLM caps
 (hit 2026-08-27 06:25). --compact keeps it to 2 NLM queries per 10-doc chunk (quota doctrine).
 audit_staging S1 credits a doc as staged-in-full when that row exists (--restage-ledger).
 """
-import json, os, subprocess, sys, time
+import json, os, sqlite3, subprocess, sys, time
 TAB, LIST = int(sys.argv[1]), sys.argv[2]
 LOG=f"/data/.restage_t{TAB}.log"; PROG=f"/data/audits/restage_t{TAB}.progress.json"
 EV="/data/audits/restage"; LEDGER="/data/audits/restage_ledger.jsonl"
 os.makedirs(EV, exist_ok=True)
+# Heartbeat for the NLM Slot Manager. This runner is an OUT-OF-BAND NLM job: the
+# slot manager only polls patent-bench's app job routes (claims-audit, nlm-screen,
+# pipeline, cross-tab-scan), so without this the card says "quota idle" while we
+# are burning that account's Q&A quota (observed 2026-08-27). The heartbeats dir
+# in the nlm-profile volume is read by the slot manager alongside its bind store.
+HB_DIR="/home/app/.notebooklm-mcp-cli/heartbeats"
+def heartbeat(state, summary, **counts):
+    try:
+        os.makedirs(HB_DIR, exist_ok=True)
+        tmp=f"{HB_DIR}/.patent-restage-t{TAB}.tmp"
+        with open(tmp,"w") as f:
+            json.dump({"job":f"patent-bench restage blind tails — tab {TAB}",
+                       "account":PROFILE,"state":state,"summary":summary,
+                       "counts":counts,
+                       "updatedAt":time.strftime("%Y-%m-%dT%H:%M:%S.000Z",time.gmtime())},f)
+        os.replace(tmp,f"{HB_DIR}/patent-restage-t{TAB}.json")
+    except Exception:
+        pass   # a heartbeat must never break the job
 def log(m):
     with open(LOG,"a") as f: f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ",time.gmtime())+m+"\n")
+try:
+    _cx=sqlite3.connect("file:/data/workbench.db?mode=ro",uri=True)
+    PROFILE=(_cx.execute("select coalesce(nlm_profile,'default') from tabs where id=?",(TAB,)).fetchone() or ["default"])[0]
+except Exception:
+    PROFILE="default"
 docs=json.load(open(LIST)); done=set(json.load(open(PROG))) if os.path.exists(PROG) else set()
 todo=[d for d in docs if d not in done]
 log(f"armed tab={TAB} docs={len(docs)} remaining={len(todo)}")
+heartbeat("running", f"armed — {len(todo)} of {len(docs)} blind-tail docs left",
+          docs=len(docs), remaining=len(todo), credited=len(done))
 for i in range(0,len(todo),10):
     chunk=todo[i:i+10]
     while True:
@@ -61,11 +86,19 @@ for i in range(0,len(todo),10):
                                             "inventory_seen":bool(res.get("source_inventory")),
                                             "evidence":f"{EV}/t{TAB}_{ts}.json"})+"\n")
         if r.returncode==2:
-            log(f"chunk {i//10+1}: QUOTA -> sleep 3600"); time.sleep(3600); continue
+            log(f"chunk {i//10+1}: QUOTA -> sleep 3600")
+            heartbeat("quota_exhausted",
+                      f"account {PROFILE} out of NLM Q&A quota (empty-answer symptom) — retrying hourly; "
+                      f"{len(done)}/{len(docs)} credited",
+                      docs=len(docs), credited=len(done), chunk=i//10+1)
+            time.sleep(3600); continue
         if r.returncode==3 and "100 notebooks" in (r.stderr or "")+(r.stdout or ""):
             # account at NotebookLM's ~100-notebook cap: RETRY the same chunk later,
             # never skip it (skipping silently dropped all of t11/t13 on 2026-08-27)
-            log(f"chunk {i//10+1}: NOTEBOOK-CAP -> sleep 1800, retry same chunk"); time.sleep(1800); continue
+            log(f"chunk {i//10+1}: NOTEBOOK-CAP -> sleep 1800, retry same chunk")
+            heartbeat("blocked", f"account {PROFILE} at NotebookLM's ~100-notebook cap — retrying every 30 min",
+                      docs=len(docs), credited=len(done), chunk=i//10+1)
+            time.sleep(1800); continue
         log(f"chunk {i//10+1}: exit={r.returncode} {(r.stderr or '')[-200:].strip()!r}")
         if r.returncode in (0,1):
             # only docs with real, credited evidence count as done — a QUOTA-ABORT
@@ -73,6 +106,10 @@ for i in range(0,len(todo),10):
             ok=[n for n in chunk if res and n in answered] if res else []
             done.update(ok); json.dump(sorted(done),open(PROG,"w"))
             log(f"chunk {i//10+1}: persisted {len(ok)}/{len(chunk)} answers")
+            heartbeat("running", f"chunk {i//10+1} done — {len(done)}/{len(docs)} credited (account {PROFILE})",
+                      docs=len(docs), credited=len(done), chunk=i//10+1)
         else: time.sleep(600)
         break
+heartbeat("done", f"finished — {len(done)}/{len(docs)} blind-tail docs restaged in full and credited",
+          docs=len(docs), credited=len(done))
 log("done")
