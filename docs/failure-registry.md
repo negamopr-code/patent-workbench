@@ -504,3 +504,26 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   of 2049) although the t10 screen is reported "phase done". audit_full_staging.json
   still 08-25 16:51 FAIL (assessed_truncated t11 75 / t12 231 / t13 271 / t14 209) —
   stale, gates any "assessed in full" claim. Verdict: BLOCKED.
+
+### 2026-08-27 06:20 — caller follow-up on the post-deploy supervisor pass (17b74ab / scripts 2d55ba7)
+
+- **Item 7 (restage evidence defect) FIXED and re-run.** `restage-blind-tails.py` now passes
+  `--keep-notebook`, persists the full nlm_followup result JSON to `/data/audits/restage/t<tab>_<ts>.json`
+  and appends one row per doc to `/data/audits/restage_ledger.jsonl` (`{tab, number, ts, notebook,
+  answered, evidence}`). `audit_staging.py` S1 gained `restaged_full(tab)`: a doc with an ANSWERED
+  ledger row leaves the blind pool and is counted in the new `restage_verified_full` data key.
+  The 40 docs restaged before the fix (t11 30 = all 3 chunks, t14 10 = chunk 1) produced NO
+  retrievable evidence (notebooks deleted, stdout discarded) → their progress files were reset and
+  both tabs relaunched from zero at 06:18 (t11 30, t14 149). Quota cost of the redo is accepted.
+- **Item 10 (t10 758 fetched docs with `nlm_screen_state` NULL) EXPLAINED — not a coverage gap.**
+  All 758 were fetched 07-27…08-18, i.e. BEFORE the screen started 08-23 20:40, and all 758 already
+  carry a deep-read score (748 opus-5, 10 opus-4-8, 87 no model recorded but scored; 4 of them ≥4.0).
+  The screen queue (1459) is the unscored remainder, so the screen's "done" is consistent: 1459
+  screened + 758 already deep-read + (2049 total) — no document is unassessed. Disclosure retained
+  because the auditors' anchors count screened docs only.
+- **Item 1 (A2 gate blind to restage runners) STANDS as a live risk.** `audit_accounts.py` sees only
+  the app's screen/claims routes; the two `restage-blind-tails.py` runners (t11 → default,
+  t14 → work2) are invisible to it. Until the gate learns to read `/data/.restage_t*.log` +
+  `/proc`, nothing else may be launched on default (t13 claims, t13 R6 follow-up, sync-nlm-mirror)
+  or work2 (t12) while they run — verified by hand via `/proc/*/cmdline` at 06:18: exactly one
+  runner per tab, drawnformula free.
