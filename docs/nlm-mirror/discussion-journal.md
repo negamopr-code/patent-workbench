@@ -3478,3 +3478,84 @@ Constraint: user paused opus reads 16:20 and revoked the driver's allowance 16:2
 - H13 partly refuted: graduates per round vary 4–23 (not fixed) while max score stays ≤1. New H15: t10 graduation rate 0.29 → 0.63 after the 14:35 restart (post-restart rounds graduate 6–23 of 17–31, max score 1.0 in 7/8) — for the supervisor (notebook source count before/after restart).
 - t12 S1 +2: US20160057394 / CN103059118 (ids 6004/6005) confirmed rejected 17:22:42 08-25, 206 KB each, never deep-read — consistent with the auditor-artefact reading; staging auditor to confirm.
 - Proposed next test (not launched): batch A′ = t13 46 + t12 18 unscored v2 rejects (64 reads) — closes both reject pools at near-complete screens.
+
+## 2026-08-27 — NLM follow-up verifier, t10 R6 queue (07:05–07:15 UTC)
+
+Queue from audit_recall.json R6 (WARN, tab 10): the 2 quiet ground-truth docs the sweep
+never claimed — US20120007441, CN103683526. Both already carry claude-opus-5 4.0 verdicts,
+so this round is a CALIBRATION of the free instrument against a known answer, not a
+discovery round. Account gate PASS before and after: t10 = drawnformula, free; default
+(t11 restage) and work2 (t14 restage) left untouched, both quota-exhausted out-of-band.
+Mode: default per-doc (2 docs → 3 queries), notebook 264d074c deleted, exit 0.
+
+**Angle 1 — checklist question verbatim (the sweep's own wording, "using a microwave").**
+
+Instrument artefact #1: NLM RENUMBERED the checklist. Its "FEATURE k" indices are a
+permutation of the 11 MUST features (answer 1→F8, 2→F9, 3→F7, 4→F5, 5→F6, 6→F10, 7→F11,
+8→F2, 9→F3, 10→F4, 11→F1), identical across both per-doc answers and the broad round.
+The justifications are unambiguous so de-permuting by semantics is safe, but any positional
+parser of "FEATURE <k>:" would scramble the round silently. Instrument artefact #2: in the
+broad answer the numbers returned per feature are SOURCE ORDINALS (1,2,3 = US part 1, US
+part 2, CN), not document numbers — the broad line "FEATURE 11: 1, 2, 3" reads as all
+sources, not as three documents.
+
+De-permuted round-1 result vs the stored opus verdict:
+
+- US20120007441 — NLM 1×YES (F1 wireless system), 3×PARTIAL (F2 base = "wireless power
+  transmitter"/"network controller"; F3 remote ↔ base = remote device ↔ far-field power
+  source; F4 sensor ↔ remote = implanted device ↔ external patient programmer EXD),
+  7×NO. Agrees with opus on F1/F6/F10/F11. Diverges on the whole microwave trio
+  F7/F8/F9 (weights 4/5/5), where opus had partial/partial/YES.
+- CN103683526 — NLM 2×YES (F1 wireless system 无线自动化系统; F4 sensor ↔ remote: field
+  device RF module (2) ↔ RF module (14) of power adapter (10), connection (6)),
+  2×PARTIAL (F2 base station 基站 / external control and monitoring unit (20); F3 adapter
+  ↔ unit 20), 7×NO. Reason given for F7/F8 NO is technical, not verbal: the document's
+  wireless power is INDUCTIVE COUPLING 电感耦合, not radiated microwave. Opus said the same
+  thing in its own notes ("again inductive, not microwave") and also scored F9 NO. So on
+  CN the free instrument CORROBORATES opus feature-for-feature, and is one notch stronger
+  on F4.
+
+**Source-text adjudication of the US divergence.** Opus's F9 note quotes [0172]: two
+devices "may be powered from two different transmitted signals S2 a, S2 b", lower
+frequency into the body, higher frequency to the external device. First grep for "S2a"
+missed (the text renders it "S2 a" with a space) — the passage IS in the stored
+description at offset ~136384, verbatim, together with the "amplifier"/"relay" sentence
+that carries F8. [0061] independently discloses two harvesting modules on different RF
+bands (900 MHz vs another). Opus's citation is sound; NLM's three NOs are FALSE NEGATIVES
+on the two highest-weight features of the checklist.
+
+**Angle 2 — controlled A/B, same doc, same features, wording changed only.** Re-staged
+US20120007441 alone (2 parts) and asked F7/F8/F9 with "treat 'using a microwave' as
+covering ANY beamed/radiated RF wireless power transfer — the exact word 'microwave' need
+not appear". Result: **A) YES, B) YES, C) YES** — and for C NLM returned the exact
+sentence opus cited ("lower frequency signals can be transmitted into the patient's body
+better than high frequency signals, while higher frequency signals ... better suited for
+sending energy to external devices"), plus [0172] for A/B (portable energy transmitter
+relays RF energy to the implanted device and is itself powered by the remote transmitter's
+S2). Notebook 49975ba7 deleted.
+
+Conclusion: NO/NO/NO → YES/YES/YES with the document held constant. The round-1 NOs were
+pure lexical artefacts of the benchmark's word "microwave". This extends the 2026-08-20
+F-wording lesson (which only strips reference numerals, script lines 94–100): the numeral
+stripper does NOT protect against a benchmark's genus term being narrower than the
+document's vocabulary. Every "NO" the sweep or a follow-up returns on a term-of-art
+feature is suspect until re-asked with a synonym-expanded wording — which is a mechanism
+for the R1 recall miss itself (US20120007441 is exactly a doc that no "microwave" query
+will ever claim).
+
+Grouping: neither doc is a NEW opus candidate — both are already opus-read at 4.0.
+US20120007441 = "instrument false negative, opus verdict verified against source text",
+status unchanged and NOT to be downgraded on the strength of round 1. CN103683526 =
+"consistent with a weak 4.0 — follow-up corroborates opus, microwave trigger genuinely
+absent (inductive only)", status unchanged. R6's WARN for tab 10 is now discharged: both
+queued docs have follow-up verification on the ledger.
+
+Ledger rows appended (/data/audits/followup_ledger.jsonl): ts 1787814431 mode per-doc
+notebook 264d074c docs [US20120007441, CN103683526]; ts 1787814738 mode ab-wording
+notebook 49975ba7 docs [US20120007441] note "round 2: RF-inclusive wording variant of
+F7/F8/F9 after round-1 NO on all three". No DB write.
+
+Next test proposed (not launched): synonym-expanded re-ask is cheap and free — run the
+same A/B on the OTHER t10 GT docs the sweep missed or claimed thinly, and consider making
+the script emit a glossary line per term-of-art feature ("microwave = any radiated RF
+power transfer") so the recall floor stops being set by benchmark vocabulary.

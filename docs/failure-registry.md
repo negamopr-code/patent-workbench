@@ -624,3 +624,118 @@ screens finished — the verdict holds for that window only.
   all-tab freshness view.
 - Verdict: **VIOLATIONS** — no "assessed in full" claim is supportable on t11/t13/t14 (211 blind tails)
   and none on any of t10–t14 while 119 add_failed docs never reached NotebookLM.
+
+### 2026-08-27 ~07:30 UTC — full-document staging audit (truncation NO-GO), t10–t14 (deploy head 09f61a9, LIVE)
+
+Checker: `scripts/audit_full_staging.py`, five per-tab `--live` runs piped in via
+`docker exec -i -w /app patent-bench python3 - --tab N --live`; results merged into
+`/data/audits/audit_full_staging.json` (scope t10–t14 per the standing scope rule; t1–t9 not run).
+DB stable: all five NLM screens are `step=done`, opus deep-compare reads parked by the token-limit
+watchdog until 10:20 UTC — **this verdict holds for that window only.**
+
+| tab | docs | oversized (>118 000 B) | assessed_truncated (pre-epoch) | live part-presence problems |
+|-----|------|------------------------|--------------------------------|------------------------------|
+| 10  | 2049 | 833 | 0 (was 0)   | 1 |
+| 11  | 1954 | 188 | 0 (was 75)  | 1 |
+| 12  | 1824 | 319 | 0 (was 231) | 0 |
+| 13  | 2058 | 458 | 0 (was 271) | 2 |
+| 14  | 1835 | 300 | 0 (was 209) | 1 |
+
+- **assessed_truncated is now 0 on every tab** (08-25 16:51 baseline: 75/231/271/209 on t11–t14). The
+  overnight screen rounds re-screened every oversized doc that carries a verdict, so no oversized doc's
+  only verdict predates `FULL_STAGING_EPOCH` any more. **This clears the WARN gate but proves nothing
+  about coverage**: a post-epoch timestamp only means the verdict is younger than the multi-part deploy,
+  not that all K parts were live when the question ran (all five docs below are counter-examples).
+- **VERDICT FAIL — 5 live blind tails at part granularity, all in the lane screen notebooks, all
+  `graduate`, all screened POST-epoch:**
+  - t10 `JP7753930` 261 974 B, K=3, present `[1,2]` — nb `50f703e7` (🔁 Screen — Exam_2_478_2026), screened 08-26 19:52
+  - t11 `CN116345029` 123 137 B, K=2, present `[1]` — nb `23cd3326`, screened 08-26 23:59
+  - t13 `CN115552761` 246 638 B, K=3, present `[1,2]` — nb `22f46fa9`, screened 08-25 20:54
+  - t13 `CN119153812` 145 090 B, K=2, present `[1]` — nb `22f46fa9`, screened 08-26 16:22 (score NULL ⇒ no deep read either: tail seen by NO instrument)
+  - t14 `JP2023095746` 274 948 B, K=3, present `[1]` — nb `4cd50494`, screened **08-27 04:07** (~157 KB, 2 of 3 parts, never reached the notebook that graduated it)
+- **Mechanism = the 50-source cap, not the splitter.** All four affected notebooks hold exactly
+  `nlm_bridge.SOURCE_LIMIT = 50` sources (t10's holds 34 distinct docs though the last want-set was
+  3 roster + 10 survivors). Residual code hole in `_screen_stage` step 4b: `_restage_missing_parts()`
+  calls `nlm_bridge.add_source_text(nb, t, x, profile=prof)` **without checking `res["ok"]`**, and the
+  post-repair re-verify (`have = {_shortlist_key(n) for n in num_map}`) is per-NUMBER again — so a tail
+  part rejected at the cap leaves the doc "present", not `add_failed`, and it is questioned blind.
+- Splitter math validated: for all 2 098 oversized docs on t10–t14 the checker's `ceil(size/118 000)`
+  equals the real `_doc_source_parts` chunk count (0 mismatches) ⇒ no undercount of expected parts.
+- Positive spot-check (t10 nb `50f703e7`): `WO2020026413` 336 909 B K=3 → parts 1/2/3 all present;
+  `JP2019221076` 315 709 B K=3 → 1/2/3 present; `CN107534323` 152 186 B K=2 → 1/2 present. Full coverage.
+- Coverage-gating counts unchanged from the 07:06 staging audit: **211 S1 blind tails (t11 30 · t13 53 ·
+  t14 128)** and **119 add_failed docs NotebookLM never saw** (t10 15 · t11 27 · t12 26 · t13 24 · t14 27).
+  Oversized docs with no verdict at all: t10 305.
+- **Restage ledger is NOT sufficient evidence for the NO-GO invariant.** `restage_ledger.jsonl` currently
+  holds 10 rows, all t14, all `answered:false` (`QUOTA-ABORT`); `restage_verified_full = 0` on every tab.
+  Even for a future `answered:true` row, the throwaway notebook is deleted right after the query and no
+  source inventory is persisted, so part-completeness is unfalsifiable; and the corpus notebook the tab's
+  own verdict came from still holds the clipped doc. A restage row can retire the *"no instrument ever
+  saw this tail"* claim; it cannot retire *"the notebook that produced this doc's verdict was complete"*.
+- Verdict: **FAIL** — the truncation NO-GO invariant does not currently hold on t10, t11, t13, t14
+  (t12 PASS on live part presence). No "assessed in full" claim is supportable for any of t10–t14.
+
+### 2026-08-27 ~07:05 UTC — ranking-integrity audit, ALL tabs (deploy head 09f61a9, LIVE)
+
+Run: `docker exec -i -w /app patent-bench python3 - --json --deploy-head 09f61a9 --registry "$(cat
+docs/controls-registry.json)" --baselines "<fenced block above>" < scripts/audit_ranking.py`
+→ `/data/audits/audit_ranking.json` (14 tabs, 47 rows), worst **FAIL**, exit 2. DB stable: max
+scored_at 05:48 UTC, all five screens finished, opus deep-compare parked by the ⏳ watchdog until
+10:20 UTC — **the verdict holds for that window only**.
+
+- **Champions (stored deep-read scores, 🎯 Must top verified to coincide):** t10 `US20230337972` 5.0
+  now **tied** with `US20220221016` 5.0 (both re-read 08-26 14:00, 6.0→5.0) · t11 **3-way tie 7.0**
+  `CN117039286` / `CN220652165` / `CN118156696` · t12 `KR20260033205` 8.0 (unchanged) · t13
+  `CN223926581` 10.0 (unchanged) · t14 **3-way tie 6.0** `EP4152472` / `CN103457003` / `CN118318177`.
+  ~549 new verdicts since the 08-26 19:57 audit (t10 214 · t12 159 · t13 123 · t14 32 · t11 21); the
+  only one that entered a top-10 is t14 `KR102760076` 5.0.
+- **t13 C1 orphaned reads FAIL — 330 docs [KNOWN, baseline 401, SHRANK from 401].** Verified raw:
+  `CN115693859` stores 24 v1-keyed elements (`partial | message generation device comprises a wireless
+  communication module and an expansion module`) against 9 current v2 M-names (`message generating
+  device (120) comprises a wireless communication module (121) and a control module (122)`) — not
+  exact, not numeral-stripped-norm, 24≠9 so not positional. **All 330 cap at holistic 2.0**
+  (186×2.0 / 128×1.0 / 16×0.0) — no champion hides in the orphan pool, matching the registered scope.
+- **C3 corpus-top blocks PASS on all five tabs** (block == stored top-10 as of its own ts). INFO: t14's
+  block (05:36) predates `KR102760076` 5.0 (05:44) → displayed top-10 is one doc stale.
+- **NEW / GATING — t12: the tab's LAST compiled message crowns a false leader.** Latest `role='c'`
+  compile is msg **3092** (08-27 00:21, NLM mega-screen finalize): «**BEST**: KR20250094125,
+  **SECOND-BEST**: WO2025225986» — both **opus 3.0** — with **no 📌 CURRENT CORPUS TOP-10 block**,
+  while the corpus champion `KR20260033205` **8.0** is not in the shortlist at all
+  (`nlm_screen_state='rejected'`). The same run wrote `nlm_rank=1/2` + ☑, so the shortlist surface also
+  shows 3.0 above 8.0. **Systemic:** screen-finalize compiles carry no block on any tab (t10 3101, t11
+  3095/3098, t12 3086/3092, t13 3077/3083, t14 3104); on t10/t11/t13/t14 a later ranking compile
+  restored the block, on t12 it did not. **Audit blind spot:** C3 selects the newest *block-carrying*
+  compile (t12 msg 3068, 20.9 h older) and only WARNs when no compile anywhere has a block ⇒ it cannot
+  see a newer blockless crown. No baseline entry covers this (F6 covers claim-weight lists only).
+- **NEW — screen-lane canary control fails ⇒ no negative claim from a screen is admissible:** t12
+  `KR20260033205` (registered paraphrased canary, opus 8.0) `rejected`; t10 `EP3849091` (4.0 canary)
+  `rejected`; t13 `CN116508192` (5.0 canary) `add_failed`. Msg 3092's «no candidate discloses all 17
+  elements» is only survivable because its wording is scoped to "the provided sources".
+- **Stale 6/6 echo (t10 2973/2979/2982) CONFIRMED and NOT code-fixed.** In msg 2979 block 1 (the
+  deterministic prepend) lists `US20230337972 — 5`, block 2 lists `— 6`: the second block sits inside
+  the reduce model's own answer, i.e. the model reproduced an older block from `history`. Last
+  occurrence t11 msg **3051** (08-26 15:08); the 8 later block-carrying compiles are single-block, but
+  nothing in `api.py` strips 📌 blocks from `res["answer"]`, so absence is luck, not a fix.
+- **C4 WARNs both LEGAL (holistic ≠ Must), not sunk reads:** t11 `CN220306367` (6.0, pos 584/875) —
+  all 48 stored names map to a kind, MUST 2/7 full, `mand_rating` 0.95, 581 docs strictly better; its
+  19 ✓ are A-elements (sealing pin / injection hole family). t14 `CN118318177` (6.0, pos 127/475) —
+  MUST 3F/2P of 5, `mand_rating` 7.27, `no_absent=True`, 103 docs strictly better (weighted rating,
+  per-element weights explain the ordering).
+- **C7:** WARN t11/t14 [as expected] — their latest claims-audit DONE messages are 08-15 16:28 /
+  08-15 17:56, i.e. **pre-F6-fix artefacts**, not a live regression (the F6 `corpus_top` append is
+  present in `api.py`; t10/t12/t13 DONE messages of 08-23 all carry it). PASS elsewhere.
+- **C6 falsification PASS on all five tabs** — every top-15 holistic doc holds a current-key deep read.
+- **C5 closure gate:** t13 **PASS**, canary `CN223926581` 9/9 MUST under current keys →
+  `closure_claims_permitted: SCOPED`. t10/t11/t12/t14 **WARN** (no verbatim canary; benchmarks are
+  uploaded claims PDFs — see `_verbatim_note` per tab). Surrogate known-positives DO register under
+  current keys (t10 `US20220221016` 8F/11 · t11 `CN117039286` 7F/7 · t12 `KR20260033205` 6F/6 · t14
+  `EP4152472` 5F/5), so the name-join is demonstrably healthy — claims are SCOPED, not FORBIDDEN.
+  **Zero-full MUST elements = 0 on all five tabs**, so no 08-18-style «element X 0✓ corpus-wide» claim
+  is live. Permitted scopes: t10 «among the 2049 current-key reads (of 2136)» · t11 «1092 of 2104» ·
+  t12 «846 of 1914, and NOTHING from the screen lane» · t13 «659 of 2190, 330 v1-orphans excluded» ·
+  t14 «480 of 1997». **FULL closure: nowhere.**
+- Minor doc drift (NEW, needs user approval — not edited): `controls-registry.json` champion_controls
+  still say t10 `US20230337972` / `US20220221016` are "opus 6.0"; both stored 5.0 since the 08-26 re-read.
+- Verdict: **VIOLATIONS** — t13 C1 is KNOWN and shrinking, but t12 must not be quoted from its chat
+  head: post no t12 "BEST" line until a ranking compile (or a code fix on the screen-finalize path)
+  puts the deterministic 📌 block back as the tab's last word.

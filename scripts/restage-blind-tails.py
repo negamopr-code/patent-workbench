@@ -62,6 +62,10 @@ for i in range(0,len(todo),10):
                                             "evidence":f"{EV}/t{TAB}_{ts}.json"})+"\n")
         if r.returncode==2:
             log(f"chunk {i//10+1}: QUOTA -> sleep 3600"); time.sleep(3600); continue
+        if r.returncode==3 and "100 notebooks" in (r.stderr or "")+(r.stdout or ""):
+            # account at NotebookLM's ~100-notebook cap: RETRY the same chunk later,
+            # never skip it (skipping silently dropped all of t11/t13 on 2026-08-27)
+            log(f"chunk {i//10+1}: NOTEBOOK-CAP -> sleep 1800, retry same chunk"); time.sleep(1800); continue
         log(f"chunk {i//10+1}: exit={r.returncode} {(r.stderr or '')[-200:].strip()!r}")
         if r.returncode in (0,1):
             # only docs with real, credited evidence count as done — a QUOTA-ABORT

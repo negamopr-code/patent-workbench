@@ -144,6 +144,11 @@ def main():
              "\n\n=== FEATURES ===\n" + spec)
     r = nlm_bridge.query(nb, broad, profile=prof)
     if nlm_bridge.is_quota_error(r):
+        if not args.keep_notebook:      # never leak a notebook slot on abort
+            try:
+                nlm_bridge.delete_notebook(nb, profile=prof)
+            except Exception:  # noqa: BLE001
+                pass
         print("quota exhausted — aborting", file=sys.stderr)
         sys.exit(2)
     results["answers"]["_broad"] = r.get("answer") or r.get("error")
