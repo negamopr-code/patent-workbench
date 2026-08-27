@@ -739,3 +739,114 @@ scored_at 05:48 UTC, all five screens finished, opus deep-compare parked by the 
 - Verdict: **VIOLATIONS** — t13 C1 is KNOWN and shrinking, but t12 must not be quoted from its chat
   head: post no t12 "BEST" line until a ranking compile (or a code fix on the screen-finalize path)
   puts the deterministic 📌 block back as the tab's last word.
+
+### 2026-08-27 ~16:40 UTC — supervisor gate on the FINAL hypothesis cycle (thesis_2026-08-27, HEAD fa6f6f7)
+
+Trigger: pre-report gate on the hypothesis-driver's closing thesis (H1–H16 terminal), which
+states itself that no supervisor pass has gated it. Scope t10–t14. Procedure HEAD for
+src/scripts = **a2bb65f**; verdicts on disk carry 09f61a9 / f5de302 → STALE(deploy) everywhere.
+
+- **Step 0 account gate PASS** (16:31 and re-run 16:36): A1 all five bindings == registry
+  (t10 drawnformula · t11/t13 default · t12/t14 work2); A2 one job per account — at 16:31
+  default `t11:restage[23219]`, work2 `t14:restage[23233]`; at 16:36 default `t11:restage`
+  only (t14 finished). `chain-restage.py 13` (pid 24997) is parked and correctly
+  fail-closed: `waiting: ['t11:24989','t11:24995']` — t13's restage will not start until
+  default is free, so no A2 breach is in prospect. Runner scripts in `/data` md5-match git
+  a2bb65f (`nlm_followup.py`, `restage-blind-tails.py`, `chain-restage.py`) → the
+  quota-abort notebook-delete fix IS deployed on the restage lane.
+- **Pause state verified as claimed:** `/data/.opus_grad_driver.stop` 16:10:29;
+  `.claude_read_{10,13,14}.resume.json.PAUSED-BY-USER` 11:14; **no `.claude_read_*.lock`**;
+  no deep-compare process. Global `max(scored_at) = 08-27 11:14:58`, i.e. **nothing has been
+  unparked** — the read watermark has been static for 5.5 h. (Thesis §4 says the last verdict
+  landed ~10:34; DB says 11:14:58 — minor, disclose.)
+- **EVIDENCE DEFECT — the 07:06 all-tab staging verdict NO LONGER EXISTS.**
+  `/data/audits/audit_staging.json` on disk is a **single-tab `--tab 14 --no-live` run at
+  16:11 on f5de302** (`args {"tab":14,"json":true,"no_live":true}`, 6 rows, S3 "skipped").
+  It overwrote the all-tab run. Consequence: `audit_status` reports staging **MISSING(tab)
+  for t10–t13** and STALE(deploy) for t14. The 07:06 numbers (S1 t11 30 · t13 53 · t14 128;
+  S5 119) survive only as prose in this file — per doctrine that is a journal claim, not
+  evidence. **Everything the thesis draws from staging on t10–t13 is currently ungated.**
+- **Freshness of the surviving verdicts.** `audit_recall` 07:05:33 and `audit_ranking`
+  07:05:40, both head 09f61a9 → STALE(deploy) vs a2bb65f. STALE by DATA as well, but
+  **quantified and immaterial for R1**: reads landed after their anchors on t10 (7), t13 (5),
+  t14 (7), t11/t12 (0) — **0 of the 19 is a new GT (score ≥ 4)**, and screened counts /
+  claims rounds / max_claims_ts are byte-identical to the anchors. So R1's 182/202 and the
+  per-tab splits are numerically still true; the labels are stale, the numbers are not.
+  `audit_full_staging` 07:12:44 (09f61a9) exists and is FAIL — the caller's belief that the
+  ranking and full-doc auditors "were killed at 07:15 and never ran" is **wrong for both**:
+  both wrote verdict files. What was actually lost is the *staging* all-tab verdict.
+- **Gate matrix (audit_status, a2bb65f): post_sweep_results, champion_report and
+  closure_claim BLOCKED on all five tabs.** No pending_trigger.
+- **Baselines.** Live `add_failed` vs registered S5: t10 15 ≤ 173 · t11 27 ≤ 40 · t12 26 ≤ 47 ·
+  **t13 24 > 13 = GROWTH → GATES** · t14 27 ≤ 37. t13 C1 330 ≤ 401 KNOWN. R2 corridor t10 59 =
+  59, t13 119 = 119 registered; **t11 46 / t12 61 / t14 80 still UNREGISTERED → gate**.
+  Registry scope texts remain stale ("recall 7/12" t10, "1/14" t13 vs measured 11/13, 7/21) —
+  not edited, needs user approval.
+- **Numbers independently re-derived from the DB and reproduced EXACTLY** (read-only URI,
+  v2 epoch 1787511600): v2 champion table graduate 1433 / 31 champs · rejected 1004 / 3 ·
+  `add_failed` **119 / 10** ⇒ judged 31/34 = 91.2 %, end-to-end **31/44 = 70.5 %**; per-tab
+  splits 7·2·0 / 2·0·1 / 0·0·0 / 3·0·2 / 19·1·7 all match §6.2. The 3 judged misses
+  (t10 EP3849091 4.0 rej 08-25 18:33, t10 CA2552849 4.0 rej 08-26 21:48, t14 CN115514036 4.0
+  rej 08-27 03:48) confirmed. **39 v1 champion rejections** confirmed (t11 25 · t12 6 incl.
+  KR20260033205 · t13 3 · t14 5; t10 0) — and 39 + 3 = the auditor's 42, so no contradiction.
+  **t10 758 never-screened fetched docs, 4 with score ≥ 4** confirmed — and all 758 already
+  carry a deep read, so no document there is unassessed.
+- **H6 independently re-derived from `/data/audits/restage/t14_*.json` (12 clean chunks):**
+  66 graduate / 52 rejected = 118 ✓; **exactly 1 of 118 discloses any weight-4/5 feature
+  (JP2020119712, F1)** ✓ ⇒ 117/118 ✓; every weight-4 feature (F4–F11) 0.0 % on both sides ✓;
+  permutation test (seed 42, 20 000 shuffles) **p = 1.0e-4** vs the thesis's 5e-5 (the floor
+  for 20 001 draws), same order. Point estimates differ with parse method: my weighted yield
+  is **4.35 vs 1.29 (3.4×)** against the thesis's 3.76 vs 1.03 (3.65×), and per-feature diffs
+  drift ±2 pp (F22 +32.4 vs +34.3; F16 +12.1 vs +10.6). Direction and conclusion identical;
+  the exact figures are not bit-reproducible from the persisted evidence.
+- **NEW GATING DEFECT — restage credit can turn S1 green on an answer to a different
+  question.** At **16:33:48 the t14 restage runner completed the last 10 docs**
+  (`/data/audits/restage/t14_1787848428.json`, ledger now 148 rows, **128 t14 docs
+  `answered:true`**). But that chunk's `_broad` failed with a transport error and its
+  `_consolidated` opens verbatim: *"Because the specific **checklist of features (F1, F2,
+  etc.)** was not explicitly provided in the query or the active workspace history, we have
+  analyzed each of the 10 patents … (designated **F1 through F9** below)"* — NotebookLM
+  **invented its own 9-feature list** instead of answering t14's 22-feature MUST checklist.
+  All 10 docs were nevertheless credited `answered:true` with `parts_ok` and
+  `inventory_seen:true`, because `restage-blind-tails.py` credits on
+  `answers[num]` being non-empty and ≠ `QUOTA-ABORT` — it never checks that the reply
+  addresses the tab's own feature list. `audit_staging.restaged_full()` consumes exactly that
+  flag, so **the next staging run will report t14 S1 blind = 0** on 10 documents that were
+  never asked the right question. This is the 2026-08-20 failure shape (a control reading
+  green over a computation in which the target never registered). Required fix before any
+  t14 "no blind tails" / "assessed in full" claim: assert the consolidated reply carries the
+  tab's own F-index cardinality and contains no "checklist … not provided" disclaimer, and
+  un-credit `t14_1787848428`. Same guard needed for `t14_1787834464` (already `answered:false`).
+- **t11/t13 restage lanes have produced ZERO evidence.** `restage_ledger.jsonl` = 148 rows,
+  **all t14**; distinct answered t11 0 · t13 0 · t14 128. Their 08-27 08:17–09:52 runs all
+  exited 3 ("~100 notebooks" cap — the leak fixed in a2bb65f); the relaunched t11 runner hit
+  `QUOTA -> sleep 3600` at 16:17:55 and re-armed 16:36:16 on the **default** account, whose
+  Q&A quota the caller probed as exhausted at 16:20 (rc 0, `answer: ""`). t11's 30 and t13's
+  53 blind tails therefore remain fully blind, with no staging verdict on disk for either tab.
+- **H16 / F3f admissibility.** `followup_ledger.jsonl` corroborates the A/B *design and
+  timing* — t10 07:07 `mode:"per-doc"` [US20120007441, CN103683526] nb 264d074c and t10 07:12
+  `mode:"ab-wording"` [US20120007441] nb 49975ba7 with note *"round 2: RF-inclusive wording
+  variant of F7/F8/F9 after round-1 NO on all three"*. **The answers themselves are not
+  persisted anywhere** (both notebooks deleted; `nlm_followup` was pre-`--keep-notebook` on
+  that path) — the NO/NO/NO → YES/YES/YES flip exists only in
+  `docs/nlm-mirror/discussion-journal.md`. Under the standing doctrine that is a journal
+  claim, not evidence. n = 1 document × 3 features. **F3f is NOT registered by this pass**
+  (no user approval, and one unpersisted measurement cannot carry a class). Recommended
+  shape if the user approves: a table row with **size UNMEASURED and no baseline count**,
+  control = "re-ask every weight-4/5 NO once with a genus expansion", gated on a persisted
+  re-run of the A/B on drawnformula (t10's account, which answers).
+- **Cross-file contradictions:** none between `audit_recall` / `audit_ranking` /
+  `audit_full_staging` (t13 C6 PASS vs R1 misses remains consistent — the misses are opus-read
+  GT; ranking's 42 rejected champions == thesis's 39 v1 + 3 v2). Two thesis-vs-live drifts,
+  both time-stamped after writing: §6.4/§8 "t14's blind pool is 10, not 0 … those 10 remain
+  uncredited" was overtaken at 16:33; §8 "Three restage runners (t11, t13 on default; t14 on
+  work2) were live throughout" is wrong — **t13's runner exited `done` at 09:52:54** and only
+  the chain waiter is alive (had both been live on default it would have been an A2 breach).
+- Standing carry-overs, unchanged: C5 canary only on t13 (SCOPED 9/9); t10/t11/t12/t14 have
+  no verbatim canary ⇒ corpus-wide negatives scoped only. Ranking's t12 blockless-crown FAIL
+  (msg 3092 crowns two opus-3.0 docs while the 8.0 champion is `rejected`) still stands — no
+  t12 "BEST" line may be quoted. R6 queues non-empty: t10 [US20120007441, CN103683526];
+  t13 [CN218958581, AU2022338850, CN220510820, CN120073105, CN120433348].
+- **Verdict: BLOCKED.** The DB-derivable arithmetic of the thesis is sound and reproduces
+  exactly; what is not gated is the staging evidence for t10–t13 (file overwritten), the
+  restage credit on t14 (10 docs credited on a wrong-checklist reply), and H16 (journal-only).

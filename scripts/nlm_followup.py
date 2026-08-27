@@ -151,8 +151,25 @@ def main():
                 pass
         print("quota exhausted — aborting", file=sys.stderr)
         sys.exit(2)
-    results["answers"]["_broad"] = r.get("answer") or r.get("error")
-    if args.compact:
+    _b = r.get("answer") or r.get("error") or ""
+    results["answers"]["_broad"] = _b
+    # The compact consolidated question says "the checklist above" — if the broad
+    # question did not actually land, NotebookLM invents its own feature list and
+    # answers a DIFFERENT question (observed 2026-08-27 t14 chunk 1787848428: broad
+    # died on a transport error, reply began "the checklist ... was not explicitly
+    # provided ... we have ... designated F1 through F9"). Such a chunk must not be
+    # asked, let alone credited.
+    _bad = (not _b.strip()) or '"status": "error"' in _b or _b.lstrip().startswith("Query failed")
+    if _bad:
+        results["broad_failed"] = True
+        partial = True
+    if args.compact and results.get("broad_failed"):
+        print("broad question failed — not asking the consolidated question "
+              "(it would be answered against an invented checklist)", file=sys.stderr)
+        for num, *_ in docs:
+            results["answers"][num] = None
+        docs_iter = []
+    elif args.compact:
         listing = ", ".join(d[0] for d in docs)
         fu = ("Now go through EACH of these documents one by one: " + listing +
               ". For EVERY one of them, output exactly one block:\n"

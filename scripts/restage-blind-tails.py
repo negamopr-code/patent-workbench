@@ -66,6 +66,14 @@ for i in range(0,len(todo),10):
                 # credit requires BOTH: every part of the doc ingested (F3c) and the
                 # reply actually addressing that doc. QUOTA-ABORT is never credit.
                 po=res.get("parts_ok") or {}
+                _broad=((res.get("answers") or {}).get("_broad") or "")
+                broad_ok=(not res.get("broad_failed")) and bool(_broad.strip()) \
+                         and '"status": "error"' not in _broad
+                _cons=((res.get("answers") or {}).get("_consolidated") or "")
+                # a reply that rebuilds its own checklist answered a different question
+                if ("not explicitly provided" in _cons) or ("reconstructed checklist" in _cons):
+                    broad_ok=False
+                    log(f"chunk {i//10+1}: REJECTED credit — reply used an invented checklist")
                 inv=set(res.get("source_inventory") or [])
                 def _full(n):
                     p=po.get(n) or {}
@@ -75,8 +83,8 @@ for i in range(0,len(todo),10):
                         if len(hits)<p["want"]: return False
                     return True
                 answered={k:v for k,v in (res.get("answers") or {}).items()
-                          if k not in ("_broad","_consolidated") and v and v!="QUOTA-ABORT"
-                          and _full(k)}
+                          if broad_ok and k not in ("_broad","_consolidated")
+                          and v and v!="QUOTA-ABORT" and _full(k)}
                 with open(LEDGER,"a") as f:
                     for num in chunk:
                         f.write(json.dumps({"tab":TAB,"number":num,"ts":ts,
