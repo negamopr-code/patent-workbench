@@ -3559,3 +3559,58 @@ Next test proposed (not launched): synonym-expanded re-ask is cheap and free —
 same A/B on the OTHER t10 GT docs the sweep missed or claimed thinly, and consider making
 the script emit a glossary line per term-of-art feature ("microwave = any radiated RF
 power transfer") so the recall floor stops being set by benchmark vocabulary.
+
+## 2026-08-27 — hypothesis-driver cycle 6 (FINAL, analysis-only, 16:15–17:10 UTC)
+
+Constraint (user 16:10): all deep-compare reads paused — graduate driver stopped via
+`/data/.opus_grad_driver.stop`, watchdog resume files parked `.PAUSED-BY-USER`, three NLM
+restage runners live (t11/t13 default, t14 work2) and untouched. **0 opus reads, 0 NLM jobs
+launched.** Mirror sync deliberately NOT run: `sync-nlm-mirror.sh` writes to the default-account
+notebook 35690175 while default-account restage jobs are running (A2 gate).
+
+All 15 open hypotheses brought to terminal status + H16 born. Register rewritten:
+`docs/experiments/hypotheses.md`; closing thesis `docs/experiments/thesis_2026-08-27.md`;
+three outcome rows appended to `docs/experiments/read_ledger.jsonl`.
+
+- **All five v2 screens are `step=done`** (t10 1459/1459 · t11 188/188 · t12 363/363 · t13 458/458 · t14 337/337).
+- **v2 accounting (the number that matters):** 2 556 screened → 1 433 graduate (56 %) / 1 004 reject / 119 `add_failed`.
+  Champions in scope 44: **31 graduated, 3 judged-missed, 10 never indexed** → judged recall 31/34 = 91.2 %,
+  **end-to-end 31/44 = 70.5 %**. The three v2 judged misses: t10 EP3849091, t10 CA2552849 (a re-queued
+  former `add_failed`), t14 CN115514036 — all 4.0.
+- **The auditor's "42 rejected champions" is 39 v1 + 3 v2**, and no v1-rejected champion (incl. t12's
+  registered control KR20260033205, opus 8.0) was ever re-screened by v2. New improvement item 4.
+- **Batch A′ closed two reject pools completely**: t12 33/33 and t13 66/66 opus-read → **0 champions**.
+  H4 terminal, H2 SUPPORTED-measured on t12 (its whole v2 scope, 319 docs, is read: 0 ≥4 anywhere).
+- **H6 settled by today's restage, at zero opus cost.** 118 t14 blind tails staged in FULL and
+  interrogated on all 22 MUST features: graduates (66) vs rejects (52) weighted yield 3.76 vs 1.03,
+  permutation p = 5e-5 — but the separation is carried entirely by w1–w3 category features
+  (F22 Battery +34.3 pp, F18 +21.1, F20 +20.4, F17 +20.0, F21 +14.6, F14–16 +10.6…12.1) and **every
+  weight-4 and weight-5 feature contributes +0.0**. The screen is a topicality filter, not a
+  feature matcher. 117/118 docs disclose no heavy feature at all → **H1 REFUTED for good**, and the
+  truncation-NO-GO restage recovered **zero** champions on t14 (its diagnostic value was the payoff).
+- **H16 NEW/SUPPORTED (from the 07:05 follow-up round):** with document and feature list held constant,
+  widening "using a microwave" to "any beamed/radiated RF wireless power transfer" flipped
+  US20120007441 F7/F8/F9 from NO/NO/NO to YES/YES/YES, NLM quoting the exact sentence opus cited.
+  Second artefact from the restage: NLM scored F1/F2/F3 YES on JP2021009830 by matching the checklist
+  LABELS to literal tokens in the text (`功能F1`) — label collision. Proposed new failure class **F3f**;
+  proposed remedies: genus/glossary line per term-of-art feature, and label the checklist `Q1…Qn`.
+- **H11 SUPPORTED analytically (0 reads):** the v2 queue is NOT the over-clip set — t10 in-scope
+  101 795 mean chars / 33.3 % >118 kB vs out-of-scope 100 896 / 33.0 %; 758 t10 docs never screened,
+  4 of them champions.
+- **H12 REFUTED as stated:** round cadence 788 s (1 screen) → 964 (2) → 1 410 (3) → ~1 520 (4–5).
+  A strict global lock predicts 3×; observed 1.8× ⇒ contention, not serialisation. Running three
+  accounts in parallel is worth it.
+- **H15 resolved harmlessly:** the post-restart "loose regime" on t10 (graduation 0.28 → 0.53)
+  delivered 6 of t10's 7 v2 graduate champions, including all 4 *valid* GT canaries in one round at
+  03:54:04 and 2 of the 3 re-queued `add_failed` champions — the rate change is confounded with the
+  re-queued tail's composition. Cause unrecoverable (rosters/answers not persisted).
+- **Marginal yield, measured:** the last 568 opus reads (08-26 21:00 → 08-27 10:34) produced 2
+  champions (0.35 %) — t14 KR102760076 5.0, t11 CN117352927 4.0 (the latter in `add_failed`). Batch A′'s
+  68 reject reads produced none. The read lines were already at marginal ≈ 0 when the user paused them.
+- Recommendation for the NLM-only phase (thesis §7e): fix `add_failed` first (10 champions, more than
+  any prompt change measured here); never record a heavy-feature NO from a single wording; use the
+  per-doc follow-up stage, not the screen, for relevance; roster ≤ 12 and persist every roster+answer;
+  re-screen the 39 v1-rejected champions before any clearance claim.
+
+Pre-audit caveat unchanged: all three auditors returned worst = FAIL at 07:05–07:12 today
+(head 09f61a9) and no supervisor pass has gated these numbers.
