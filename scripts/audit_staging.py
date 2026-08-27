@@ -60,7 +60,7 @@ CLIP = 120_000
 STAGE_PART_BYTES = 118_000     # mirror of api.STAGE_PART_BYTES (per-part budget)
 LIST_CAP = 50                  # max doc numbers embedded in a row's data
 SCHEMA = 1
-SCRIPT_VERSION = "2026-08-25.1"
+SCRIPT_VERSION = "2026-08-27.1"  # restage-aware S1 credit
 
 
 def jload(s, default):

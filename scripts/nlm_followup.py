@@ -116,15 +116,27 @@ def main():
         print(f"notebook create failed: {res}", file=sys.stderr)
         sys.exit(3)
     partial = False
+    parts_ok = {}          # doc -> {"want": K, "ok": k}  (F3c: credit needs ALL parts)
     for num, title, ab, cl, de, dg in docs:
-        for src_title, text in split_parts(num, title, compose_blob(num, title, ab, cl, de, dg)):
+        want = split_parts(num, title, compose_blob(num, title, ab, cl, de, dg))
+        parts_ok[num] = {"want": len(want), "ok": 0}
+        for src_title, text in want:
             r = nlm_bridge.add_source_text(nb, src_title, text, profile=prof)
-            if not r.get("ok"):
+            if r.get("ok"):
+                parts_ok[num]["ok"] += 1
+            else:
                 partial = True
     nlm_bridge.wait_sources_ready(nb, timeout=600, profile=prof)
 
     results = {"tab": args.tab, "notebook": nb, "ts": int(time.time()),
-               "docs": [d[0] for d in docs], "answers": {}}
+               "docs": [d[0] for d in docs], "answers": {}, "parts_ok": parts_ok}
+    # post-ingest source inventory: the ONLY re-verifiable evidence that the doc
+    # reached the notebook in full, since the notebook is deleted afterwards
+    try:
+        inv = nlm_bridge.list_sources(nb, profile=prof)
+        results["source_inventory"] = [s.get("title") for s in (inv.get("sources") or [])]
+    except Exception as e:  # noqa: BLE001
+        results["source_inventory_error"] = str(e)
     broad = ("For EACH numbered feature below, name every candidate source document "
              "that discloses it — explicitly or as an implicit realisation (a "
              "document that physically does it without the literal words). Reply "

@@ -527,3 +527,100 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   `/proc`, nothing else may be launched on default (t13 claims, t13 R6 follow-up, sync-nlm-mirror)
   or work2 (t12) while they run — verified by hand via `/proc/*/cmdline` at 06:18: exactly one
   runner per tab, drawnformula free.
+
+### 2026-08-27 ~07:10 UTC — recall-integrity audit, ALL tabs t10–t14 (deploy head 09f61a9)
+
+Run: `docker exec -i -w /app patent-bench python3 - --json --deploy-head 09f61a9 --registry "$(cat
+docs/controls-registry.json)" --lane-report /data/audits/lane_lexical_10.json < scripts/audit_recall.py`
+→ `/data/audits/audit_recall.json`, worst **FAIL**. DB stable: max scored_at 05:48 UTC (opus
+deep-compare parked by the app watchdog until 10:20 UTC); verdict holds for that window.
+
+- **Measured claims-sweep recall vs opus ≥4.0 GT (canary excluded): t10 11/13 (85%) · t11 90/94 (96%) ·
+  t12 14/14 (100%) · t13 7/21 (33%) FAIL · t14 60/60 (100%) — aggregate 182/202 (90%).** Moves since the
+  08-26 19:51 verdict come from exactly 2 new GT docs out of 549 new opus reads (t11 CN117352927 4.0,
+  t14 KR102760076 5.0, both claimed); t10/t12/t13 numerically unchanged.
+- **t13 7/21 decomposed by round kind: `must` (the sweep) 2/21 = 10%; the other 5 hits came only from
+  the `must-followup` instrument.** Only CN116508192 was found by must-rounds alone. Concrete F3a
+  evidence: AU2022338850 (opus 4.0) sat in t13 round 33, roster 35, and the whole round's answer is
+  `FEATURE 1: NONE … FEATURE 9: NONE` (143 chars for 35 docs). All 14 t13 misses were staged in
+  roster-35 rounds — none is a staging gap; 0 never-staged on every tab.
+- **The five overnight-FINISHED screens contribute ZERO rows to `nlm_claims`** (latest claims ts:
+  t10 08-23 10:01, t11 08-15, t12 08-23, t13 08-23 17:32, t14 08-15). R1–R6 therefore measure the
+  legacy claims sweep only — screen completion changes none of the recall numbers above. F7-class
+  control gap first logged 2026-08-24, still open.
+- **Screen-lane recall (auditor cross-check, GT among docs that reached NotebookLM): t10 7/9 · t11 68/93 ·
+  t12 8/14 · t13 17/20 · t14 47/53 = 147/189 (78%); 42 opus ≥4 docs were explicitly REJECTED by a
+  finished screen** — including the registered t12 champion control KR20260033205 (opus 8.0, screen
+  `rejected`), t12 CN119833811 (5.0, rejected) and t10 EP3849091 (4.0, rejected); t13 CN116508192 (5.0)
+  is `add_failed` (F3c-ns, never reached the notebook). Bias disclosure: opus reads every graduate, so
+  this figure is optimistically biased and reject-pool reads are not a random sample. Hit rate among
+  opus-read docs, graduate vs rejected: t10 1.5%/1.2%, t11 16.4%/15.3%, t12 1.9%/3.3%, t13 2.5%/1.0%,
+  t14 11.7%/10.5% — on 4 of 5 tabs the graduate label shows no measurable lift.
+- FAILs: R2-batch-corridor t10 59/216 (registered 59) · t11 46/78 · t12 61/118 · t13 119/168
+  (registered 119) · t14 80/139 (t11/t12/t14 remain UNREGISTERED, unchanged counts); R1 t13 7/21;
+  R5 t10 lexical lane (US20230337972 rank 1696/2041 vs max 200; CN113924787 1907 vs 500 — lane report
+  08-20, stale). WARNs: R3 no verbatim canary on t10/t11/t12/t14 (corpus-wide negatives scoped only);
+  R6 queues t10 [US20120007441, CN103683526] (both `nlm_screen_state` NULL = the pre-screen 758 cohort,
+  so no screen can rescue them) and t13 [CN218958581, AU2022338850, CN220510820, CN120073105,
+  CN120433348 (add_failed)]. R4 PASS on all five tabs — but t13's PASS rests on the follow-up stage
+  (CN205265271 claimed by `must-followup` only).
+- **Registry staleness (NEW, needs user approval to fix — not edited here):** the approved-baseline
+  scope texts still quote "recall: 7/12" (t10) and "recall: 1/14" (t13); measured today they are 11/13
+  and 7/21. R5 is unexercised on t11–t14 and for the embed lane everywhere (no lane reports exist);
+  the audit silently skips tabs without one. Data hygiene: `followup_ledger.jsonl` gained a t14 row at
+  06:22 with `"docs": []`.
+- F6 hand-off: treating the finished screens as if they changed sweep coverage/clearance is
+  discovery-presented-as-relevance → ranking-integrity-auditor C7, not judged here.
+- Verdict: **VIOLATIONS** — no tab is cleared; t12/t14/t11 100%/100%/96% recall figures describe the
+  legacy claims sweep only.
+
+### 2026-08-27 ~07:06 UTC — staging-completeness audit, ALL tabs (deploy head 09f61a9, LIVE)
+
+Run: `docker exec -i -w /app patent-bench python3 - --json --deploy-head 09f61a9 < scripts/audit_staging.py`
+→ `/data/audits/audit_staging.json` (14 tabs, `no_live=false`, 55 rows), worst **FAIL**. DB stable:
+max scored_at 05:48 UTC (opus deep-compare parked by the app watchdog until 10:20 UTC) and all five
+screens finished — the verdict holds for that window only.
+
+- **S1 blind tails (FAIL): t11 30 · t13 53 · t14 128 = 211 docs whose tails no instrument has ever
+  seen.** t10 and t12 have 0 (S1 PASS). Independently recomputed from sqlite (`mode=ro`), identical to
+  the script. Largest per tab: t11 `WO2023273660` 350 415 B (230 415 B = 65.8% lost, clip inside
+  DESCRIPTION, first lost text `[0067] 在其中一实施方式中…`); t13 `WO2022264760` 322 909 B (62.8% lost,
+  DESCRIPTION); t14 `WO2016098802` 329 640 B (63.6% lost, DESCRIPTION, lost from `[0051] 図４Ａ…`).
+- **S1 MOVED vs the 05:40 run: t13 82 → 53 (−29), t14 149 → 128 (−21), t11 30 → 30.** The movement is
+  real, not a live/no-live artefact (no-live recompute gives the same 30/53/128): all 50 docs that left
+  the pool received a deep-read score at 05:43–05:48 UTC (e.g. t13 `CN121756950` 3.0, t14 `KR102760076`
+  5.0). ⇒ `/data/audits/blind_t13.json` (82) and `blind_t14.json` (149) are STALE inputs — the running
+  restage jobs would spend NLM quota on ~50 already-read docs.
+- **S1 restage credit = 0 docs on every tab (`restage_verified_full: 0`).** `restage_ledger.jsonl` has
+  10 rows, all t14, all `answered:false` (the chunk's consolidated query returned `QUOTA-ABORT`). No
+  doc is currently credited out of the blind pool by the new `restaged_full()` path. Soundness gaps in
+  the credit (NEW): (a) `answered` = the doc number appears as a substring of one consolidated NLM
+  reply — no check that all K parts were ingested; `nlm_followup` sets a global `partial` flag on
+  `add_source_text` failure and `restage-blind-tails` treats exit 1 (partial) as success; (b) the
+  follow-up notebook is deleted immediately and the evidence JSON records no source inventory, so the
+  credit is unfalsifiable afterwards; (c) `restage-blind-tails.py` marks a doc done in
+  `restage_t14.progress.json` when its key exists in `answers` — `QUOTA-ABORT` counts, so
+  `DE102017110483` is already excluded from retry while still blind.
+- **t11's 30 blind tails were restaged at 05:46–06:09 (3 chunks, `followup_ledger.jsonl` notebooks
+  347ffd01/f54128e3/17bd5a24) under the PRE-fix runner, which discarded the answers** — that ledger
+  records doc numbers only and the notebooks were deleted. The audit's refusal to credit them is
+  correct: no evidence content exists.
+- **S5 add_failed (FAIL): t10 15 · t11 27 · t12 26 · t13 24 · t14 27 = 119 docs NotebookLM never saw.**
+  Unchanged vs 05:42; registered baseline is 13 ⇒ still GROWTH, still gating.
+- S1 WARN (truncated but deep-read): t10 792 · t11 110 · t12 253 · t13 340 · t14 116. `parts_verified_full`
+  (live notebooks): t10 18 · t11 21 · t12 33 · t13 27 · t14 18 — these reduced the truncated count, none
+  of them reduced a blind count. **NEW caveat: "full-length deep read" is not literal for 16 docs**
+  (t12 15 / t13 1) whose abstract+claims+description exceeds `claude_bridge.MAX_FULLTEXT_CHARS = 400_000`
+  (largest `KR20140094482` 410 852 chars, 2.7% unread); `deep_map` clips at that cap.
+- S2 cut points: t10–t14 clip lands in DESCRIPTION for 1 797 of the 1 822 truncated docs on t10–t14 (DIGEST 5); CLAIMS for 20
+  (t12 18, t13 2 — e.g. `KR20230036637` 717 334 B cut inside CLAIMS).
+- **S3 live inventory PASS on all five tabs** (2 notebooks listed per tab, no listing failure at the
+  ~100-notebook cap): t10 12 · t11 8 · t12 12 · t13 12 · t14 10 sources == last roster. F4 is clear for
+  answers from the LAST round only; answers from any earlier round remain void. S4 PASS everywhere
+  (t10 237/240, t11 1/8, t12 7/132, t13 20/120, t14 150/150).
+- Hygiene (NEW, minor): `audit_staging.py` still reports `SCRIPT_VERSION = "2026-08-25.1"` after the
+  08-27 restage feature, so `history.jsonl` cannot distinguish restage-aware runs; the previous
+  `audit_staging.json` on disk (06:17) was a `--tab 11 --no-live` run, which degrades the supervisor's
+  all-tab freshness view.
+- Verdict: **VIOLATIONS** — no "assessed in full" claim is supportable on t11/t13/t14 (211 blind tails)
+  and none on any of t10–t14 while 119 add_failed docs never reached NotebookLM.

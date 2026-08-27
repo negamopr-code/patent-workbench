@@ -38,19 +38,35 @@ for i in range(0,len(todo),10):
             ts=int(time.time())
             with open(f"{EV}/t{TAB}_{ts}.json","w") as f: f.write(r.stdout)
             if res:
+                # credit requires BOTH: every part of the doc ingested (F3c) and the
+                # reply actually addressing that doc. QUOTA-ABORT is never credit.
+                po=res.get("parts_ok") or {}
+                inv=set(res.get("source_inventory") or [])
+                def _full(n):
+                    p=po.get(n) or {}
+                    if not p.get("want") or p.get("ok")!=p.get("want"): return False
+                    if inv:   # every part title of this doc must be in the live inventory
+                        hits=[t for t in inv if t and t.startswith(n)]
+                        if len(hits)<p["want"]: return False
+                    return True
                 answered={k:v for k,v in (res.get("answers") or {}).items()
-                          if k not in ("_broad","_consolidated") and v and v!="QUOTA-ABORT"}
+                          if k not in ("_broad","_consolidated") and v and v!="QUOTA-ABORT"
+                          and _full(k)}
                 with open(LEDGER,"a") as f:
                     for num in chunk:
                         f.write(json.dumps({"tab":TAB,"number":num,"ts":ts,
                                             "notebook":res.get("notebook"),"mode":"compact",
                                             "answered":num in answered,
+                                            "parts_ok":(res.get("parts_ok") or {}).get(num),
+                                            "inventory_seen":bool(res.get("source_inventory")),
                                             "evidence":f"{EV}/t{TAB}_{ts}.json"})+"\n")
         if r.returncode==2:
             log(f"chunk {i//10+1}: QUOTA -> sleep 3600"); time.sleep(3600); continue
         log(f"chunk {i//10+1}: exit={r.returncode} {(r.stderr or '')[-200:].strip()!r}")
         if r.returncode in (0,1):
-            ok=[n for n in chunk if not res or n in (res.get("answers") or {})]
+            # only docs with real, credited evidence count as done — a QUOTA-ABORT
+            # or a partially-ingested doc must come back on the next pass
+            ok=[n for n in chunk if res and n in answered] if res else []
             done.update(ok); json.dump(sorted(done),open(PROG,"w"))
             log(f"chunk {i//10+1}: persisted {len(ok)}/{len(chunk)} answers")
         else: time.sleep(600)
