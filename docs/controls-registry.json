@@ -57,7 +57,8 @@
      "why": "opus 4.0, missed by the sweep (non-US-origin miss cluster)"
     }
    ],
-   "ground_truth_min_score": 4.0
+   "ground_truth_min_score": 4.0,
+   "_verbatim_note": "benchmark = EP application 22933478.4 (amended claims PDF, no publication number in DB); family member not in corpus (no opus 10.0) → verbatim canary needs the publication number from the user, then either a corpus family member or a planted doc (attempted 2026-08-27; EPO register 403 from the container)"
   },
   "11": {
    "verbatim_canary": null,
@@ -77,7 +78,8 @@
      "expect_lane_rank_max": 300
     }
    ],
-   "ground_truth_min_score": 4.0
+   "ground_truth_min_score": 4.0,
+   "_verbatim_note": "benchmark = claims.pdf, no application/publication number recoverable from text → verbatim canary needs the number from the user (attempted 2026-08-27; EPO register 403 from the container)"
   },
   "12": {
    "verbatim_canary": null,
@@ -97,7 +99,8 @@
      "expect_lane_rank_max": 300
     }
    ],
-   "ground_truth_min_score": 4.0
+   "ground_truth_min_score": 4.0,
+   "_verbatim_note": "benchmark = EP application 23907723.3 (EESR amended claims); family member not in corpus → needs publication number from the user (attempted 2026-08-27; EPO register 403 from the container)"
   },
   "14": {
    "verbatim_canary": null,
@@ -117,7 +120,8 @@
      "expect_lane_rank_max": 300
     }
    ],
-   "ground_truth_min_score": 4.0
+   "ground_truth_min_score": 4.0,
+   "_verbatim_note": "benchmark = claims.pdf, attorney ref ESPKE24-1580PCEP only → needs publication number from the user (attempted 2026-08-27; EPO register 403 from the container)"
   }
  },
  "nlm_accounts": {
