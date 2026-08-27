@@ -39,12 +39,47 @@ def registered_accounts() -> dict[str, str]:
     return {}
 
 
+def out_of_band_jobs(tab: int) -> list[str]:
+    """NLM jobs that do NOT go through the app's locks and are therefore invisible
+    to the lock census — currently scripts/restage-blind-tails.py + the nlm_followup
+    child it drives (F7: a gate that only sees the app relies on session discipline).
+    Detected from /proc, so it works inside the container where `ps` is absent."""
+    out = []
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return out
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                cmd = fh.read().decode("utf-8", "ignore").replace("\0", " ")
+        except OSError:
+            continue
+        if not cmd.strip():
+            continue
+        args = cmd.split()
+        if "restage-blind-tails.py" in cmd and str(tab) in args:
+            out.append(f"restage[{pid}]")
+        elif "nlm_followup.py" in cmd and "--tab" in args:
+            try:
+                if args[args.index("--tab") + 1] == str(tab):
+                    out.append(f"followup[{pid}]")
+            except (ValueError, IndexError):
+                pass
+    return out
+
+
 def running_jobs(tab: int) -> list[str]:
     out = []
     for kind, lock in LOCKS.items():
         p = os.path.join(DATA, lock.format(t=tab))
         if os.path.exists(p) and time.time() - os.path.getmtime(p) < SCREEN_TTL:
             out.append(kind)
+    oob = out_of_band_jobs(tab)
+    # a restage runner and the nlm_followup child it drives are ONE logical job
+    if any(j.startswith("restage[") for j in oob):
+        oob = [j for j in oob if not j.startswith("followup[")]
+    out += oob
     return out
 
 
