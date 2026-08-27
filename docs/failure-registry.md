@@ -474,3 +474,33 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   CN120073105, CN120433348]. Re-run guidance: auditors on t10/t12/t13 should wait for the
   t12 3 in-flight + t10 100-batch opus reads to land (t10 driver batch ≈ 92 remaining) —
   re-running now only produces another STALE set. Verdict: BLOCKED.
+- 2026-08-27 ~05:50 UTC container clock (supervisor pass after deploy 05:42 — container
+  recreated from 17b74ab tree, src head da0463f; scripts head now 2d55ba7 = restage runner
+  committed 05:43, copied to /data; /api/version does not exist (404), /api/health ok).
+  Gate audit_accounts: A1 PASS all five bindings, A2 "no running NLM jobs" — BUT two NLM
+  jobs ARE running (restage-blind-tails t11 pid 489 → nlm_followup default profile; t14
+  pid 498 → nlm_followup work2 profile) that the gate cannot see (it reads the app's
+  screen/claims status routes only). A2 verified by hand from /proc cmdlines: one runner
+  per tab, no duplicates, default=t11 only, work2=t14 only, drawnformula free. Opus driver
+  re-armed (pid 29) — .auto_refetch.lock + .claude_read_10/13/14.lock are its live reads
+  (started 05:42:19–26), not stale. No pending_trigger. Freshness (audit_status on
+  2d55ba7): t10–t14 staging/recall/ranking all STALE — staging (05:40, defa67e) already
+  overtaken by 33/16/12 new reads on t10/t13/t14; recall+ranking (08-26 19:51) overtaken
+  by 201/21/159/109/21 reads on t10/t11/t12/t13/t14. Cross-checks: S1 blind shrink
+  (t11 40→30, t12 90→0, t13 174→82, t14 166→149) is backed by those reads — no
+  contradiction; live nlm_screen_state add_failed = verdict S5 rows (15/27/26/24/27).
+  Baselines: S5 t13 24 > registered 13 = GROWTH (gates; t11 27 ≤ 40, t10 15 ≤ 173,
+  t12 26 ≤ 47, t14 27 = 37 ok); C1 t13 330 ≤ 401; R2 t10 59 / t13 119 = registered.
+  Unregistered gating FAILs: S1 t11 30 / t13 82 / t14 149 (user chose restage over
+  registering); R1 t13 7/21; R2 t11 46 / t12 61 / t14 80; R5 t10 lexical lane. R6 queue
+  non-empty: t10 [US20120007441, CN103683526]; t13 [CN218958581, AU2022338850,
+  CN220510820, CN120073105, CN120433348]. Restage evidence defect: nlm_followup emits
+  the per-doc YES/PARTIAL/NO answers on stdout only and deletes the notebook (no
+  --keep-notebook); restage-blind-tails captures stdout and DISCARDS it — only a ledger
+  line (docs + deleted notebook id) survives, and audit_staging S1 never consults the
+  ledger. As launched the restage cannot turn S1 green and leaves no auditable answer.
+  F4: dedicated per-chunk notebooks, never the rolling one — no F4 confound. Open
+  coverage question: t10 has 758 fetched docs with nlm_screen_state NULL (screened 1291
+  of 2049) although the t10 screen is reported "phase done". audit_full_staging.json
+  still 08-25 16:51 FAIL (assessed_truncated t11 75 / t12 231 / t13 271 / t14 209) —
+  stale, gates any "assessed in full" claim. Verdict: BLOCKED.

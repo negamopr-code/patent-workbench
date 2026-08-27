@@ -28,6 +28,11 @@ Checks (per tab with an nlm_claims sweep state or nlm-screen history):
      rotated-out notebooks stay counted -> the count is an UPPER BOUND.
      add_failed docs (never reached NotebookLM) are excluded from both pools
      and reported by S5 instead.
+     Restage-aware since 2026-08-27: a doc with an ANSWERED row in
+     /data/audits/restage_ledger.jsonl was re-staged in full into a dedicated
+     follow-up notebook (parts split under the clip) and interrogated there —
+     an instrument saw its tail — so it is credited (restage_verified_full)
+     and leaves the blind pool. The evidence file per row is kept.
   S2 cut-point report — which section the clip lands in (INFO, top examples).
   S3 live inventory — the sweep state's notebook must currently hold exactly
      the last roster's sources (+ benchmark); any answer interpreted against a
@@ -157,6 +162,27 @@ def live_titles(cx, tab, nb, no_live):
         return None, str(e)
 
 
+RESTAGE_LEDGER = "/data/audits/restage_ledger.jsonl"
+
+
+def restaged_full(tab):
+    """Doc numbers re-staged in FULL into a dedicated follow-up notebook and
+    actually answered there (restage-blind-tails.py). Evidence file per row."""
+    out = set()
+    try:
+        with open(RESTAGE_LEDGER) as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if r.get("tab") == tab and r.get("answered") and r.get("number"):
+                    out.add(r["number"])
+    except FileNotFoundError:
+        pass
+    return out
+
+
 def audit_tab(cx, rep, tab, no_live):
     docs = [dict(zip(("id", "number", "score", "title", "ab", "cl", "de", "dg", "scr"), r))
             for r in cx.execute(
@@ -179,6 +205,7 @@ def audit_tab(cx, rep, tab, no_live):
     claims_nb = (st or {}).get("notebook_id")
     claims_titles = live.get(claims_nb)
     live_sets = [set(t) for t in live.values()]
+    restaged = restaged_full(tab)
 
     # ---- S5: add_failed = never reached NotebookLM at all ---------------------
     add_failed = sorted(d["number"] for d in docs if d["scr"] == "add_failed")
@@ -191,7 +218,7 @@ def audit_tab(cx, rep, tab, no_live):
         rep.add("PASS", tab, "S5-not-staged-add_failed", "no add_failed doc")
 
     # ---- S1 + S2: truncation census over the composed staged blob ------------
-    trunc, blind, cuts, full = [], [], {}, []
+    trunc, blind, cuts, full, restaged_hit = [], [], {}, [], []
     for d in docs:
         if d["scr"] == "add_failed":
             continue   # not staged at all: neither truncated nor a blind tail (S5)
@@ -203,6 +230,9 @@ def audit_tab(cx, rep, tab, no_live):
             if any(all(t in s for t in want) for s in live_sets):
                 full.append(d["number"])
                 continue
+            if d["number"] in restaged:
+                restaged_hit.append(d["number"])
+                continue
             sec = cut_section(blob)
             cuts[sec] = cuts.get(sec, 0) + 1
             trunc.append((d["number"], n, sec))
@@ -210,7 +240,8 @@ def audit_tab(cx, rep, tab, no_live):
                 blind.append(d["number"])
     excl = (f"; {len(add_failed)} add_failed excluded" if add_failed else "")
     s1_data = {"parts_verified_full": len(full), "add_failed_excluded": len(add_failed),
-               "live_notebooks_listed": len(live)}
+               "live_notebooks_listed": len(live),
+               "restage_verified_full": len(restaged_hit)}
     if blind:
         rep.add("FAIL", tab, "S1-blind-tails",
                 f"{len(blind)} doc(s) staged TRUNCATED at {CLIP} bytes AND never "
