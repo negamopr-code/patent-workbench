@@ -7,10 +7,13 @@ NLM account. Runs INSIDE patent-bench:
 Exit 2 (quota) from nlm_followup -> sleep 1h and retry the same chunk. Log /data/.restage_t<tab>.log.
 Progress /data/audits/restage_t<tab>.progress.json (done docs) -> idempotent re-arm after a restart.
 
-EVIDENCE (fixed 2026-08-27 after the supervisor caught it): nlm_followup deletes its notebook and
-prints the per-doc YES/PARTIAL/NO answers to stdout ONLY. This runner therefore keeps the notebook
-(--keep-notebook) and persists the full result JSON to /data/audits/restage/t<tab>_<ts>.json, and
-appends one restage_ledger.jsonl row per doc {tab, number, ts, notebook, parts_ok, answered}.
+EVIDENCE (fixed 2026-08-27 after the supervisor caught it): nlm_followup prints the per-doc
+YES/PARTIAL/NO answers to stdout ONLY and this runner used to discard them. It now persists the
+full result JSON to /data/audits/restage/t<tab>_<ts>.json (that file IS the evidence), and
+appends one restage_ledger.jsonl row per doc {tab, number, ts, notebook, mode, answered}.
+The notebook is DELETED after each chunk (nlm_followup default): NotebookLM caps an account at
+~100 notebooks and the default account is already at the cap, so keeping them stalls the run
+(hit 2026-08-27 06:25). --compact keeps it to 2 NLM queries per 10-doc chunk (quota doctrine).
 audit_staging S1 credits a doc as staged-in-full when that row exists (--restage-ledger).
 """
 import json, os, subprocess, sys, time
@@ -27,7 +30,7 @@ for i in range(0,len(todo),10):
     chunk=todo[i:i+10]
     while True:
         r=subprocess.run(["python3","/data/nlm_followup.py","--tab",str(TAB),"--docs",",".join(chunk),
-                          "--json","--keep-notebook"],capture_output=True,text=True)
+                          "--json","--compact"],capture_output=True,text=True)
         res=None
         if r.stdout.strip():
             try: res=json.loads(r.stdout)
@@ -36,11 +39,11 @@ for i in range(0,len(todo),10):
             with open(f"{EV}/t{TAB}_{ts}.json","w") as f: f.write(r.stdout)
             if res:
                 answered={k:v for k,v in (res.get("answers") or {}).items()
-                          if k!="_broad" and v and v!="QUOTA-ABORT"}
+                          if k not in ("_broad","_consolidated") and v and v!="QUOTA-ABORT"}
                 with open(LEDGER,"a") as f:
                     for num in chunk:
                         f.write(json.dumps({"tab":TAB,"number":num,"ts":ts,
-                                            "notebook":res.get("notebook"),
+                                            "notebook":res.get("notebook"),"mode":"compact",
                                             "answered":num in answered,
                                             "evidence":f"{EV}/t{TAB}_{ts}.json"})+"\n")
         if r.returncode==2:

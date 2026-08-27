@@ -64,6 +64,10 @@ def main():
     ap.add_argument("--tab", type=int, required=True)
     ap.add_argument("--docs", required=True, help="comma-separated doc numbers")
     ap.add_argument("--keep-notebook", action="store_true")
+    ap.add_argument("--compact", action="store_true",
+                    help="one CONSOLIDATED per-doc question instead of one query per doc "
+                         "(2 NLM queries per notebook instead of 1+N) — quota doctrine "
+                         "2026-08-27: big batches, few well-designed questions")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
     nums = [n.strip() for n in args.docs.split(",") if n.strip()][:MAX_DOCS]
@@ -131,7 +135,32 @@ def main():
         print("quota exhausted — aborting", file=sys.stderr)
         sys.exit(2)
     results["answers"]["_broad"] = r.get("answer") or r.get("error")
-    for num, *_ in docs:
+    if args.compact:
+        listing = ", ".join(d[0] for d in docs)
+        fu = ("Now go through EACH of these documents one by one: " + listing +
+              ". For EVERY one of them, output exactly one block:\n"
+              "<NUMBER>: F<k>=YES|PARTIAL|NO for every numbered feature of the "
+              "checklist above, then ' | ' and a short justification citing where "
+              "in that document (section/claim) the decisive disclosure is — or "
+              "'no disclosure found' if none. Do not skip a document; if a document "
+              "says nothing about a feature, still write F<k>=NO.")
+        r = nlm_bridge.query(nb, fu, profile=prof)
+        if nlm_bridge.is_quota_error(r):
+            partial = True
+            for num, *_ in docs:
+                results["answers"][num] = "QUOTA-ABORT"
+        else:
+            ans = r.get("answer") or r.get("error") or ""
+            results["answers"]["_consolidated"] = ans
+            for num, *_ in docs:
+                # a doc counts as answered only if the reply actually addresses it
+                results["answers"][num] = ans if num in ans else None
+                if num not in ans:
+                    partial = True
+        docs_iter = []
+    else:
+        docs_iter = docs
+    for num, *_ in docs_iter:
         fu = (f"Now check ONE document specifically: {num}. For EACH numbered "
               "feature of the checklist above, state whether this document "
               "discloses it (YES / PARTIAL / NO) with a one-line justification "
@@ -146,6 +175,7 @@ def main():
     os.makedirs(AUDIT_DIR, exist_ok=True)
     with open(os.path.join(AUDIT_DIR, "followup_ledger.jsonl"), "a") as fh:
         fh.write(json.dumps({"tab": args.tab, "ts": results["ts"], "notebook": nb,
+                             "mode": "compact" if args.compact else "per-doc",
                              "docs": [d[0] for d in docs
                                       if results["answers"].get(d[0])
                                       not in (None, "QUOTA-ABORT")]},
