@@ -16,7 +16,7 @@ The notebook is DELETED after each chunk (nlm_followup default): NotebookLM caps
 (hit 2026-08-27 06:25). --compact keeps it to 2 NLM queries per 10-doc chunk (quota doctrine).
 audit_staging S1 credits a doc as staged-in-full when that row exists (--restage-ledger).
 """
-import json, os, sqlite3, subprocess, sys, time
+import json, os, re, sqlite3, subprocess, sys, time
 TAB, LIST = int(sys.argv[1]), sys.argv[2]
 LOG=f"/data/.restage_t{TAB}.log"; PROG=f"/data/audits/restage_t{TAB}.progress.json"
 EV="/data/audits/restage"; LEDGER="/data/audits/restage_ledger.jsonl"
@@ -75,6 +75,17 @@ for i in range(0,len(todo),10):
                     broad_ok=False
                     log(f"chunk {i//10+1}: REJECTED credit — reply used an invented checklist")
                 inv=set(res.get("source_inventory") or [])
+                def _addressed(n, txt):
+                    # the doc must carry its OWN grid, not merely be name-dropped in
+                    # another document's justification (auditor 2026-08-27)
+                    # real shape: "**NUM**: **F1=NO** **F2=NO** ..." — allow markdown
+                    # and any leading feature index, but the grid must follow the
+                    # number within a short window, not merely mention it
+                    m = re.search(rf"\**{re.escape(n)}\**\s*[:\-—]", txt or "", re.IGNORECASE)
+                    if not m:
+                        return False
+                    return bool(re.search(r"\**F\s*\d+\s*\**\s*=\s*\**\s*(YES|NO|PARTIAL)",
+                                          (txt or "")[m.end():m.end() + 200], re.IGNORECASE))
                 def _full(n):
                     p=po.get(n) or {}
                     if not p.get("want") or p.get("ok")!=p.get("want"): return False
@@ -84,7 +95,7 @@ for i in range(0,len(todo),10):
                     return True
                 answered={k:v for k,v in (res.get("answers") or {}).items()
                           if broad_ok and k not in ("_broad","_consolidated")
-                          and v and v!="QUOTA-ABORT" and _full(k)}
+                          and v and v!="QUOTA-ABORT" and _full(k) and _addressed(k, v)}
                 with open(LEDGER,"a") as f:
                     for num in chunk:
                         f.write(json.dumps({"tab":TAB,"number":num,"ts":ts,

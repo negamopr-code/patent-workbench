@@ -850,3 +850,80 @@ src/scripts = **a2bb65f**; verdicts on disk carry 09f61a9 / f5de302 → STALE(de
 - **Verdict: BLOCKED.** The DB-derivable arithmetic of the thesis is sound and reproduces
   exactly; what is not gated is the staging evidence for t10–t13 (file overwritten), the
   restage credit on t14 (10 docs credited on a wrong-checklist reply), and H16 (journal-only).
+
+### 2026-08-27 16:47 UTC — staging-completeness audit, ALL tabs RESTORED (deploy head 52efb22, `--no-live`)
+
+- **Evidence restored.** `/data/audits/audit_staging.json` is again an all-tab verdict
+  (`ts 1787849217`, `args {"tab": null, "json": true, "no_live": true, "deploy_head": "52efb22"}`,
+  `script_version 2026-08-27.1`), with `anchors` for all 14 ready tabs — the 16:11 `--tab 14`
+  probe that overwrote the 07:06 file is superseded, and `audit_status` can no longer read
+  `MISSING(tab)` on t10–t13 (freshness is keyed on `anchors[str(tab)]`).
+- **S3 SKIPPED ON EVERY TAB (`--no-live`), disclosed.** A2 gate PASS with two live out-of-band
+  runners (`default` → `t11:restage[25412]`, `work2` → `t14:restage[25404]`); the `default`
+  account's Q&A quota is exhausted. `audit_staging` has no per-tab live switch, and a
+  `list_sources(force=True)` on a profile mid-chunk would contend with the remediation itself,
+  so the whole run was `--no-live`. Comparability is not affected: the 07:06 entry records that
+  the blind counts are live/no-live invariant ("no-live recompute gives the same 30/53/128") and
+  `parts_verified_full` reduced no blind count then; this run reports `parts_verified_full: 0`
+  and `live_notebooks_listed: 0` on every tab. **Consequence: no F4 clearance exists right now —
+  no answer from any t10–t14 screen/claims notebook may be interpreted until a live S3 is run.**
+- **Worst level per tab: t10–t14 all FAIL** (t1–t9 WARN, out of scope). Every t10–t14 FAIL is
+  S5, plus S1 on t11/t13/t14. S4 PASS on all five (t10 237/240, t11 1/8, t12 7/132, t13 20/120,
+  t14 150/150). S2: the clip lands in DESCRIPTION for 1 673 of 1 693 truncated docs; the rest in
+  CLAIMS (20) or DIGEST (7).
+- **S1 blind tails: t11 30 · t13 48 · t14 10 = 88** (t10 0, t12 0 — S1 WARN only). vs the 07:06
+  prose (t11 30 · t13 53 · t14 128 = 211): **−123**, and every doc that left the pool is
+  accounted for individually —
+  - t11: the *identical set* of 30 (set equality against `/data/audits/blind_t11.json`).
+  - t13: 53 → 48; the 5 leavers (`AU2020250299`, `CN101326796`, `CN112654325`, `CN113302890`,
+    `US20120112536`) each gained a real `claude-opus-5` deep read at 11:14 UTC today
+    (`scored_at` 1787829252–1787829298) — a read, not a bookkeeping change.
+  - t14: 128 → 10; 118 left via `restage_verified_full` and the residual 10 are *exactly* the
+    10 docs requeued from chunk `ts=1787848428` (set equality with the `uncredited_reason`
+    rows). No new entrant on any tab.
+- **Raw re-verification from sqlite (`mode=ro`), independent of the audit script** — the audit's
+  `compose_blob` was first confirmed byte-exact against `web/api.py:_doc_source_text` and
+  `CLIP=120_000` against `nlm_bridge._clip_bytes`:
+  - t13 `CA3079164` — **187 087 B composed, 67 087 B (35 %) never staged**, clip lands in
+    DESCRIPTION (NLM saw 103 455 of 158 160 description bytes = 65 %); `score` null.
+  - t11 `US20090311607` — 166 628 B, 46 628 B (27 %) unstaged, cut in DESCRIPTION, `score` null.
+  - t14 `US20060158947` — 139 204 B, 19 204 B (13 %) unstaged, cut in DESCRIPTION, `score` null.
+- **S5 add_failed: t10 15 · t11 27 · t12 26 · t13 24 · t14 27 = 119** (unchanged from 07:06).
+  Against the registered baselines (t10 173 / t11 40 / t12 47 / t13 13 / t14 37): all within
+  baseline except **t13 24 > 13 = GROWTH, still gating** — KNOWN, first flagged in today's
+  05:40/07:06 passes, still unregistered and unexplained.
+- **RESTAGE CREDIT IS NOW SOUND for the 118 t14 docs — verified against raw evidence, not just
+  the ledger flag.** Ledger = 148 rows, 118 credited / 30 not, all tab 14 (t11 and t13 have zero
+  ledger rows, so their 30 + 48 blind tails carry no credit at all). Per credited doc: (a) `parts_ok`
+  `want == ok == K` where K was **recomputed independently from the DB blob size** (105 docs K=2,
+  13 docs K=3) — 0 disagreements; (b) the chunk's post-ingest `source_inventory` holds ≥K source
+  titles for that number — 0 gaps; (c) the doc has its **own** `NUM: F1=…F22=…` grid line with a
+  claim/section citation in that chunk's `_consolidated` reply — 0 missing (the apparent miss on
+  `DE102017110483` is a streaming artefact: its grid is concatenated onto a truncated preceding
+  line, the grid and its Claim-1 citation are intact). All 12 credited chunks answer the real
+  22-item checklist; the invented-checklist pattern appears in **exactly one** file,
+  `/data/audits/restage/t14_1787848428.json` (`"not explicitly provided"`, `"reconstructed
+  checklist"`, F1–F9 only), and that file backs **no** credited row — its 10 docs are the 10 that
+  remain blind. The other two uncredited chunks (`1787811878` empty, `1787834464` F1–F3 only) are
+  likewise uncredited. **The 07:06 finding "restage credit = 0 docs, unfalsifiable" is resolved.**
+- **Residual credit caveats (NEW, none invalidating the 118):**
+  1. `restage-blind-tails.py` credits on `num in ans` — a *plain substring* test, and
+     `nlm_followup --compact` copies the whole `_consolidated` blob under every doc key, so a doc
+     merely name-dropped inside another doc's justification would be credited. It happened not to
+     bite here (all 118 verified to carry their own grid), but the guard should be tightened to an
+     anchored `NUM:\s*F1=` match.
+  2. Every restage notebook is deleted after its chunk (`notebook_deleted: true`), so the credit is
+     **not live-falsifiable**; the evidence JSON + its `source_inventory` is the whole record.
+  3. Scope of the credit: the restage asked the tab's 22-item claims-state MUST checklist — the same
+     one the sweep uses — not all 27 benchmark features. The 5 unasked ones are generic
+     apparatus/processor/memory/instruction items. Not a defect, but "assessed in full" for those
+     118 means *against the sweep checklist*, at full text.
+- **No "assessed in full" claim is supportable on any of t10–t14.** 88 docs' tails were never seen
+  by any instrument (t11 30 · t13 48 · t14 10) and 119 add_failed docs never reached NotebookLM at
+  all (t10 15 · t11 27 · t12 26 · t13 24 · t14 27); t14 is the only tab where the blind pool is
+  nearly closed, and even there the 10 residual docs plus 27 add_failed gate the claim. t10 and t12
+  are S1-clean but S5-blocked (15 / 26).
+- **Verdict: VIOLATIONS.** Next action: keep the t11 runner going and **launch a t13 restage over
+  its 48 blind tails** (t13's runner exited `done` at 09:52:54 with an empty ledger) — the t14 path
+  is now demonstrably sound, and t13 is the tab with both the largest blind pool and the gating S5
+  growth. Do not touch the shared verdict path with a `--tab` probe again.
