@@ -60,6 +60,12 @@ def out_of_band_jobs(tab: int) -> list[str]:
         args = cmd.split()
         if "restage-blind-tails.py" in cmd and str(tab) in args:
             out.append(f"restage[{pid}]")
+        elif "ab-wording-test.py" in cmd and "--tab" in args:
+            try:
+                if args[args.index("--tab") + 1] == str(tab):
+                    out.append(f"ab-wording[{pid}]")
+            except (ValueError, IndexError):
+                pass
         elif "nlm_followup.py" in cmd and "--tab" in args:
             try:
                 if args[args.index("--tab") + 1] == str(tab):
