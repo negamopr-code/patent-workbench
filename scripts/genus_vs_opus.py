@@ -14,7 +14,10 @@ Read-only: DB opened ro, nothing written. Zero NLM quota, zero Claude tokens.
 import argparse, collections, json, glob, os, re, sqlite3, sys
 
 DB = "file:/data/workbench.db?mode=ro"
-ARMS = {"genus": "/data/audits/untreated", "verbatim": "/data/audits/restage"}
+# Both lane directories now hold BOTH arms (the untreated lane ran genus first, then was
+# reverted to verbatim), so select by the recorded wording, not by directory. Files written
+# before the "wording" field existed are verbatim by construction.
+LANE_DIRS = ("/data/audits/untreated", "/data/audits/restage")
 RANK = {"yes": 2, "partial": 1, "no": 0}
 
 
@@ -54,7 +57,8 @@ def main():
     per_tab = collections.defaultdict(collections.Counter)
     disagreements, compared_docs = [], 0
 
-    for path in sorted(glob.glob(f"{ARMS[a.arm]}/t*_*.json")):
+    paths = [p for d in LANE_DIRS for p in sorted(glob.glob(f"{d}/t*_*.json"))]
+    for path in paths:
         tab = int(os.path.basename(path).split("_")[0][1:])
         if a.tab and tab != a.tab:
             continue

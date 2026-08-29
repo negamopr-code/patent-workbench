@@ -994,3 +994,23 @@ hurts depends on the lane:
 Concretely: the genus wording is the right instrument for t10's 758 never-screened backlog
 precisely *because* that lane's job is to nominate, not to clear. Its graduates must then be read.
 No genus YES may enter a champion list, a top-N, or a closure claim without a deep read behind it.
+
+**2026-08-29, later — the F3f numbers restated on 2x the data.** t10's 15 add_failed docs and
+t14's first 10 completed under the reverted VERBATIM wording, all of them documents that already
+carry an opus verdict, so the calibration set doubled. Restated:
+
+| arm | docs | cells | agrees with opus | over-credits | of which hard YES-where-opus-said-NO |
+|---|---|---|---|---|---|
+| verbatim | 20 | 241 | 75.9% | **3.3%** | **0** |
+| genus | 55 | 400 | 50.0% | **35.0%** | **45** |
+
+Correction to the earlier entry: verbatim is NOT over-credit-free. On the wider sample it
+over-credits 3.3% of cells (4 `yes|partial`, 4 `partial|no`) — the 0.0% came from a 10-document
+sample. It still never produces a hard `yes|no`, where genus produces 45. The conclusion holds
+and is stronger, but the clean-instrument framing was an artefact of sample size and should not
+be repeated.
+
+Worked example of the residual verbatim over-credit: t10 `JP4974243` ("Wireless power
+distribution system") was answered YES on F1, F2 and F3 — the two weight-5 features and one
+weight-4 — on a document opus scored 2.0. NLM's per-feature YES is not a match verdict even
+under the validated wording; it is a nomination.
