@@ -1340,11 +1340,27 @@ def _restage_missing_parts(nb: str, doc: dict, prof: str | None,
     """Per-PART presence repair: re-add exactly the parts of `doc` whose titles
     are absent from the notebook's raw source list. The per-number presence
     check cannot see a lost tail part (part 1 keeps the canonical title), so
-    completeness must be verified at part granularity. Returns #re-added."""
+    completeness must be verified at part granularity.
+
+    Returns #re-added when every missing part landed, or NEGATIVE (-#still-missing)
+    when one could not be added. The caller must treat a negative as "this document
+    cannot be questioned in this round" — before 2026-08-29 the add result was
+    discarded entirely, so a tail rejected at the 50-source cap left the document
+    looking present and it was questioned with a blind tail, silently."""
     missing = [(t, x) for t, x in _doc_source_parts(doc) if t not in raw_titles]
+    readded = 0
     for t, x in missing:
-        nlm_bridge.add_source_text(nb, t, x, profile=prof)
-    return len(missing)
+        res = nlm_bridge.add_source_text(nb, t, x, profile=prof)
+        if not res.get("ok"):
+            res = nlm_bridge.add_source_text(nb, t, x, profile=prof)   # one retry
+        if res.get("ok"):
+            readded += 1
+    # A part rejected here (typically the 50-source cap) leaves the DOCUMENT looking
+    # present, because part 1 carries the canonical title — so the per-number check
+    # downstream cannot see the loss and the doc is questioned with a blind tail.
+    # That is the truncation NO-GO failing silently (supervisor 2026-08-29).
+    # Report the shortfall so the caller can refuse to question the document.
+    return readded - len(missing) if readded < len(missing) else len(missing)
 
 
 def _verify_citations(tab_id: int, answer: str) -> str:
@@ -4016,10 +4032,14 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
         nlm_bridge.delete_source(dup_ids, nb, profile=prof)
         raw2 = nlm_bridge.list_sources(nb, force=True, profile=prof)
     raw_titles = {(s.get("title") or "") for s in (raw2.get("sources") or [])}
-    repaired = 0
+    repaired, part_short = 0, []
     for k, did in want_keys.items():
         if k in have:
-            repaired += _restage_missing_parts(nb, docs_by_id[did], prof, raw_titles)
+            r = _restage_missing_parts(nb, docs_by_id[did], prof, raw_titles)
+            if r < 0:                       # negative = that many parts still missing
+                part_short.append(did)
+            else:
+                repaired += r
     if repaired:
         _screen_set(tab_id, status_text=f"🩹 re-added {repaired} missing part(s)…")
     if repaired or any(k not in have for k in want_keys):
@@ -4030,8 +4050,21 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
         failed = [did for k, did in want_keys.items() if k not in have]
         if failed:
             db.mark_screened(tab_id, failed, "add_failed")
+    # a doc whose TAIL could not be re-added must not be questioned as if complete:
+    # drop it from this round's roster and stamp it add_failed, the same treatment a
+    # doc that never indexed at all receives (truncation NO-GO, user 2026-08-23)
+    if part_short:
+        db.mark_screened(tab_id, part_short, "add_failed")
+        failed = list({*failed, *part_short})
+        db.append_message(tab_id, "s",
+            f"🔬 Mega-screen: {len(part_short)} doc(s) could not be staged in FULL (a tail "
+            "part was rejected, typically at the 50-source cap) — they were removed from "
+            "this round rather than questioned with a blind tail, and re-queued as "
+            "add_failed. Truncation NO-GO.")
+    short = set(part_short)
     key_map = {_shortlist_key(n): want_keys.get(_shortlist_key(n)) for n in num_map
-               if _shortlist_key(n) in want_keys}
+               if _shortlist_key(n) in want_keys
+               and want_keys.get(_shortlist_key(n)) not in short}
     return nb, bm_sid, key_map, failed
 
 
