@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""nlm-untreated-lane — assess documents NotebookLM has NEVER treated, in FULL, with the
-F3f GENUS wording (user decision 2026-08-29: apply the new wording forward-only; never
-re-screen a doc NLM already answered on).
+"""nlm-untreated-lane — assess documents NotebookLM has NEVER treated, in FULL, using the
+agreed "better mega-screen" fix set and NOTHING else: a DEDICATED notebook per chunk (F4),
+every document staged in full multi-part so nothing is clipped (F3c — the truncation fix), a
+small roster (F3a), a per-doc feature grid, the broad-question gate and the credit gate.
+
+Wording is VERBATIM by default. --genus is opt-in and is NOT part of that fix set.
 
 Two intake classes, both "untreated":
   add_failed  — fetched docs the mega-screen could not index into NotebookLM at all
@@ -22,6 +25,14 @@ Exit 2 (quota) from nlm_followup -> sleep 1h and retry the same chunk.
 import json, os, re, sqlite3, subprocess, sys, time
 TAB, LIST = int(sys.argv[1]), sys.argv[2]
 LANE = sys.argv[3] if len(sys.argv) > 3 else "untreated"
+# WORDING. Default VERBATIM — that is the configuration the fix set was validated in
+# (08-27 restage arm: 78.6% agreement with opus, ZERO over-credits over 131 cells). The F3f
+# genus wording is a SEPARATE, unvalidated variable and is opt-in only: measured on 08-29 it
+# agrees with opus on 55.2% of cells and over-credits 30.5% (21 hard YES-where-opus-said-NO),
+# and on a feature-heavy tab it inflates the question until NotebookLM rejects it outright
+# (t14: 8052 chars -> error code 3 INVALID_ARGUMENT). Never put it on a lane whose job is to
+# apply the agreed staging fix — it confounds the very thing the lane is meant to demonstrate.
+GENUS = "--genus" in sys.argv
 LOG=f"/data/.{LANE}_t{TAB}.log"; PROG=f"/data/audits/{LANE}_t{TAB}.progress.json"
 EV=f"/data/audits/{LANE}"; LEDGER=f"/data/audits/{LANE}_ledger.jsonl"
 os.makedirs(EV, exist_ok=True)
@@ -51,8 +62,8 @@ try:
 except Exception:
     PROFILE="default"
 docs=json.load(open(LIST)); done=set(json.load(open(PROG))) if os.path.exists(PROG) else set()
-log(f"armed lane={LANE} tab={TAB} docs={len(docs)} remaining={len(docs)-len(done)} wording=genus")
-heartbeat("running", f"armed — {len(docs)-len(done)} of {len(docs)} untreated docs left (genus wording)",
+log(f"armed lane={LANE} tab={TAB} docs={len(docs)} remaining={len(docs)-len(done)} wording={'genus' if GENUS else 'verbatim'}")
+heartbeat("running", f"armed — {len(docs)-len(done)} of {len(docs)} untreated docs left ({'genus' if GENUS else 'verbatim'} wording)",
           docs=len(docs), remaining=len(docs)-len(done), credited=len(done))
 # A chunk can come back 0-credited for a TRANSIENT reason — the broad question landed but the
 # consolidated query died mid-stream ("peer closed connection without sending complete message
@@ -72,7 +83,7 @@ for _pass in range(1, MAX_PASSES+1):
         chunk=todo[i:i+10]
         while True:
             r=subprocess.run(["python3","/data/nlm_followup.py","--tab",str(TAB),"--docs",",".join(chunk),
-                              "--json","--compact","--genus"],capture_output=True,text=True)
+                              "--json","--compact"] + (["--genus"] if GENUS else []),capture_output=True,text=True)
             res=None
             if r.stdout.strip():
                 try: res=json.loads(r.stdout)
@@ -116,7 +127,7 @@ for _pass in range(1, MAX_PASSES+1):
                     with open(LEDGER,"a") as f:
                         for num in chunk:
                             f.write(json.dumps({"tab":TAB,"number":num,"ts":ts,
-                                                "notebook":res.get("notebook"),"mode":"compact","wording":"genus",
+                                                "notebook":res.get("notebook"),"mode":"compact","wording":("genus" if GENUS else "verbatim"),
                                                 "answered":num in answered,
                                                 "parts_ok":(res.get("parts_ok") or {}).get(num),
                                                 "inventory_seen":bool(res.get("source_inventory")),
