@@ -4765,8 +4765,30 @@ def _claims_stage(tab_id: int, st: dict, want_ids: list[int],
         num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
         have = {_shortlist_key(n) for n in num_map}
         failed = [did for k, did in want_keys.items() if k not in have]
+    # PART-granularity check — the second blind-tail path (full-doc-staging-auditor,
+    # 2026-08-29). The per-NUMBER check above cannot see a lost tail because part 1
+    # keeps the canonical title, so a doc whose part 2 was rejected at the 50-source
+    # cap reads as present and gets QUOTED against a claim it may only half contain.
+    # Latent while these notebooks sit under the cap; live the moment one fills, as
+    # all four screen notebooks already have (50/50 today).
+    raw = nlm_bridge.list_sources(nb, force=True, profile=prof)
+    raw_titles = {(x.get("title") or "") for x in (raw.get("sources") or [])}
+    part_short = []
+    for k, did in want_keys.items():
+        if k in have and _restage_missing_parts(nb, docs_by_id[did], prof, raw_titles) < 0:
+            part_short.append(did)
+    if part_short:
+        nlm_bridge.wait_sources_ready(nb, timeout=60, profile=prof)
+        num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
+        failed = list({*failed, *part_short})
+        db.append_message(tab_id, "s",
+            f"🧾 Claims audit: {len(part_short)} doc(s) could not be staged in FULL "
+            "(a tail part was rejected, typically at the 50-source cap) — excluded from "
+            "this round rather than quoted against a partial text. Truncation NO-GO.")
+    short = set(part_short)
     key_map = {_shortlist_key(n): want_keys.get(_shortlist_key(n)) for n in num_map
-               if _shortlist_key(n) in want_keys}
+               if _shortlist_key(n) in want_keys
+               and want_keys.get(_shortlist_key(n)) not in short}
     return nb, key_map, failed
 
 
