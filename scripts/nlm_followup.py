@@ -29,6 +29,13 @@ AUDIT_DIR = "/data/audits"
 CLIP = 118_000          # stay under nlm_bridge's 120_000-byte clip per part
 MAX_DOCS = 10
 GENUS_MAPS = "/data/genus_maps.json"
+# NotebookLM rejects an over-long question with error code 3 INVALID_ARGUMENT (t14 chunk 1,
+# 2026-08-29: 8052-char genus broad question -> "Google rejected the query"; the same account
+# and machinery had just run t12's 3399-char genus question 26/26 and t14's own 3585-char
+# VERBATIM question 128/128 on 08-27). Longest observed success is 4430 chars (t13). Budget the
+# spec so the broad question stays inside that, expanding the heaviest features first: a tab
+# with many features keeps genus where it decides the match and stays verbatim on the tail.
+SPEC_BUDGET = 3900
 
 sys.path.insert(0, "/app/src")
 from patentbench import nlm_bridge  # noqa: E402
@@ -123,7 +130,6 @@ def main():
         feature. Matches are computed against the ORIGINAL text and inserted
         right-to-left, so an expansion can never be re-matched by a later key
         (the nested-insert bug fixed in ab-wording-test.py on 2026-08-28)."""
-        nonlocal genus_hits
         hits = []
         for key, expansion in genus_map.items():
             m = _re.search(_re.escape(key), name, _re.IGNORECASE)
@@ -131,15 +137,31 @@ def main():
                 hits.append((m.end(), expansion))
         if not hits:
             return name
-        genus_hits += 1
         out = name
         for pos, expansion in sorted(hits, reverse=True):
             out = out[:pos] + f" [read broadly: {expansion}]" + out[pos:]
         return out
 
-    spec = "\n".join(
-        f"{i}. {(_genus(_clean(name)) if genus_map else _clean(name))} (importance {w}/5)"
-        for i, (name, w) in enumerate(must, 1))
+    lines = [f"{i}. {_clean(name)} (importance {w}/5)" for i, (name, w) in enumerate(must, 1)]
+    if genus_map:
+        # heaviest first, so if the budget runs out it is the low-weight tail that stays
+        # verbatim — never the features that decide whether the document reads on the claim
+        order = sorted(range(len(must)), key=lambda k: -must[k][1])
+        budget_hit = 0
+        for k in order:
+            name, w = must[k]
+            cand = f"{k + 1}. {_genus(_clean(name))} (importance {w}/5)"
+            trial = list(lines)
+            trial[k] = cand
+            if sum(len(x) for x in trial) + len(trial) > SPEC_BUDGET:
+                budget_hit += 1
+                continue
+            lines = trial
+            genus_hits += 1
+        if budget_hit:
+            print(f"spec budget {SPEC_BUDGET}B reached — {budget_hit} low-weight feature(s) "
+                  f"kept verbatim (genus applied to {genus_hits})", file=sys.stderr)
+    spec = "\n".join(lines)
 
     docs = []
     for n in nums:
