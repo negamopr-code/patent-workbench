@@ -81,7 +81,15 @@ for i in range(0,len(todo),10):
                     # real shape: "**NUM**: **F1=NO** **F2=NO** ..." — allow markdown
                     # and any leading feature index, but the grid must follow the
                     # number within a short window, not merely mention it
-                    m = re.search(rf"\**{re.escape(n)}\**\s*[:\-—]", txt or "", re.IGNORECASE)
+                    # anchor: the number, then at most a closing bracket / markdown before
+                    # the separator. NotebookLM enumerates its blocks and the format varies
+                    # between runs — "**NUM**:", "**1 (NUM)**:", "NUM -" have all been seen.
+                    # The 200-char grid window below is what actually stops a name-drop inside
+                    # another document's justification earning credit; being strict about the
+                    # separator only threw away good evidence (t14 chunk 1, 2026-08-29:
+                    # 10 real grids rejected).
+                    m = re.search(rf"{re.escape(n)}" + r"\s*[)\]]?\s*\**\s*[:\-—]",
+                                  txt or "", re.IGNORECASE)
                     if not m:
                         return False
                     return bool(re.search(r"\**F\s*\d+\s*\**\s*=\s*\**\s*(YES|NO|PARTIAL)",
