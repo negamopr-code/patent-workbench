@@ -1,0 +1,45 @@
+{
+  "_doc": "F3f vocabulary-floor expansions, per tab. Key = a distinctive term of art occurring in that tab's MUST feature text; value = a GENUS restatement inserted IN PLACE right after the match, so every structural element of the feature survives. Adopted forward-only 2026-08-29 (user). t10's map is the one validated by the clean A/B ab_clean_t10_1787900564.json; t12/t13/t14 written from each tab's own MUST list. Keys must not nest inside one another.",
+  "10": {
+    "wireless power supply": "wireless/contactless power transfer of any kind — microwave, RF, inductive, magnetic-resonance or capacitive power feeding, including 'power transmission', 'energy harvesting from a transmitted field', 'RF-to-DC rectenna supply' and equivalents",
+    "microwave": "microwave or radio-frequency carrier used to carry power (any band described as RF, UHF, SHF, ISM, 2.4 GHz, 5.8 GHz, 900 MHz or 'radio waves')",
+    "wireless communication link": "any bidirectional or unidirectional radio data link between the two named units — BLE, Zigbee, Wi-Fi, LoRa, NFC, proprietary sub-GHz, 'radio telemetry', 'wireless signal transmission'",
+    "stroke position": "position/displacement/travel/extension of a moving member (piston, rod, spool, plunger, slide, actuator shaft), whether reported as absolute position, stroke length, displacement or travel",
+    "magnetic sensor": "any magnetically-sensing element — Hall element, magnetoresistive (AMR/GMR/TMR), reed, fluxgate, magnetostrictive or inductive position sensor"
+  },
+  "12": {
+    "first fan": "any air-moving element — fan, blower, impeller, ventilator, axial or centrifugal fan, air circulator or forced-convection air mover",
+    "water-cooled power supply": "a power supply, converter, rectifier or power unit cooled by a circulating liquid coolant — water, deionized water, water-glycol, a cooling jacket, a cold plate or a liquid-cooled heat sink",
+    "chiller": "any refrigeration or heat-rejection unit — chiller, refrigeration machine, heat exchanger, cooling tower, radiator-and-pump loop, or thermostatic coolant circulator",
+    "charging and discharging jig": "any fixture, tray, rack, probe block or contact assembly that connects battery cells for charge/discharge cycling — formation jig, cycler contact block, test fixture, probe tray",
+    "water-supply pipe": "any coolant supply line — inlet pipe, hose, conduit, feed line or supply manifold",
+    "drainpipe": "any coolant return line — outlet pipe, return hose, discharge conduit or return manifold",
+    "charger and discharger": "battery formation or cycling equipment of any name — charge/discharge tester, cycler, formation system, battery test station"
+  },
+  "13": {
+    "wireless communication module": "any radio transceiver module — Wi-Fi, Bluetooth/BLE, Zigbee, 5G/NB-IoT/LTE-M, LoRa, sub-GHz proprietary RF, NFC or an RF SoC performing the same role",
+    "control module": "any controller, MCU, microcontroller, processor board, logic unit, ECU or embedded control circuit performing the control role",
+    "wired communication interface": "any wired bus or port — CAN or CAN-FD, LIN, RS-485/RS-232, UART, I2C, SPI, Ethernet, single-wire serial, or a wiring-harness connector carrying the same signals",
+    "battery management equipment": "a BMS, battery management system, battery controller, pack monitoring unit or battery ECU",
+    "target battery device": "the battery pack, module, cell assembly or energy-storage unit being woken, activated, enabled or started",
+    "message generating device": "any unit that composes, encodes or assembles a command frame, data telegram or bus message",
+    "input device": "any terminal supplying the data — smartphone, tablet, PC, handheld programmer, HMI panel, or a web/app client",
+    "transceiver": "any bus driver, line driver or PHY converting logic-level signals to bus levels and back",
+    "target message": "the command, parameter set or payload conveyed, under any name — frame, telegram, packet, instruction or data record"
+  },
+  "14": {
+    "charge state graph": "any curve, plot, profile, table, array or time series of state of charge (SOC) against time or against charged capacity, however represented",
+    "voltage pattern graph": "any voltage-against-time or voltage-against-capacity curve — charge voltage profile, V-Q curve, dV/dQ or dV/dt curve, or a tabulated equivalent",
+    "inflection angle": "any quantified measure of the bend or knee at the transition point — an angle, a slope difference, a curvature value, a dV/dt or dV/dQ step, or a knee-point metric",
+    "inflection occurs": "a knee, bend, break point, transition, slope discontinuity or curvature change appears",
+    "state change rate": "any degradation, aging or health metric expressed as a ratio or percentage against an initial or reference state — SOH, capacity-fade ratio, degradation coefficient, deterioration rate",
+    "constant current": "CC mode or galvanostatic charging",
+    "constant voltage": "CV mode or potentiostatic charging",
+    "charge current threshold": "a cut-off or termination current, taper current, or end-of-charge current criterion",
+    "charge voltage upper limit": "a maximum or ceiling charge voltage, cut-off voltage or upper voltage limit",
+    "hyperbolic tangent": "tanh, or any sigmoid / S-shaped saturating function",
+    "charge mode": "a charging stage, phase or step (CC stage, CV stage, taper stage)",
+    "charging device": "a charger, charging circuit, power supply or on-board/off-board charging unit",
+    "computer-readable medium": "a non-transitory storage medium, memory, firmware image or computer program product"
+  }
+}

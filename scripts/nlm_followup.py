@@ -28,6 +28,7 @@ DB = "file:/data/workbench.db?mode=ro"
 AUDIT_DIR = "/data/audits"
 CLIP = 118_000          # stay under nlm_bridge's 120_000-byte clip per part
 MAX_DOCS = 10
+GENUS_MAPS = "/data/genus_maps.json"
 
 sys.path.insert(0, "/app/src")
 from patentbench import nlm_bridge  # noqa: E402
@@ -68,6 +69,11 @@ def main():
                     help="one CONSOLIDATED per-doc question instead of one query per doc "
                          "(2 NLM queries per notebook instead of 1+N) — quota doctrine "
                          "2026-08-27: big batches, few well-designed questions")
+    ap.add_argument("--genus", action="store_true",
+                    help="F3f vocabulary floor: broaden each term of art IN PLACE using "
+                         "scripts/genus_maps.json for this tab. Adopted forward-only "
+                         "2026-08-29 — evidence ab_clean_t10_1787900564.json (same sources, "
+                         "verbatim wording NO/NO/NO vs genus wording YES/YES/YES).")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
     nums = [n.strip() for n in args.docs.split(",") if n.strip()][:MAX_DOCS]
@@ -95,8 +101,44 @@ def main():
     # "(10)"-style numerals trigger false NOs when a doc's own numbering differs)
     import re as _re
     _refnum = _re.compile(r"\s*\(\s*\d+[A-Za-z]?(?:\s*,\s*\d+[A-Za-z]?)*\s*\)")
+    def _clean(name):
+        return _re.sub(r"[ ]+", " ", _refnum.sub("", name)).strip()
+
+    genus_map, genus_hits = {}, 0
+    if args.genus:
+        try:
+            with open(GENUS_MAPS) as fh:
+                genus_map = (json.load(fh) or {}).get(str(args.tab)) or {}
+        except Exception as e:  # noqa: BLE001
+            print(f"genus map unreadable ({e}) — refusing to run a MIXED-wording "
+                  "round; fix the map or drop --genus", file=sys.stderr)
+            sys.exit(3)
+        if not genus_map:
+            print(f"no genus map for tab {args.tab} — refusing to run --genus with an "
+                  "empty vocabulary (it would silently be the verbatim arm)", file=sys.stderr)
+            sys.exit(3)
+
+    def _genus(name):
+        """Broaden the terms of art IN PLACE, keeping every structural element of the
+        feature. Matches are computed against the ORIGINAL text and inserted
+        right-to-left, so an expansion can never be re-matched by a later key
+        (the nested-insert bug fixed in ab-wording-test.py on 2026-08-28)."""
+        nonlocal genus_hits
+        hits = []
+        for key, expansion in genus_map.items():
+            m = _re.search(_re.escape(key), name, _re.IGNORECASE)
+            if m:
+                hits.append((m.end(), expansion))
+        if not hits:
+            return name
+        genus_hits += 1
+        out = name
+        for pos, expansion in sorted(hits, reverse=True):
+            out = out[:pos] + f" [read broadly: {expansion}]" + out[pos:]
+        return out
+
     spec = "\n".join(
-        f"{i}. {_re.sub(r'[ ]+', ' ', _refnum.sub('', name)).strip()} (importance {w}/5)"
+        f"{i}. {(_genus(_clean(name)) if genus_map else _clean(name))} (importance {w}/5)"
         for i, (name, w) in enumerate(must, 1))
 
     docs = []
@@ -129,7 +171,9 @@ def main():
     nlm_bridge.wait_sources_ready(nb, timeout=600, profile=prof)
 
     results = {"tab": args.tab, "notebook": nb, "ts": int(time.time()),
-               "docs": [d[0] for d in docs], "answers": {}, "parts_ok": parts_ok}
+               "docs": [d[0] for d in docs], "answers": {}, "parts_ok": parts_ok,
+               "wording": "genus" if genus_map else "verbatim",
+               "genus_features": genus_hits, "spec": spec}
     # post-ingest source inventory: the ONLY re-verifiable evidence that the doc
     # reached the notebook in full, since the notebook is deleted afterwards
     try:
@@ -210,6 +254,7 @@ def main():
     with open(os.path.join(AUDIT_DIR, "followup_ledger.jsonl"), "a") as fh:
         fh.write(json.dumps({"tab": args.tab, "ts": results["ts"], "notebook": nb,
                              "mode": "compact" if args.compact else "per-doc",
+                             "wording": "genus" if genus_map else "verbatim",
                              "docs": [d[0] for d in docs
                                       if results["answers"].get(d[0])
                                       not in (None, "QUOTA-ABORT")]},
