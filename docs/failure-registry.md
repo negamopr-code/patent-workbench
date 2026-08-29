@@ -927,3 +927,70 @@ src/scripts = **a2bb65f**; verdicts on disk carry 09f61a9 / f5de302 → STALE(de
   its 48 blind tails** (t13's runner exited `done` at 09:52:54 with an empty ledger) — the t14 path
   is now demonstrably sound, and t13 is the tab with both the largest blind pool and the gating S5
   growth. Do not touch the shared verdict path with a `--tab` probe again.
+
+---
+
+## 2026-08-29 — F3f priced: the genus wording buys recall and pays more in precision
+
+**Context.** User decisions this session: (1) adopt the F3f genus wording from now on,
+forward-only — never re-screen a document NotebookLM already answered on; (2) run NLM over the
+`add_failed` documents, which NotebookLM never indexed; (3) never spend NLM quota on t11 again.
+The untreated lane (`scripts/nlm-untreated-lane.py`, `nlm_followup --genus`,
+`scripts/genus_maps.json`) was launched over the 92 `add_failed` docs of t10/t12/t13/t14.
+
+**Correction to the premise.** `add_failed` means *NotebookLM never indexed it*, NOT *nothing
+read it*. 86 of the 92 already carry a full opus verdict in `documents.feature_scores` and all
+92 are ranked. Only 6 documents — all t14 (`CN106992561`, `JP2003207552`, `KR102344538`,
+`KR20040066085`, `KR20260055095`, `WO2025036486`) — have never been read by any instrument.
+That accident is what made the measurement below possible.
+
+**Correction to the 08-27 confabulation reading.** The screen's `unmatched` list means "named but
+not in THIS round's roster key_map", not "invented". Of t12's 26 unmatched numbers, **25 are real
+documents in t12's own corpus** (mostly already graduates) — that is the F4 rolling-notebook
+effect, NLM naming sources from earlier rounds. Genuine non-existent strings across all five tabs
+are three: `OR802154` (t10), `LM7805` (t13, a voltage-regulator part number), and `EP239077233`
+(t12, a digit-mangled form of the tab's own benchmark number EP23907723). Confabulation is real
+but rare; the earlier "26 invented numbers" reading was wrong.
+
+**The measurement** (`scripts/genus_vs_opus.py`, read-only, zero quota, zero tokens). Both arms
+ran the SAME machinery — `nlm_followup` consolidated 10-doc question, dedicated notebook, full
+multi-part staging — against the SAME reference, `documents.feature_scores` (opus). Only the
+feature wording differs.
+
+| arm | source | docs | cells | agree | NLM > opus (over-credit) | NLM < opus (under-credit) |
+|---|---|---|---|---|---|---|
+| verbatim | 08-27 restage lanes | 10 | 131 | **78.6%** | **0.0%** (0/131) | 21.4% |
+| genus | 08-29 untreated lane | 30 | 210 | **55.2%** | **30.5%** (64/210) | 14.3% |
+
+Genus confusion: `yes|partial=42`, `yes|no=21`, `no|partial=29`, `yes|yes=9`. Per tab the genus
+over-credit is t12 16.7%, t13 48.9%.
+
+**Both halves of F3f are confirmed, and they point opposite ways.**
+- The vocabulary floor is REAL: the verbatim arm under-credits opus on 21.4% of cells
+  (25 `no|partial`, 3 `no|yes`) — documents opus finds that the benchmark's own words hide.
+- The cure costs more than the disease: the genus arm over-credits on 30.5% of cells, including
+  21 hard `yes|no`, and its agreement with opus drops from 78.6% to 55.2%.
+
+Worked example — t13 `CN116508192` (opus 5.0, rank 38): genus scored F1–F9 all YES; the opus read
+calls it "a substantial partial overlap rather than a close match", because the benchmark's
+defining data path (input device wirelessly delivering *modifiable target data* to a wireless
+module inside a message generating device, which builds the CAN message) is absent — the
+candidate's wireless link is a 125 kHz / 315 MHz keyless-entry authentication link. The
+disagreement traces directly to the genus map broadening "wireless communication module" to
+"any radio transceiver module … or an RF SoC performing the same role", which a key fob satisfies.
+
+**Caveats.** The two arms ran over different document sets (verbatim = blind-tail restage docs on
+t13/t14, genus = `add_failed` docs on t12/t13), so this is not a paired test, and the verbatim
+side is small (10 docs). The reference is opus, the project's registered ground truth for R1, not
+truth itself. A 0/131 vs 64/210 gap is nonetheless far too large for the doc-set difference alone.
+
+**Doctrine that follows.** Over-credit and under-credit are not symmetric costs, and which one
+hurts depends on the lane:
+- **Discovery lanes** (surfacing candidates for reading, no opus coverage): a false YES is cheap —
+  it buys a read. A false NO is fatal — the document is never seen again. **Use the genus wording.**
+- **Verdict / clearance lanes** (champions, top-N, "the corpus is cleared"): a false YES is the
+  expensive error. **Never let a genus YES stand as a verdict** — route it to verification.
+
+Concretely: the genus wording is the right instrument for t10's 758 never-screened backlog
+precisely *because* that lane's job is to nominate, not to clear. Its graduates must then be read.
+No genus YES may enter a champion list, a top-N, or a closure claim without a deep read behind it.
