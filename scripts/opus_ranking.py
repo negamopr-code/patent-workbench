@@ -24,7 +24,7 @@ reasons this tool fixes:
 Read-only, zero quota, zero tokens.
   docker exec patent-bench python3 /data/opus_ranking.py [--tab N] [--top K] [--remap-report]
 """
-import argparse, json, re, sqlite3, sys
+import argparse, json, os, re, sqlite3, sys
 from collections import Counter
 
 DB = "file:/data/workbench.db?mode=ro"
@@ -84,6 +84,8 @@ def rank(cx, tab, report=False):
         seen.update(f.get("name") for f in g if f.get("name"))
         parsed.append((num, ti or "", sc, g))
     mapping, unmapped = remap(feats, list(seen))
+    dropped = set(unmapped)
+    unmapped_names = unmapped
     if report:
         print(f"t{tab}: {len(seen)} grid names, {len(mapping)} remapped by numeral-strip, "
               f"{len(unmapped)} unmapped and dropped")
@@ -101,12 +103,26 @@ def rank(cx, tab, report=False):
                 cov += wmap[name] * v
                 if v > 0:
                     hit += 1
+        # does this doc's grid key to names the current benchmark dropped?
+        stale_doc = any(f.get("name") in dropped for f in g)
         out.append({"number": num, "title": ti, "score": sc,
-                    "coverage": cov / total_w, "features_hit": hit})
-    out.sort(key=lambda d: (-d["coverage"], -(d["score"] or 0)))
+                    "coverage": cov / total_w, "features_hit": hit,
+                    "_stale": stale_doc})
+    # A doc whose grid keys to a dropped decomposition cannot be scored on the current
+    # feature space: dividing by the full weight silently caps it (t13's 330 docs top out
+    # at 48.4% while current-key docs reach 100%) and co-ranking them buries them exactly
+    # as C1 describes. Split them out and say so.
+    stale_keys = set(unmapped_names)
+    for d in out:
+        d["stale_decomposition"] = d.pop("_stale", False)
+    ranked = [d for d in out if not d["stale_decomposition"]]
+    stale = [d for d in out if d["stale_decomposition"]]
+    ranked.sort(key=lambda d: (-d["coverage"], -(d["score"] or 0)))
+    stale.sort(key=lambda d: -(d["score"] or 0))
+    out = ranked
     for i, d in enumerate(out):
         d["pct"] = 1.0 - i / max(1, len(out) - 1)
-    return out, unmapped, len(parsed)
+    return out, unmapped, len(parsed), stale
 
 
 ap = argparse.ArgumentParser()
@@ -118,10 +134,17 @@ cx = sqlite3.connect(DB, uri=True)
 tabs = [a.tab] if a.tab else [10, 11, 12, 13, 14]
 allout = {}
 for t in tabs:
-    out, unmapped, n = rank(cx, t, report=a.remap_report)
+    out, unmapped, n, stale = rank(cx, t, report=a.remap_report)
     allout[t] = out
     print("=" * 96)
     print(f"t{t} — ranked by weighted opus feature coverage over {n} read documents")
+    if stale:
+        names = ", ".join("%s (opus %s)" % (d["number"], d["score"]) for d in stale[:3])
+        print("   EXCLUDED from this ranking: %d document(s) whose grids key to a "
+              "decomposition this benchmark dropped — they cannot be scored on the current "
+              "feature space, and co-ranking them would cap them below every current-key doc "
+              "(the C1 burial, relocated into this tool). Best by raw opus score: %s"
+              % (len(stale), names))
     shown = 0
     for d in out:
         if shown >= a.top:
@@ -130,6 +153,15 @@ for t in tabs:
         print(f"   {d['coverage']:6.1%}  raw {str(d['score']):>4}  {d['features_hit']:>2} feat  "
               f"{d['number']:<15} {d['title'][:46]:<46}{tag}")
         shown += 1
-json.dump({str(t): v[:50] for t, v in allout.items()},
-          open("/data/audits/opus_ranking.json", "w"), indent=1)
+# merge-on-write: a --tab run used to truncate this file to the single key it computed
+# (it held only "14" after my own --tab 14 run). Shared verdict artifacts are merged.
+OUT = "/data/audits/opus_ranking.json"
+prev = {}
+if os.path.exists(OUT):
+    try:
+        prev = json.load(open(OUT))
+    except Exception:                                        # noqa: BLE001
+        prev = {}
+prev.update({str(t): v[:50] for t, v in allout.items()})
+json.dump(prev, open(OUT, "w"), indent=1)
 print("\n-> /data/audits/opus_ranking.json")

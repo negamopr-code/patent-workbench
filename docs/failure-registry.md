@@ -928,6 +928,114 @@ src/scripts = **a2bb65f**; verdicts on disk carry 09f61a9 / f5de302 → STALE(de
   is now demonstrably sound, and t13 is the tab with both the largest blind pool and the gating S5
   growth. Do not touch the shared verdict path with a `--tab` probe again.
 
+### 2026-08-29 ~22:25 UTC — supervisor pass (session-start gate SKIPPED by the caller; scope t10–t14)
+
+Context: the caller ran the whole session without a supervisor pass (violation of the
+2026-08-24 standing rule) and asked for a retrospective audit of today's claims.
+Procedure HEAD for src/scripts = **e02278b**.
+
+- **Step 0 account gate PASS twice** (22:20:28 "no running NLM jobs"; 22:24:39
+  `drawnformula: 1 running job ['t10:nlm-screen']`). A1 all five bindings == registry.
+  **A t10 mega-screen was launched at 22:20:43** (`.nlm_screen_10.json` `started_at`
+  1788042043, `params {batch_size:39, survivor_cap:10, target:49}`, notebook
+  `50f703e7`): queue = **773 docs = the 758 never-screened backlog + the 15 t10
+  add_failed**, all 773 already opus-scored. A2 holds (default/work2 idle). The gate
+  is still blind to out-of-band runners (`nlm-untreated-lane.py`,
+  `restage-blind-tails.py`) — 08-27 finding, unfixed.
+- **Gate matrix (audit_status, e02278b): post_sweep_results, champion_report and
+  closure_claim BLOCKED on all five tabs.** Freshness: t10 staging STALE(deploy),
+  recall/ranking STALE; t11 all three STALE(deploy); t12 all three STALE; t13 staging
+  STALE(deploy), recall/ranking STALE; t14 all three STALE. No pending_trigger.
+  Verdict-file vintage: `audit_recall` + `audit_ranking` 08-27 07:05 (head 09f61a9),
+  `audit_full_staging` 08-27 07:12 (09f61a9, **FAIL**), `audit_staging` 08-27 16:46
+  (52efb22, `--no-live`). **Nothing has been audited in the 2 days and ~40 commits since.**
+- **Claim "the agreed work is complete; 0 docs hold a truncation-affected verdict" —
+  REFUTED as stated.** Independently recomputed from sqlite (`mode=ro`, composition
+  byte-identical to `_doc_source_text`): t10–t14 hold **2 098 oversized docs (>118 000 B)**,
+  of which **1 678** carry a screen verdict later than 9dda5f1 (the caller's 1 609 is not
+  reproducible), **115** are `add_failed` (NotebookLM never indexed them — they hold no NLM
+  verdict at all), and **305** (all t10) had no screen verdict until 22:20 today.
+  `assessed_truncated = 0` is a **timestamp** metric; the 08-27 full-doc auditor already
+  recorded that it "proves nothing about coverage". The part-presence instrument's last
+  verdict is **FAIL** (5 live blind tails: t10 `JP7753930` [1,2]/3, t11 `CN116345029` [1]/2,
+  t13 `CN115552761` [1,2]/3, t13 `CN119153812` [1]/2, t14 `JP2023095746` [1]/3 — all still
+  `graduate` in the DB today), and its named root cause is **still in the deployed code**:
+  `api.py:1338-1347 _restage_missing_parts()` calls `nlm_bridge.add_source_text()` without
+  checking `res["ok"]`, and the post-repair re-verify at `api.py:4029` is per-NUMBER
+  (`have = {_shortlist_key(n) for n in num_map}`), so a tail part rejected at
+  `SOURCE_LIMIT = 50` leaves the doc "present" and it is questioned blind. The screen
+  relaunched at 22:20 **reuses `50f703e7`, the very notebook the 08-27 audit found at the
+  50-source cap.**
+- **S1 blind tails now recompute to 0 on every tab (t10 0 · t11 0 · t12 0 · t13 0 · t14 0),
+  and that is entirely restage credit, never audited.** `restage_ledger.jsonl` = 271 rows,
+  **211 credited (t11 30 · t13 53 · t14 128)**; the t11/t13 rows were written 08-27
+  17:54–21:20, i.e. **after** the last staging verdict (16:46). Supervisor spot-check of the
+  10 t11/t13 evidence files: each consolidated reply carries per-doc grids at the tab's own
+  MUST cardinality (t11 F1–F7 of 48 features, t13 F1–F9 of 24) and none shows the
+  invented-checklist pattern — the credit is structurally sound, but **it retires only
+  "no instrument ever saw this tail"; it does NOT retire "the notebook that produced this
+  doc's screen verdict was complete"**, the notebooks are deleted (not live-falsifiable),
+  and commit **383cb69 (today 20:14) LOOSENED the credit gate** with no auditor run since.
+  A staging verdict must confirm S1=0 before any coverage claim rests on it.
+- **Baselines.** Live `add_failed` vs registered S5: t10 15 ≤ 173 · t11 27 ≤ 40 · t12 26 ≤ 47
+  · **t13 24 > 13 = GROWTH → GATES** (unregistered and unexplained since 08-27) · t14 27 ≤ 37;
+  total **119 docs NotebookLM never saw**, of which only t10's 15 are in a running lane.
+  `R2-screen-roster39` = 39 covers today's `batch_size 39` relaunch. Still-gating
+  UNREGISTERED FAILs: R2-batch-corridor t11 46 / t12 61 / t14 80; R1 t13 7/21; R5 t10
+  lexical lane. t13 C1 330 ≤ 401 KNOWN. **F3f is still NOT a registered class** (the 08-27
+  pass declined it; today's section prices it but no table row and no user approval exists) —
+  the genus wording was nevertheless run live on t10/t12/t13/t14 at 19:30–19:56 before being
+  reverted (1c456a7). Mitigating and verified: `nlm-untreated-lane.py` opens the DB
+  `mode=ro` and writes only `/data/audits/*_ledger.jsonl`, so **no genus verdict entered
+  `documents`**.
+- **New ground truth landed today → the recall verdict is invalid by construction, not merely
+  stale.** Three opus-5 reads at 20:18–20:19 (`/data/audits/opus3_2026-08-29.json`):
+  t12 `CN116190826` **4.0**, t14 `CA2142366` **4.0**, control t14 `CN115800429` 3.0 —
+  **both new GT docs were `rejected` by the mega-screen**. R1's t12 14/14 and t14 60/60 were
+  computed on a GT set that has since grown to 15 and 61. Live screen-lane recall
+  recomputed by the supervisor: GT (opus ≥4, fetched) = **205** → `graduate` 147 ·
+  **`rejected` 44** · `add_failed` 10 · never-screened 4 ⇒ **147/191 = 77 % among docs that
+  reached the screen**; the reject-pool miss count grew 42 → 44 today off only 3 reads.
+- **Discrimination, measured (discovery, no auditor instrument exists for it):** GT rate among
+  opus-read docs, graduate vs rejected — t10 1.4 %/0.3 % · t11 16.4 %/3.8 % · t12 1.9 %/1.8 %
+  · t13 2.5 %/1.0 % · t14 11.5 %/11.9 %; aggregate 6.0 % vs 2.0 % (2.94×). The sample is
+  **not random** (opus reads every graduate; today's reject-pool reads were filter-selected),
+  so neither "discriminates" nor "does not discriminate" is gate-backed. Both of the caller's
+  successive public framings (69–86 % graduation "does not discriminate", then "the original
+  runs graduated 10–24 %") are unsupported: live graduate share is t10 39.9 % · t11 21.5 % ·
+  t12 23.9 % · t13 35.9 % · t14 26.5 %.
+- **Evidence defect (repeat of the 08-27 `--tab` overwrite lesson, different file).**
+  `/data/audits/opus_ranking.json` on disk contains **only key "14"** (50 rows): the last
+  `opus_ranking.py --tab 14` run overwrote the shared path, so the claimed **1 206-grid t10
+  recovery has no persisted artifact**. It also conflicts in wording with the ranking
+  verdict, which records **t10 C1 PASS** ("every stored per-element verdict keys to the
+  current wording, directly or remappable") — `audit_ranking.feat_norm` already strips
+  reference numerals, so t10's grids were never orphaned in the auditor's sense; the only
+  genuine orphan pool is t13's 330 (registered 401), which `opus_ranking.py` correctly drops.
+- **Per-doc lane (v3) — no persisted evidence of finding a champion the screen misses.**
+  The only head-to-head on disk is `audit_recall` t13: `must` rounds 2/21, `must-followup`
+  contributed 5 of the 7 hits — that is the **legacy roster-35 claims sweep**, not the
+  mega-screen. Today's 92-doc `add_failed` run cannot produce such evidence by construction
+  (those docs were never screened), it wrote nothing to the DB, and 86 of the 92 already held
+  opus verdicts. Both of today's new GT docs came from `opus_prior_filter.py`
+  (`CN116190826` rank 0, `CA2142366` rank 9), not from the NLM lane.
+- **Cross-file contradictions:** none between `audit_recall` / `audit_ranking` /
+  `audit_full_staging` (t13 C6 PASS vs R1 misses stays consistent — the misses are opus-read
+  GT). The S1 shrink 88 → 0 is fully explained by the 08-27 evening restage ledger rows, not
+  by phantom reads (t11 max scored_at 08-27 05:38, t13 08-27 11:14, unchanged).
+- **C5:** canary only on t13 (9/9, SCOPED). t10/t11/t12/t14 have no verbatim canary ⇒
+  corpus-wide negatives scoped only. **R6 queues non-empty:** t10 [US20120007441,
+  CN103683526] (both inside the 773 docs now being screened — wait for it), t13
+  [CN218958581, AU2022338850, CN220510820, CN120073105, CN120433348].
+- **Permanent scope limit to disclose:** with "no NLM quota on t11 ever again", t11's 27
+  `add_failed` docs and its 4 R1 misses can never be closed by an NLM instrument; any t11
+  coverage statement must say so.
+- **Verdict: BLOCKED.** Nothing reported today was gate-backed. Auditors to spawn, in order:
+  full-doc-staging-auditor (t11–t14 live now; t10 after its screen finishes) →
+  staging-completeness-auditor (LIVE, not `--no-live`) → recall-integrity-auditor →
+  ranking-integrity-auditor (`--deploy-head e02278b`) → nlm-followup-verifier (t13's queue on
+  `default`, which is free; t10's two docs only after the drawnformula screen ends).
+
 ---
 
 ## 2026-08-29 — F3f priced: the genus wording buys recall and pays more in precision
