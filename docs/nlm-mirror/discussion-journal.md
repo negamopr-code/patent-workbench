@@ -3614,3 +3614,104 @@ three outcome rows appended to `docs/experiments/read_ledger.jsonl`.
 
 Pre-audit caveat unchanged: all three auditors returned worst = FAIL at 07:05–07:12 today
 (head 09f61a9) and no supervisor pass has gated these numbers.
+
+---
+
+## 2026-08-29 22:44–22:48 UTC — NLM per-doc follow-up, t13 R6 queue (4 graduates with no feature grid)
+
+**Why this round.** The recall-integrity-auditor's R6 queue named four t13 documents that the v2
+screen KEPT (`nlm_screen_state='graduate'`) and that opus-5 scored **4.0**, but for which **no sweep
+ever produced a feature grid** — so the only per-feature verdict in existence was opus's own
+`feature_scores`, unreplicated by any second instrument. One chunk, 4 docs, 2 NLM queries.
+
+**Setup / gates.** Account gate run before *and* after: `PASS`, the only running NLM job is
+`drawnformula: t10:nlm-screen` (the 773-doc mega-screen started 22:20). t13 is pinned to the
+`default` profile, which was idle — tab 10, the drawnformula profile and notebook `50f703e7` were
+not touched, and no query was ever sent to t11. Wording **verbatim** (`--genus` deliberately NOT
+passed: today's A/B measured genus at 50 % agreement with opus vs verbatim's 76 %, reverted in
+1c456a7). Command: `/data/nlm_followup.py --tab 13 --docs CN218958581,AU2022338850,CN220510820,CN120073105 --json --compact`.
+
+**Staging.** 5 sources for 4 docs — `AU2022338850` (215 KB) went in as **2 parts**, everything else
+single-part; `parts_ok` = want==ok for all four, and the post-ingest `source_inventory` lists all 5
+titles. Nothing clipped (F3c-safe). Notebook `3df5d030-8b0a-4a4d-a67c-9b8f7a023dec`, deleted after
+the round.
+
+**Broad question: LANDED** (non-empty, no transport error) → the 08-27 abort path was NOT triggered
+and the consolidated question was legitimately asked against the real 9-feature checklist. One
+wording artefact worth recording: NLM answered the broad question with **source indices, not patent
+numbers** (`FEATURE 1: 4, 5`). The consolidated reply then headed each block with both
+(`### 4 (CN218958581)`, `### 1 & 2 (AU2022338850)`), which self-validates the index map against the
+source inventory. Broad-vs-consolidated cell agreement 32/36; the four disagreements are all
+broad-omits-a-feature-the-per-doc-pass-claims (AU F7, CN120073105 F1/F6, CN218958581 F5-as-PARTIAL).
+Lesson: **the broad pass is a router, not a grid** — never harvest a grid from it.
+
+**Grids (NLM checklist order; weights 5,5,5,4,4,3,3,3,1 — F1 wired CAN/LIN port to BMS · F2 control
+module ↔ BMS over that wire · F3 the delivered message TRIGGERS start-up + energy output · F4 msg-gen
+= wireless module + control module · F5 wireless link to the input device · F6 input device + msg-gen
+device with a controller · F7 controller stores modifiable target data · F8 transceiver → differential
+CANH/CANL · F9 device category):**
+
+| doc | NLM grid | weighted YES | opus grid (same order) | exact | directional |
+|---|---|---|---|---|---|
+| CN120073105 | Y Y Y Y Y Y Y Y Y | 33/33 = 100 % | Y Y Y P P P P P P | 3/9 | **9/9** |
+| CN220510820 | Y Y Y Y Y Y Y Y Y | 33/33 = 100 % | Y Y P Y P P P N P | 3/9 | 8/9 |
+| CN218958581 | Y Y **N** Y P P Y Y **N** | 20/33 = 61 % | Y Y P P Y P P P P | 3/9 | 7/9 |
+| AU2022338850 | **N N N** Y P Y Y Y **N** | 13/33 = 39 % | P P N Y Y Y Y P N | 5/9 | 7/9 |
+
+Instrument agreement overall: **exact 14/36 = 39 %, directional (disclosed vs not) 31/36 = 86 %.**
+The two instruments almost never agree on the *grade*, but they agree on *whether there is anything
+there* — and, crucially, they agree on **which documents own the three weight-5 features**.
+
+**Per-doc reading of the evidence.**
+
+- **CN120073105** (Whole package energy storage system) — 9/9 YES with component-level citations:
+  EMS ↔ each pack's BMS through **CANFD adapters converting a preset interface to CAN** (F1/F2, claim 1
+  + [19]/[23]), and F3 cited as *"the EMS simulates vehicle CAN messages and uses a logic algorithm to
+  control the main relay of the primary battery pack, triggering discharging"* — the trigger element,
+  quoted, not paraphrased. Opus independently graded F1/F2/F3 all YES on the same passages ([0058],
+  [0064], [0068]). **Two instruments, same three heavy features, same cited paragraphs.** The 4.0 is
+  corroborated; this is the strongest doc in the queue.
+- **CN220510820** (Energy storage equipment) — 9/9 YES: power-output module ↔ battery-management
+  module over the **second CAN bus** (F1/F2), and a **discharging instruction that makes the battery
+  module output energy to the external device** (F3, claim 3 + [34]). Opus called F3 only PARTIAL
+  ("execute discharge, but no start-up/power-on wording") and F8 an outright NO ("no transceiver
+  converting a message into differential CANH/CANL"). NLM's F8=YES is an **over-claim** — it reads
+  "CAN bus" as "differential communication interface" rather than finding a transceiver component.
+  Core corroborated; tail inflated.
+- **CN218958581** (Fork truck battery communication circuit) — F1/F2 YES on real citations (CANH/CANL
+  pins between battery-management chip U1 and wireless chip U2), but **F3 = NO for exactly opus's
+  reason**: *"Claim 4 and Claim 5 only disclose disconnecting charging and discharging loops to stop
+  running"*. Opus: *"a remote signal triggers the BMS to act on the battery, but to stop
+  charge/discharge, not to trigger energy output."* **Two independent instruments converge on the same
+  defect on the decisive element.** Also F9 (device category) NO on both. Topically a genuine
+  neighbour; on the claim it stops one element short.
+- **AU2022338850** (dongle / vehicle diagnostic tool proximity) — **all three weight-5 features NO**,
+  plus F9 NO: *"the dongle communicates directly with a vehicle's ECUs, not a battery management
+  system"*, *"the trigger is for performing vehicle communication, not triggering a battery device to
+  start up and output electric energy."* What it does own is the **architecture** — F4 (wireless
+  transceiver + processor in the dongle), F6 (hand-held tool + message-generating device), F7 (memory
+  storing modifiable data), F8 (**CAN FD system basis chip transmitting over differential lines**).
+  Opus said the same in different grades (F1/F2 PARTIAL, F3 NO, F9 NO). The 4.0 is an
+  **architecture/analogous-art** score, not a feature match, and both instruments now say so.
+
+**Grouping.** No doc in this queue lands in "recommend opus read" — all four already carry a paid
+opus-5 grid, and this round was corroboration, not triage. The useful grouping is:
+*corroborated-as-genuine-match* = CN120073105 (unambiguous), CN220510820 (core yes, F8 inflated);
+*corroborated-as-relevant-but-element-short* = CN218958581 (F3 fails on both instruments);
+*corroborated-as-analogous-art-only* = AU2022338850 (heavy core absent on both).
+Recall doctrine still applies: NLM's NOs do **not** clear CN218958581 or AU2022338850 — they merely
+agree with an opus read that already exists, which is what makes them worth recording.
+
+**What this round establishes for the funnel.** The v2 screen's decision to graduate all four is
+**not** a false-keep in any of the four cases: every doc disclosed at least 4 of 9 MUST features under
+verbatim wording, and two disclosed all nine. But "graduate" and "match" are different claims — the
+screen graduated a vehicle-diagnostic dongle and a stop-the-battery forklift circuit alongside two
+real energy-storage matches, which is the topicality-filter behaviour H1/H6 already documented.
+Follow-up cost: **2 NLM queries on `default`, 0 DB writes, 0 opus tokens.**
+
+Evidence (re-auditable): `/data/audits/followup_t13_1788043460.json` (full spec, broad answer,
+consolidated answer, `parts_ok`, `source_inventory`); stderr `/data/audits/followup_t13_1788043460.err`
+(empty — no broad-failure, no budget truncation). Ledger line appended to
+`/data/audits/followup_ledger.jsonl`: `{"tab": 13, "ts": 1788043513, "notebook":
+"3df5d030-8b0a-4a4d-a67c-9b8f7a023dec", "mode": "compact", "wording": "verbatim", "docs":
+["CN218958581","AU2022338850","CN220510820","CN120073105"]}`.
