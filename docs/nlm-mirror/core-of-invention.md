@@ -73,3 +73,61 @@ counting the corpus. Hence a dedicated agent.
    independently and union the candidates?
 5. Should the existing 1–5 feature weights be re-derived from the core analysis, or kept and
    supplemented with a separate `is_core` flag?
+
+---
+
+# Agreed architecture — user, 2026-08-30
+
+## The user's four answers
+
+1. **Combination**, not a single feature — the core is an irreducible conjunction.
+2. **Keep alive at low rank for review** — never a hard gate. *"It is only an additional
+   checkpoint, it is not a standalone filter."*
+3. **The core comes from independent claim 1.** Finding it there is the primary job; a
+   whole-document core reading is an additional bonus.
+4. **Several possible cores** are allowed; a document owning any of them is rescued.
+
+## The pipeline
+
+```
+1. fast screen         39 docs/query   topicality only — produces graduates + a REJECTED pile
+2. CORE RESCUE pass    39 docs/query   run over the REJECTED pile; anything owning a core
+                                       combination is pulled back, at low rank, for review
+3. slow lane            5 docs/query   per-feature grid, CORE FEATURES ASKED FIRST so a doc
+                                       failing the core terminates early
+4. opus                                decides which is closest
+```
+
+**No volume limit on stage 3.** If the core pass says 500 documents own a core, all 500 earn a
+slow-lane read — they passed a real test rather than a popularity contest.
+
+## Why the core pass is cheap
+
+The rescue needs no prior grid, because it asks about **2–3 features instead of 11** (~500 chars
+against ~2200). It is therefore itself a screen-speed pass. t10's 1005 rejected documents cost
+~26 queries for a complete rescue sweep.
+
+## Wording rule (agreed)
+
+**Broadened/genus wording ONLY in the core rescue pass; verbatim everywhere a verdict is
+formed.** A false positive in a rescue costs one slow-lane read, so over-crediting is harmless
+there — while in a verdict lane it measured 35% over-credit and 45 hard YES-where-opus-said-NO.
+Without broadening, the rescue would re-lose the same documents the vocabulary floor already
+hides (`CN103683526` was missed by every verbatim instrument on 2026-08-30).
+
+## Measurements behind this design (t10, all 2049 docs opus-read, so no read was spent)
+
+- **The buried champion the design exists for:** `CN103683526`, opus 4.0, coverage-rank **162**,
+  screen **rejected**, slow lane 12.1% (tied with opus-0.0 controls). It owns BOTH core supply
+  features at PARTIAL and nothing else but generics. Only a core check finds it.
+- **Core must be satisfiable:** adding the literal inventive step ("the two supplies use
+  DIFFERENT frequencies") rescues ZERO documents — no document in 2049 discloses it. The agent
+  must propose cores at several strictness levels, chosen empirically.
+- **PARTIAL must count:** requiring YES on the core loses `CN103683526`.
+- **Rescue cost:** the working rule ("both supplies, any grade") flags 149 documents, 114 of them
+  below the shortlist, to recover 1 champion — ~5.6% of the tab kept alive.
+- **The slow lane is a two-way classifier, not a ranker.** Calibration over 50 t10 documents
+  (13 ground truth, stratified and interleaved): mean coverage opus≥4 **38.7%**, opus=3
+  **38.8%**, opus=2 15.2%, opus≤1 15.4%. It separates {5,4,3} from {2,1,0} and is blind between
+  4 and 3. precision@3 67%, @5 60%, @10 50% against a 26% base rate — roughly a 2× lift.
+  **Therefore it cannot replace opus for ranking; it decides who earns an opus read.**
