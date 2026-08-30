@@ -1,0 +1,546 @@
+{
+  "10": [
+    {
+      "label": "T10-1 (loosest) — a second microwave power supply feeding the relay tier",
+      "features": [
+        "Second wireless power supply device (20B) configured to perform wireless power supply to the remote wireless device (16) using a microwave"
+      ],
+      "owners": 303,
+      "pct": 14.8,
+      "rescues": "5/5",
+      "rationale": "Claim 1 is in EPO two-part form: everything up to 'characterized in that' (system, base device, remote device, sensor device, pre-paired links, first microwave supply to the sensor) is admitted prior art and therefore INHERENT. The characterising portion begins with the SECOND wireless power supply device that beams microwave energy to the RELAY (remote) device. Powering a leaf sensor by RF is commonplace (F6 alone: 34.2% of the tab); powering the intermediate relay node is the step that makes the three-tier network self-sufficient. Loosest tier: ask for that one element at any grade.",
+      "recommended": false,
+      "feature_indices": [
+        7
+      ],
+      "weights": [
+        5
+      ],
+      "owners_in_rejected_pile": 84,
+      "pct_of_rejected_pile": 8.4,
+      "missed_champions": []
+    },
+    {
+      "label": "T10-2 (recommended) — two microwave power supplies feeding two different tiers",
+      "features": [
+        "First wireless power supply device (20A) configured to perform wireless power supply to the sensor device (18) using a microwave",
+        "Second wireless power supply device (20B) configured to perform wireless power supply to the remote wireless device (16) using a microwave"
+      ],
+      "owners": 225,
+      "pct": 11.0,
+      "rescues": "5/5",
+      "rationale": "The irreducible conjunction of the characterising portion minus the frequency limitation: a microwave supply to the SENSOR and a separate microwave supply to the RELAY. Neither alone is inventive (RF-harvesting sensors are ubiquitous; a powered relay alone is a repeater). Together they are the architecture the claim protects. Holds all 5 rejected champions including CN103683526, which owns exactly these two at PARTIAL and nothing else but generics — the document the whole core-of-invention design exists for.",
+      "recommended": true,
+      "feature_indices": [
+        6,
+        7
+      ],
+      "weights": [
+        4,
+        5
+      ],
+      "owners_in_rejected_pile": 69,
+      "pct_of_rejected_pile": 6.9,
+      "missed_champions": []
+    },
+    {
+      "label": "T10-3 (tighter) — relay tier plus the two microwave supplies",
+      "features": [
+        "Remote wireless device (16) configured to perform wireless communication with the base wireless device (14)",
+        "First wireless power supply device (20A) configured to perform wireless power supply to the sensor device (18) using a microwave",
+        "Second wireless power supply device (20B) configured to perform wireless power supply to the remote wireless device (16) using a microwave"
+      ],
+      "owners": 132,
+      "pct": 6.4,
+      "rescues": "5/5",
+      "rationale": "Same core with the relay tier itself required, i.e. the two supplies must actually feed a base->relay->sensor chain rather than two unrelated loads. F2 is inherent on its own (34.7%) but as a conjunct it removes half the false positives at no recall cost (still 5/5). Use it if rescue budget is tight.",
+      "recommended": false,
+      "feature_indices": [
+        2,
+        6,
+        7
+      ],
+      "weights": [
+        2,
+        4,
+        5
+      ],
+      "owners_in_rejected_pile": 36,
+      "pct_of_rejected_pile": 3.6,
+      "missed_champions": []
+    },
+    {
+      "label": "T10-4 (strictest) — the literal characterising portion, different microwave frequencies",
+      "features": [
+        "First wireless power supply device (20A) configured to perform wireless power supply to the sensor device (18) using a microwave",
+        "Second wireless power supply device (20B) configured to perform wireless power supply to the remote wireless device (16) using a microwave",
+        "Frequency of the microwave used in wireless power supply from the first wireless power supply device (20A) to the sensor device (18) is different from the frequency of the microwave used in wireless power supply from the second wireless power supply device (20B) to the remote wireless device (16)"
+      ],
+      "owners": 101,
+      "pct": 4.9,
+      "rescues": "3/5",
+      "rationale": "The literal inventive step. Measured on 2026-08-30 to be near-unsatisfiable as a YES; even counting PARTIAL it loses EP3849091 and CN103683526. Keep it as a top-of-list ranking signal, never as the rescue gate.",
+      "recommended": false,
+      "feature_indices": [
+        6,
+        7,
+        8
+      ],
+      "weights": [
+        4,
+        5,
+        5
+      ],
+      "owners_in_rejected_pile": 19,
+      "pct_of_rejected_pile": 1.9,
+      "missed_champions": [
+        "EP3849091",
+        "CN103683526"
+      ]
+    },
+    {
+      "label": "UNION of recommended cores (a document owning ANY recommended core is rescued)",
+      "features": [],
+      "owners": 225,
+      "pct": 11.0,
+      "rescues": "5/5",
+      "rationale": "Aggregate effect of the cores marked recommended:true above. This is the number that should be compared with the mechanical highest-weight baseline.",
+      "recommended": null,
+      "feature_indices": [],
+      "weights": [],
+      "owners_in_rejected_pile": 69,
+      "pct_of_rejected_pile": 6.9,
+      "missed_champions": []
+    }
+  ],
+  "_meta": {
+    "10": {
+      "graded_documents": 2049,
+      "rejected_pile": 1005,
+      "champions_opus_ge4_rejected": 5,
+      "champion_numbers": [
+        "US20180351412",
+        "EP3849091",
+        "CA2552849",
+        "US20120007441",
+        "CN103683526"
+      ]
+    },
+    "12": {
+      "graded_documents": 847,
+      "rejected_pile": 392,
+      "champions_opus_ge4_rejected": 7,
+      "champion_numbers": [
+        "CN116190826",
+        "CN219576664",
+        "CN119833811",
+        "KR20260033205",
+        "CN222146326",
+        "CN121906003",
+        "KR20260027428"
+      ]
+    },
+    "13": {
+      "graded_documents": 996,
+      "rejected_pile": 293,
+      "champions_opus_ge4_rejected": 3,
+      "champion_numbers": [
+        "CN204215539",
+        "CN117692268",
+        "CN224152886"
+      ]
+    },
+    "14": {
+      "graded_documents": 489,
+      "rejected_pile": 59,
+      "champions_opus_ge4_rejected": 7,
+      "champion_numbers": [
+        "EP3890097",
+        "EP3843196",
+        "EP3796511",
+        "US20210178927",
+        "EP4145588",
+        "CA2142366",
+        "CN115514036"
+      ]
+    }
+  },
+  "12": [
+    {
+      "label": "T12-1 (loosest) — the fan inside the water-cooled power supply part",
+      "features": [
+        "first fan (36) disposed inside the water-cooled power supply part (30), configured to supply air cooled through water cooling inside the water-cooled power supply part (30) to the charging and discharging jig (20), thereby preventing condensation in the water-cooled power supply part (30)"
+      ],
+      "owners": 129,
+      "pct": 15.2,
+      "rescues": "6/7",
+      "rationale": "Claim 1's inherent half is the charger/discharger, the charge-discharge jig, and the water chiller loop: any water-cooled formation equipment has those (the chiller features sit at 28-33% of the tab, the coolant flow path at 35.7%). The inventive element is the last 'and': a fan placed INSIDE the water-cooled power supply part that re-uses the already-chilled internal air, blows it onto the jig, and thereby prevents condensation inside the power supply part. That dual purpose (cool the jig / dry the supply) is the step.",
+      "recommended": false,
+      "feature_indices": [
+        5
+      ],
+      "weights": [
+        5
+      ],
+      "owners_in_rejected_pile": 40,
+      "pct_of_rejected_pile": 10.2,
+      "missed_champions": [
+        "KR20260027428"
+      ]
+    },
+    {
+      "label": "T12-2 (recommended core A) — water-cooled power supply part + the fan inside it",
+      "features": [
+        "water-cooled power supply part (30) configured to supply power to the charging and discharging jig and adapted to be cooled with water",
+        "first fan (36) disposed inside the water-cooled power supply part (30), configured to supply air cooled through water cooling inside the water-cooled power supply part (30) to the charging and discharging jig (20), thereby preventing condensation in the water-cooled power supply part (30)"
+      ],
+      "owners": 48,
+      "pct": 5.7,
+      "rescues": "6/7",
+      "rationale": "The irreducible pair. A fan in a cabinet is nothing; a water-cooled power-supply part is nothing (19.1%); a fan sited inside the water-cooled supply so that the water cooling produces the air stream is the invention. 5.7% of the tab, 6 of 7 rejected champions.",
+      "recommended": true,
+      "feature_indices": [
+        2,
+        5
+      ],
+      "weights": [
+        3,
+        5
+      ],
+      "owners_in_rejected_pile": 15,
+      "pct_of_rejected_pile": 3.8,
+      "missed_champions": [
+        "KR20260027428"
+      ]
+    },
+    {
+      "label": "T12-3 (recommended core B) — charge/discharge jig powered by a water-cooled power supply part",
+      "features": [
+        "charging and discharging jig configured to charge and discharge a battery",
+        "water-cooled power supply part (30) configured to supply power to the charging and discharging jig and adapted to be cooled with water"
+      ],
+      "owners": 30,
+      "pct": 3.5,
+      "rescues": "7/7",
+      "rationale": "A second, independent core reading: the claim's real departure from the art may be electrically that the jig's power supply is water-cooled at all (conventional formation equipment air-cools it), with the fan as the consequence. Needed as its own core because KR20260027428 — an opus 4.0 rejected champion — owns the water-cooled supply and the module/flow-path structure but not the fan. Union with core A: 55 docs, 6.5% of the tab, 7/7.",
+      "recommended": true,
+      "feature_indices": [
+        1,
+        2
+      ],
+      "weights": [
+        2,
+        3
+      ],
+      "owners_in_rejected_pile": 12,
+      "pct_of_rejected_pile": 3.1,
+      "missed_champions": []
+    },
+    {
+      "label": "T12-4 (strictest) — fan sited at the cell tab and the gripper",
+      "features": [
+        "first fan (36) disposed inside the water-cooled power supply part (30), configured to supply air cooled through water cooling inside the water-cooled power supply part (30) to the charging and discharging jig (20), thereby preventing condensation in the water-cooled power supply part (30)",
+        "first fan (36) situated adjacent to a cell tab (71) of the battery and a gripper (22) of the charging and discharging jig, and positioned to cool the cell tab (71) and the gripper (22)"
+      ],
+      "owners": 34,
+      "pct": 4.0,
+      "rescues": "5/7",
+      "rationale": "The dependent-claim-2 embodiment that pins the fan's purpose to the hottest interface. Cheapest tier (4.0%) but drops to 5/7; use for ranking inside the rescued pile.",
+      "recommended": false,
+      "feature_indices": [
+        5,
+        6
+      ],
+      "weights": [
+        5,
+        3
+      ],
+      "owners_in_rejected_pile": 12,
+      "pct_of_rejected_pile": 3.1,
+      "missed_champions": [
+        "CN119833811",
+        "KR20260027428"
+      ]
+    },
+    {
+      "label": "UNION of recommended cores (a document owning ANY recommended core is rescued)",
+      "features": [],
+      "owners": 55,
+      "pct": 6.5,
+      "rescues": "7/7",
+      "rationale": "Aggregate effect of the cores marked recommended:true above. This is the number that should be compared with the mechanical highest-weight baseline.",
+      "recommended": null,
+      "feature_indices": [],
+      "weights": [],
+      "owners_in_rejected_pile": 19,
+      "pct_of_rejected_pile": 4.8,
+      "missed_champions": []
+    }
+  ],
+  "13": [
+    {
+      "label": "T13-1 (loosest) — wireless target-data input plus a wired port to the battery's BMS",
+      "features": [
+        "wireless communication module (121) wirelessly sends and receives signals with the input device (110) (e.g. Wi-Fi, Bluetooth, Zigbee, 5G, NB-IoT, LoRa) to acquire target data",
+        "control module (122) connected to the wireless communication module (121); has a wired communication interface / port (e.g. CAN or LIN) for connecting and configuring the target battery device's management equipment (BMS/BMU)"
+      ],
+      "owners": 218,
+      "pct": 21.9,
+      "rescues": "3/3",
+      "rationale": "Claim 1's problem statement (background section) is that today the operator presses physical buttons on a wired signal generator with a bulky harness. Inherent: the trigger device itself, the input device/message-generator split, the controller, the transceiver, and the whole power-supply-monitor / step-down chain (F10-F15, plumbing every embedded board has). The core is the BRIDGE: target data arrives WIRELESSLY from the input device, and leaves over a WIRED bus port (CAN/LIN) into the target battery's management equipment. Either half alone is old art; the wireless-in / wired-out asymmetry is the invention.",
+      "recommended": false,
+      "feature_indices": [
+        3,
+        4
+      ],
+      "weights": [
+        4,
+        5
+      ],
+      "owners_in_rejected_pile": 84,
+      "pct_of_rejected_pile": 28.7,
+      "missed_champions": []
+    },
+    {
+      "label": "T13-2 (recommended) — message generator holding both the wireless module and the wired-to-BMS control module",
+      "features": [
+        "message generating device (120) comprises a wireless communication module (121) and a control module (122)",
+        "wireless communication module (121) wirelessly sends and receives signals with the input device (110) (e.g. Wi-Fi, Bluetooth, Zigbee, 5G, NB-IoT, LoRa) to acquire target data",
+        "control module (122) connected to the wireless communication module (121); has a wired communication interface / port (e.g. CAN or LIN) for connecting and configuring the target battery device's management equipment (BMS/BMU)"
+      ],
+      "owners": 149,
+      "pct": 15.0,
+      "rescues": "3/3",
+      "rationale": "Adds the structural nucleus: the two halves of the bridge must sit inside ONE message-generating device. This is what makes the device a standalone box rather than a laptop plus a CAN dongle. 15.0% of the tab against the mechanical baseline's 21.8%, and it holds all 3 rejected champions.",
+      "recommended": true,
+      "feature_indices": [
+        2,
+        3,
+        4
+      ],
+      "weights": [
+        4,
+        4,
+        5
+      ],
+      "owners_in_rejected_pile": 60,
+      "pct_of_rejected_pile": 20.5,
+      "missed_champions": []
+    },
+    {
+      "label": "T13-3 (equal-recall, cheaper) — input device + message generator, wireless in, wired BMS port",
+      "features": [
+        "comprises an input device (110) and a message generating device (120), with a controller / control processor (1221) inside the message generating device",
+        "wireless communication module (121) wirelessly sends and receives signals with the input device (110) (e.g. Wi-Fi, Bluetooth, Zigbee, 5G, NB-IoT, LoRa) to acquire target data",
+        "control module (122) connected to the wireless communication module (121); has a wired communication interface / port (e.g. CAN or LIN) for connecting and configuring the target battery device's management equipment (BMS/BMU)"
+      ],
+      "owners": 112,
+      "pct": 11.2,
+      "rescues": "3/3",
+      "rationale": "Same recall (3/3) at 11.2% by requiring the input-device/message-generator split instead of the module pair. Preferred if rescue budget matters; kept separate because F1 and F2 are near-restatements and only one should be conjoined.",
+      "recommended": false,
+      "feature_indices": [
+        1,
+        3,
+        4
+      ],
+      "weights": [
+        3,
+        4,
+        5
+      ],
+      "owners_in_rejected_pile": 36,
+      "pct_of_rejected_pile": 12.3,
+      "missed_champions": []
+    },
+    {
+      "label": "T13-4 (strictest) — the complete trigger chain, wireless in, wired out, battery made to output energy",
+      "features": [
+        "wireless communication module (121) wirelessly sends and receives signals with the input device (110) (e.g. Wi-Fi, Bluetooth, Zigbee, 5G, NB-IoT, LoRa) to acquire target data",
+        "control module (122) connected to the wireless communication module (121); has a wired communication interface / port (e.g. CAN or LIN) for connecting and configuring the target battery device's management equipment (BMS/BMU)",
+        "the target signal / target message delivered to the management equipment (BMS) triggers the target battery device to start up and output electric energy"
+      ],
+      "owners": 81,
+      "pct": 8.1,
+      "rescues": "1/3",
+      "rationale": "The full claim-1 purpose clause. 8.1% of the tab but only 1/3 champions: most corpus documents that own the bridge stop at 'sends a message to the BMS' without the explicit 'triggers the battery to output electric energy' effect. Ranking signal, not a gate.",
+      "recommended": false,
+      "feature_indices": [
+        3,
+        4,
+        6
+      ],
+      "weights": [
+        4,
+        5,
+        5
+      ],
+      "owners_in_rejected_pile": 29,
+      "pct_of_rejected_pile": 9.9,
+      "missed_champions": [
+        "CN204215539",
+        "CN224152886"
+      ]
+    },
+    {
+      "label": "UNION of recommended cores (a document owning ANY recommended core is rescued)",
+      "features": [],
+      "owners": 149,
+      "pct": 15.0,
+      "rescues": "3/3",
+      "rationale": "Aggregate effect of the cores marked recommended:true above. This is the number that should be compared with the mechanical highest-weight baseline.",
+      "recommended": null,
+      "feature_indices": [],
+      "weights": [],
+      "owners_in_rejected_pile": 60,
+      "pct_of_rejected_pile": 20.5,
+      "missed_champions": []
+    }
+  ],
+  "14": [
+    {
+      "label": "T14-1 (loosest) — charge-state graph spanning the charge-mode switch",
+      "features": [
+        "Instruction to acquire a charge state graph including at least one of: charge state in a first charge section before charge mode switch, and charge state in a second charge section after charge mode switch"
+      ],
+      "owners": 149,
+      "pct": 30.5,
+      "rescues": "7/7",
+      "rationale": "The acceptance trap first: F4 ('adjust a charge amount by comparing a change in the charge state with a pre-stored reference from an initial-state battery') is weight 5 and is claim 1's whole characterising clause, yet 62.4% of the tab owns it. It is an inherent feature wearing a weight-5 label — every SOH-aware charger compares present behaviour against a beginning-of-life reference. It is REJECTED as a core. What is actually specific is WHERE the comparison is taken: a charge-state graph covering the section before and after the CC->CV mode switch. 30.5% is still too loose to gate on, so this is the outer tier only.",
+      "recommended": false,
+      "feature_indices": [
+        5
+      ],
+      "weights": [
+        4
+      ],
+      "owners_in_rejected_pile": 20,
+      "pct_of_rejected_pile": 33.9,
+      "missed_champions": []
+    },
+    {
+      "label": "T14-2 (recommended core A) — mode-switch graph compared against a pre-stored initial-state reference graph to yield a state change rate",
+      "features": [
+        "Instruction to acquire a charge state graph including at least one of: charge state in a first charge section before charge mode switch, and charge state in a second charge section after charge mode switch",
+        "Instruction to compare the charge state graph with a pre-stored reference charge state graph of the battery in its initial state to calculate a state change rate"
+      ],
+      "owners": 69,
+      "pct": 14.1,
+      "rescues": "6/7",
+      "rationale": "This is the genus of the inflection machinery. The literal inventive step (derive the inflection ANGLE at the mode-switch kink, ratio it against a reference inflection angle, map through a tanh) is unsatisfiable in this corpus — F10/F11 are owned by 2 of 489 documents and by zero champions, exactly like t10's different-frequency limitation. One level up, the invention is: take the curve across the mode switch, compare its SHAPE with the beginning-of-life curve, and turn the difference into a scalar rate. 14.1% of the tab, 6/7 champions, and it discards F4 entirely.",
+      "recommended": true,
+      "feature_indices": [
+        5,
+        6
+      ],
+      "weights": [
+        4,
+        5
+      ],
+      "owners_in_rejected_pile": 11,
+      "pct_of_rejected_pile": 18.6,
+      "missed_champions": [
+        "EP3796511"
+      ]
+    },
+    {
+      "label": "T14-3 (recommended core B) — mode-switch graph plus charge-amount adjustment driven by the state change rate",
+      "features": [
+        "Instruction to acquire a charge state graph including at least one of: charge state in a first charge section before charge mode switch, and charge state in a second charge section after charge mode switch",
+        "Instruction to adjust the charge amount of the battery based on the state change rate"
+      ],
+      "owners": 62,
+      "pct": 12.7,
+      "rescues": "6/7",
+      "rationale": "Companion core covering the other half of the claim-2 chain: documents that compute the shape-derived rate and act on it, but whose grid never credited the explicit 'reference graph' comparison. Needed because EP3796511 (opus 4.0, rejected) owns the graph and the rate-driven adjustment but not F6. Union of cores A and B: 90 documents, 18.4% of the tab, 7/7 champions — against the mechanical F4 baseline of 62.4% for 6/7.",
+      "recommended": true,
+      "feature_indices": [
+        5,
+        7
+      ],
+      "weights": [
+        4,
+        4
+      ],
+      "owners_in_rejected_pile": 11,
+      "pct_of_rejected_pile": 18.6,
+      "missed_champions": [
+        "US20210178927"
+      ]
+    },
+    {
+      "label": "T14-4 (strict) — degree of inflection on the voltage pattern graph at the mode switch",
+      "features": [
+        "Instruction to acquire a charge state graph including at least one of: charge state in a first charge section before charge mode switch, and charge state in a second charge section after charge mode switch",
+        "Instruction to calculate state change rate based on a degree of inflection on the voltage pattern graph, wherein the inflection occurs as the charge mode is switched"
+      ],
+      "owners": 53,
+      "pct": 10.8,
+      "rescues": "2/7",
+      "rationale": "The literal inflection machinery, one notch below the angle. 10.8% of the tab but only 2/7 champions: almost no corpus document names an inflection at the CC->CV transition. Use as the top ranking signal inside the rescued pile.",
+      "recommended": false,
+      "feature_indices": [
+        5,
+        9
+      ],
+      "weights": [
+        4,
+        4
+      ],
+      "owners_in_rejected_pile": 7,
+      "pct_of_rejected_pile": 11.9,
+      "missed_champions": [
+        "EP3890097",
+        "EP3843196",
+        "EP3796511",
+        "EP4145588",
+        "CN115514036"
+      ]
+    },
+    {
+      "label": "T14-5 (strictest, unsatisfiable) — inflection angle versus a pre-stored reference inflection angle",
+      "features": [
+        "Instruction to derive an inflection angle, which is an angle at a point where an inflection occurs in the voltage pattern graph",
+        "Instruction to calculate a state change rate between the inflection angle and a pre-stored reference inflection angle of the battery in its initial state"
+      ],
+      "owners": 2,
+      "pct": 0.4,
+      "rescues": "0/7",
+      "rationale": "The literal inventive step of claims 5-7. 2 documents of 489 own it at any grade, 0 champions. Recorded to prove the core is unsatisfiable at full strictness in this corpus, exactly as measured for t10 on 2026-08-30. Never gate on it.",
+      "recommended": false,
+      "feature_indices": [
+        10,
+        11
+      ],
+      "weights": [
+        5,
+        5
+      ],
+      "owners_in_rejected_pile": 0,
+      "pct_of_rejected_pile": 0.0,
+      "missed_champions": [
+        "EP3890097",
+        "EP3843196",
+        "EP3796511",
+        "US20210178927",
+        "EP4145588",
+        "CA2142366",
+        "CN115514036"
+      ]
+    },
+    {
+      "label": "UNION of recommended cores (a document owning ANY recommended core is rescued)",
+      "features": [],
+      "owners": 90,
+      "pct": 18.4,
+      "rescues": "7/7",
+      "rationale": "Aggregate effect of the cores marked recommended:true above. This is the number that should be compared with the mechanical highest-weight baseline.",
+      "recommended": null,
+      "feature_indices": [],
+      "weights": [],
+      "owners_in_rejected_pile": 15,
+      "pct_of_rejected_pile": 25.4,
+      "missed_champions": []
+    }
+  ]
+}
