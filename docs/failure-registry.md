@@ -1122,3 +1122,28 @@ Worked example of the residual verbatim over-credit: t10 `JP4974243` ("Wireless 
 distribution system") was answered YES on F1, F2 and F3 — the two weight-5 features and one
 weight-4 — on a document opus scored 2.0. NLM's per-feature YES is not a match verdict even
 under the validated wording; it is a nomination.
+
+---
+
+## 2026-08-30 — pre-fix staging baseline, and the t10 ground-truth result
+
+**Baseline** (`/data/audits/audit_staging.json`, full scope, `--live`, head `7e62d08`, verdict FAIL on S5). Captured by running the script directly after the agent died on the session token limit — the audit costs zero Claude tokens, so the limit was irrelevant.
+
+- **S3-live-inventory PASS on t10–t14.** First ever clearance of the F4 rolling-notebook confound; the 08-27 verdict ran `--no-live`, so none had existed.
+- **S1-blind-tails = 0 on every tab, and this corroborates the masking finding.** This checker reads the DB; the full-doc-staging-auditor probing live notebooks found 4 blind tails the same day (`CN116345029`, `CN115552761`, `CN119153812`, `JP2023095746`), every one marked `graduate`. A lane credit clears the DB record while the tail stays absent from the notebook the screen actually questions. Two instruments, two views, one conclusion — see [[blind-tails-masked-not-fixed]].
+- **t10 S5 now 0** (was 15): the running mega-screen requeued its `add_failed` docs, F3c-ns behaving as designed.
+- **t13 S5 still 24 vs registered 13** — gating growth NOT explained by the untreated lane, which credited all 24. `add_failed` is a permanent stamp for what the SCREEN could not index; a later follow-up lane seeing the doc does not clear it.
+- **NEW class, untracked: 20 documents are clipped inside CLAIMS** (t12 18, t13 2; worst `KR20230036637` at 717 KB). Claims are the operative text for a prior-art read, so these are the most damaging clips in the corpus and no check currently isolates them.
+
+**The t10 ground-truth run — the recall measurement the 08-23 directive asked for.** 773 documents, all of them already opus-read, seeded with the previous tournament's 10 champions.
+
+| doc | opus | screen |
+|---|---|---|
+| `US11922243` | 4.0 | graduate |
+| `US20180351412` | 4.0 | rejected |
+| `US20120007441` | 4.0 | rejected |
+| `CN103683526` | 4.0 | rejected |
+
+**1 of 4.** The two misses in bold above are *exactly* the two documents of the clean A/B (`ab_clean_t10_1787900564.json`), where benchmark-verbatim wording yields `F1/F2/F3 = NO/NO/NO` and genus wording yields YES. The screen runs verbatim. **F3f is vindicated as a diagnosis of why the screen misses, while remaining rejected as a cure** (35% over-credit, 45 hard `yes|no`).
+
+Caveats that bound this: n=4; and the run was configured *harder* than the screens that produced the 77% corpus figure, because seeding 10 champions means a newcomer must beat opus 4.0–5.0 documents to be named, where the original runs started from an empty survivor pool. 25% and 77% are not measuring the same bar.
