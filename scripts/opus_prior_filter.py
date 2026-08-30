@@ -24,6 +24,7 @@ import argparse, json, math, re, sqlite3, sys
 from collections import Counter, defaultdict
 
 DB = "file:/data/workbench.db?mode=ro"
+CORE_FILE = "/data/core-of-invention-candidates.json"
 TABS = (12, 13, 14)          # t10 is fully opus-read: nothing to filter there
 POS, NEG = 4.0, 2.0          # score >= POS is a positive; <= NEG a clear negative; between = ignored
 STOP = set(("the a an and or of to in for with is are be by on at as from that this it its said "
@@ -88,6 +89,26 @@ def score_lo(doc, w):
     return sum(top) / len(top)
 
 
+def core_vec(cx, tab, idf):
+    """A query vector built ONLY from the tab's core-of-invention features.
+
+    The core concept is right — offline it recovers 22/22 lost champions — but asking
+    NotebookLM to evaluate a core conjunction recovered only 25% and was not reproducible
+    between runs (CA2552849 found in one roster grouping, missed in another, 2026-08-30).
+    So the core is applied HERE instead, where it costs nothing and is deterministic: score a
+    document's similarity to the core features alone, separately from the whole benchmark.
+    A document that is close to the core but far from the rest of the benchmark is exactly the
+    case coverage-scoring buries (t10 CN103683526: opus 4.0, coverage-rank 162).
+    """
+    try:
+        cands = [c for c in json.load(open(CORE_FILE))[str(tab)] if c.get("recommended")]
+    except Exception:                                        # noqa: BLE001
+        return {}
+    text = " ".join(f["\n"] if False else f for c in cands for f in c["features"])
+    tf = Counter(tok(text))
+    return {t: (1 + math.log(c)) * idf.get(t, 0.0) for t, c in tf.items()}
+
+
 def benchmark_vec(cx, tab, idf):
     bm = cx.execute("select title, abstract, claims, description, text, features_json "
                     "from benchmark where tab_id=?", (tab,)).fetchone()
@@ -136,8 +157,10 @@ def build(cx, tab):
     for d in docs.values():
         d["vec"] = {t: (1 + math.log(c)) * idf.get(t, 0.0) for t, c in d["tf"].items()}
     bvec = benchmark_vec(cx, tab, idf)
+    cvec = core_vec(cx, tab, idf)
     for d in docs.values():
         d["bm"] = cosine(d["vec"], bvec)
+        d["core"] = cosine(d["vec"], cvec)
     must_coverage(cx, tab, docs)
     labelled = [n for n, d in docs.items() if d["read"] and d["score"] is not None]
     pos = [n for n in labelled if docs[n]["score"] >= POS]
@@ -195,11 +218,13 @@ def emit(cx, k, signal="lo+bm, MUST-coverage gated"):
         docs, pos, neg = build(cx, tab)
         w = log_odds(docs, pos, neg)
         unread = [n for n, d in docs.items() if not d["read"]]
-        scored = sorted(((score_lo(docs[n], w) + 4.0 * docs[n]["bm"], n) for n in unread),
+        scored = sorted(((score_lo(docs[n], w) + 4.0 * docs[n]["bm"]
+                          + 3.0 * docs[n].get("core", 0.0), n) for n in unread),
                         key=lambda x: -x[0])
         # where do THIS tab's known positives sit on the same scale? a candidate that does not
         # reach the weakest of them is not worth a read
-        pos_s = sorted(score_lo(docs[n], w) + 4.0 * docs[n]["bm"] for n in pos)
+        pos_s = sorted(score_lo(docs[n], w) + 4.0 * docs[n]["bm"]
+                       + 3.0 * docs[n].get("core", 0.0) for n in pos)
         # GATE, calibrated per tab: a candidate must cover the heavy MUST terms at least as well
         # as the weakest quartile of the documents opus actually scored >= 4 on this benchmark.
         # Ranking alone put a doc whose evidence was "shuttles / rockets / spaceships" first.
@@ -215,7 +240,7 @@ def emit(cx, k, signal="lo+bm, MUST-coverage gated"):
             band = "ABOVE median positive" if s >= pos_s[len(pos_s) // 2] else \
                    ("within positive band" if s >= pos_s[0] else "below every positive")
             print(f"    {s:7.3f}  mc={docs[n]['mc']:4.0%}  {n:<16} "
-                  f"{docs[n]['title'][:52]:<52} [{band}]")
+                  f"{docs[n]['title'][:40]:<40} [{band}]")
             out.append({"tab": tab, "number": n, "score": round(s, 4), "band": band,
                         "must_coverage": round(docs[n]["mc"], 3),
                         "band_position": round((s - pos_s[0]) / max(1e-9, pos_s[-1] - pos_s[0]), 3),

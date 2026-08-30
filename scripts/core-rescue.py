@@ -38,6 +38,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("tab", type=int)
 ap.add_argument("--roster", type=int, default=24)
 ap.add_argument("--limit", type=int, default=0, help="stop after N docs (validation runs)")
+ap.add_argument("--only-file", default=None,
+                help="restrict to the publication numbers in this JSON list — controlled re-runs")
+ap.add_argument("--tag", default="", help="namespace progress/evidence so an experiment does "
+                                          "not pollute the real run")
 ap.add_argument("--keep-notebook", action="store_true")
 ap.add_argument("--per-feature", action="store_true",
                 help="ask ONE question per core member and intersect locally, instead of asking "
@@ -49,8 +53,9 @@ ap.add_argument("--per-feature", action="store_true",
                      "per core member per chunk.")
 a = ap.parse_args()
 TAB = a.tab
-LOG = f"/data/.core_rescue_t{TAB}.log"
-PROG = f"{AUD}/core_rescue_t{TAB}.progress.json"
+TAG = ("_" + a.tag) if a.tag else ""
+LOG = f"/data/.core_rescue_t{TAB}{TAG}.log"
+PROG = f"{AUD}/core_rescue_t{TAB}{TAG}.progress.json"
 os.makedirs(EV, exist_ok=True)
 
 
@@ -69,12 +74,12 @@ HB_DIR = "/home/app/.notebooklm-mcp-cli/heartbeats"
 def heartbeat(state, summary, **counts):
     try:
         os.makedirs(HB_DIR, exist_ok=True)
-        tmp = f"{HB_DIR}/.patent-core-rescue-t{TAB}.tmp"
+        tmp = f"{HB_DIR}/.patent-core-rescue-t{TAB}{TAG}.tmp"
         with open(tmp, "w") as f:
             json.dump({"job": f"patent-bench core rescue — tab {TAB}", "account": PROFILE,
                        "state": state, "summary": summary, "counts": counts,
                        "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())}, f)
-        os.replace(tmp, f"{HB_DIR}/patent-core-rescue-t{TAB}.json")
+        os.replace(tmp, f"{HB_DIR}/patent-core-rescue-t{TAB}{TAG}.json")
     except Exception:
         pass                      # a heartbeat must never break the job
 
@@ -130,6 +135,32 @@ def feature_question(text):
             "=== ELEMENT ===\n" + broaden(text))
 
 
+def ask(nb, question, tries=3):
+    """Ask, distinguishing a TRANSIENT empty answer from real quota exhaustion.
+
+    nlm_bridge.is_quota_error() is true for `quota_suspect`, which the bridge sets on ANY empty
+    answer — so a notebook that has not finished indexing 12-24 freshly staged multi-part
+    documents reads as "quota exhausted" and costs an hour of backoff. Verified 2026-08-30:
+    `default` reported QUOTA after ~4 queries against a ~68/day cap, while a probe on the same
+    account answered instantly and this exact core question returned a clean
+    "QUALIFY: CN120472728". Retry the empty answer; back off only on the EXPLICIT marker
+    (RESOURCE_EXHAUSTED / 429 / "quota" in the error text).
+
+    Returns the result dict, or None when the quota is genuinely gone.
+    """
+    for attempt in range(1, tries + 1):
+        r = nlm_bridge.query(nb, question, profile=PROFILE)
+        if r.get("quota"):                      # explicit marker — real exhaustion
+            return None
+        if not r.get("quota_suspect"):          # a real answer
+            return r
+        log(f"  empty answer (attempt {attempt}/{tries}) — waiting for ingestion, retrying")
+        nlm_bridge.wait_sources_ready(nb, timeout=180, profile=PROFILE)
+        time.sleep(20 * attempt)
+    log("  empty answer persisted — chunk failed (NOT quota); it will retry on re-arm")
+    return {"answer": ""}
+
+
 QUESTION = core_question()
 log(f"armed tab={TAB} profile={PROFILE} cores={len(cands)} question={len(QUESTION)}B "
     f"roster={a.roster}")
@@ -138,8 +169,11 @@ rows = cx.execute("""select number, title, abstract, claims, description, digest
                      from documents where tab_id=? and status='fetched'
                      and nlm_screen_state='rejected' order by number""", (TAB,)).fetchall()
 done = set(json.load(open(PROG))) if os.path.exists(PROG) else set()
-rescued = set(json.load(open(f"{AUD}/core_rescue_t{TAB}.rescued.json"))) \
-    if os.path.exists(f"{AUD}/core_rescue_t{TAB}.rescued.json") else set()
+rescued = set(json.load(open(f"{AUD}/core_rescue_t{TAB}{TAG}.rescued.json"))) \
+    if os.path.exists(f"{AUD}/core_rescue_t{TAB}{TAG}.rescued.json") else set()
+if a.only_file:
+    keep = set(json.load(open(a.only_file)))
+    rows = [r for r in rows if r[0] in keep]
 todo = [r for r in rows if r[0] not in done]
 if a.limit:
     todo = todo[:a.limit]
@@ -196,36 +230,48 @@ for i in range(0, len(todo), a.roster):
             members = sorted({m for c in cands for m in c["features"]})
             per, quota = {}, False
             for mem in members:
-                rq = nlm_bridge.query(nb, feature_question(mem), profile=PROFILE)
-                if nlm_bridge.is_quota_error(rq):
-                    quota = True; break
-                txt = rq.get("answer") or rq.get("error") or ""
+                rq = ask(nb, feature_question(mem))
+                if rq is None:
+                    quota = True
+                    break
+                txt = rq.get("answer") or ""
                 per[mem] = {n for n in ok_docs if re.search(re.escape(n), txt, re.IGNORECASE)}
             if quota:
                 if not a.keep_notebook:
-                    try: nlm_bridge.delete_notebook(nb, profile=PROFILE)
-                    except Exception: pass
-                log("QUOTA -> sleep 3600"); time.sleep(3600); continue
-            ans = json.dumps({m: sorted(v) for m, v in per.items()}, indent=1)
-            r = {"answer": ans, "_per_feature": per}
+                    try:
+                        nlm_bridge.delete_notebook(nb, profile=PROFILE)
+                    except Exception:
+                        pass
+                heartbeat("quota_exhausted", f"account {PROFILE} out of NLM quota — retrying "
+                          f"hourly; {len(rescued)} rescued of {len(done)} asked",
+                          pile=len(rows), asked=len(done), rescued=len(rescued))
+                log("QUOTA (explicit) -> sleep 3600")
+                time.sleep(3600)
+                continue
+            r = {"answer": json.dumps({m: sorted(v) for m, v in per.items()}, indent=1),
+                 "_per_feature": per}
         else:
-            r = nlm_bridge.query(nb, QUESTION, profile=PROFILE)
-            if nlm_bridge.is_quota_error(r):
+            r = ask(nb, QUESTION)
+            if r is None:
                 if not a.keep_notebook:
-                    try: nlm_bridge.delete_notebook(nb, profile=PROFILE)
-                    except Exception: pass
-                heartbeat("quota_exhausted",
-                      f"account {PROFILE} out of NLM quota — retrying hourly; "
-                      f"{len(rescued)} rescued of {len(done)} asked",
-                      pile=len(rows), asked=len(done), rescued=len(rescued))
-            log("QUOTA -> sleep 3600"); time.sleep(3600); continue
+                    try:
+                        nlm_bridge.delete_notebook(nb, profile=PROFILE)
+                    except Exception:
+                        pass
+                heartbeat("quota_exhausted", f"account {PROFILE} out of NLM quota — retrying "
+                          f"hourly; {len(rescued)} rescued of {len(done)} asked",
+                          pile=len(rows), asked=len(done), rescued=len(rescued))
+                log("QUOTA (explicit) -> sleep 3600")
+                time.sleep(3600)
+                continue
+
         ans = r.get("answer") or r.get("error") or ""
         ts = int(time.time())
-        json.dump({"tab": TAB, "ts": ts, "notebook": nb, "wording": "genus-broadened", "mode": ("per-feature" if a.per_feature else "conjunction"),
+        json.dump({"tab": TAB, "tag": a.tag, "ts": ts, "notebook": nb, "wording": "genus-broadened", "mode": ("per-feature" if a.per_feature else "conjunction"),
                    "cores": [c.get("label") for c in cands], "question": QUESTION,
                    "asked": ok_docs, "answer": ans,
                    "source_inventory": [s.get("title") for s in (inv.get("sources") or [])]},
-                  open(f"{EV}/t{TAB}_{ts}.json", "w"), indent=1)
+                  open(f"{EV}/t{TAB}{TAG}_{ts}.json", "w"), indent=1)
         bad = (not ans.strip()) or '"status": "error"' in ans
         if bad:
             log(f"chunk {i//a.roster+1}: question failed — chunk NOT credited, will retry on re-arm")
@@ -245,7 +291,7 @@ for i in range(0, len(todo), a.roster):
             rescued |= named
             done |= set(ok_docs)
             json.dump(sorted(done), open(PROG, "w"))
-            json.dump(sorted(rescued), open(f"{AUD}/core_rescue_t{TAB}.rescued.json", "w"))
+            json.dump(sorted(rescued), open(f"{AUD}/core_rescue_t{TAB}{TAG}.rescued.json", "w"))
             log(f"chunk {i//a.roster+1}: asked {len(ok_docs)} ({staged} sources) -> "
                 f"RESCUED {len(named)} | running total {len(rescued)}/{len(done)}")
             heartbeat("running", f"asked {len(done)}/{len(rows)} rejected docs, "
