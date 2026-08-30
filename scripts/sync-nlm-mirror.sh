@@ -52,4 +52,5 @@ print("  added:", r)
 sync_one "$ROOT/docs/nlm-mirror/discussion-journal.md" "Discussion journal"
 sync_one "$ROOT/docs/nlm-mirror/skill-lessons.md"      "Skill and lessons learned"
 sync_one "$ROOT/docs/nlm-mirror/deferred-features.md"  "Deferred features list"
+sync_one "$ROOT/docs/nlm-mirror/core-of-invention.md"   "Core of invention principle"
 echo "synced -> notebook $NOTEBOOK (patent benchmark match project)"
