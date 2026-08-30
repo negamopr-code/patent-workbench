@@ -1147,3 +1147,27 @@ under the validated wording; it is a nomination.
 **1 of 4.** The two misses in bold above are *exactly* the two documents of the clean A/B (`ab_clean_t10_1787900564.json`), where benchmark-verbatim wording yields `F1/F2/F3 = NO/NO/NO` and genus wording yields YES. The screen runs verbatim. **F3f is vindicated as a diagnosis of why the screen misses, while remaining rejected as a cure** (35% over-credit, 45 hard `yes|no`).
 
 Caveats that bound this: n=4; and the run was configured *harder* than the screens that produced the 77% corpus figure, because seeding 10 champions means a newcomer must beat opus 4.0–5.0 documents to be named, where the original runs started from an empty survivor pool. 25% and 77% are not measuring the same bar.
+
+---
+
+## 2026-08-30 — two rescue instruments tested against the rejected piles; both fail unassisted
+
+**The problem is real.** 44 opus≥4 documents sit in the mega-screen's rejected piles across t10–t14, including t12's `KR20260033205` at opus 8.0, a registered champion control. The screen's recall is 8/13 (62%) on t10 measured against a fully opus-read corpus.
+
+**Instrument 1 — NLM core-of-invention rescue. REJECTED on evidence.**
+The concept validates offline: cores derived from independent claim 1 recover **22/22** lost champions at 6.5–18% keep-alive cost, and the deriving agent correctly rejected t14's weight-5 `F4` as inherent (62.4% of the tab owns it). But asking NotebookLM to evaluate a core recovered **1/4 (25%)** over 84 documents, and is **not reproducible**: `CA2552849` (opus 4.0) was FOUND in the roster-12 experiment and MISSED in the live run — same question, same roster size, differing only in which documents shared its chunk. Stopped after 27 queries rather than the planned 405.
+
+**Instrument 2 — supervised filter, unassisted. FAILS to prospect.**
+k-fold precision on the LABELLED field is excellent (p@3 100/100/100 with the core signal added, which lifted t14 from 67%). It does not transfer to the unread rejected pile:
+
+| how the document was chosen | picks | opus result |
+|---|---|---|
+| filter ranking + abstract read before picking | CN116190826, CA2142366 | **4.0, 4.0** |
+| deliberate low-ranked control | CN115800429 | 3.0 (predicted low) |
+| **filter ranking alone** | KR20190012058, KR101488054, KR20230074001 | **2.0, 2.0, 3.0** |
+
+The validation measured the filter on documents opus had already chosen to read. The rejected pile is a different distribution and the precision did not carry. **The abstract-reading step was doing real work that was being credited to the filter.**
+
+**Working method, 2 for 2:** filter to narrow → read abstracts locally (free, no quota, no reads) → pick → opus confirms. What fails is skipping the middle step.
+
+**Also settled: graduate queues are not worth gridding.** The slow lane ran t13 51/51 (1 document above 20% coverage) and t14 61 (3 above 20%). Two tabs, 112 graduates, 4 documents worth anything. The 122 "outstanding opus reads" are cancelled, not deferred.
