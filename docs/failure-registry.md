@@ -1171,3 +1171,17 @@ The validation measured the filter on documents opus had already chosen to read.
 **Working method, 2 for 2:** filter to narrow → read abstracts locally (free, no quota, no reads) → pick → opus confirms. What fails is skipping the middle step.
 
 **Also settled: graduate queues are not worth gridding.** The slow lane ran t13 51/51 (1 document above 20% coverage) and t14 61 (3 above 20%). Two tabs, 112 graduates, 4 documents worth anything. The 122 "outstanding opus reads" are cancelled, not deferred.
+
+**2026-08-31 — the slow lane cannot order a shortlist either.** t13's rejected pile looked rich: 38 of 100 filter-top documents above 40% MUST coverage, two at 100%, against 1 of 51 in its graduate pile. Three opus reads on the top of that pile returned **3.0, 3.0, 2.0**. Both 100%-coverage documents are 3.0.
+
+The coverage score was measuring the BENCHMARK's looseness, not the documents' relevance. t13 decomposes into 9 loosely-coupled elements (wireless link, control module, BMS port); t12 has 6 tightly-coupled ones and t14 has 22 — and t12/t14's rejected piles returned **0 documents above 40%** against t13's 38. Coverage percentages are therefore not comparable across tabs and must never be read as a relevance ranking.
+
+Cumulative record of automated candidate selection against the rejected piles:
+
+| method | picks | opus results | champions |
+|---|---|---|---|
+| filter + human abstract read | CN116190826, CA2142366 | 4.0, 4.0 | **2/2** |
+| filter ranking alone | 3 on t12 | 2.0, 2.0, 3.0 | 0/3 |
+| slow-lane coverage ranking | 3 on t13 | 3.0, 3.0, 2.0 | 0/3 |
+
+**0 of 6 unassisted, 2 of 2 assisted.** Neither NLM instrument nor the supervised filter can order a shortlist; the judgement step between narrowing and reading is doing the work. This is the same ceiling the calibration measured from the other direction (opus>=4 mean coverage 38.7% vs opus=3 38.8% — the instruments stop one level above the decision).

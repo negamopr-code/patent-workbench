@@ -24,6 +24,29 @@ def addressed(n, txt):
                           (txt or "")[m.end():m.end() + 200], re.IGNORECASE))
 
 
+def index_map(ev):
+    """NotebookLM sometimes heads each block with a bare ORDINAL instead of the publication
+    number ("1: F1=NO F2=NO ..."), leaving the gate's number-anchor nothing to match — ten valid
+    grids were discarded that way on t14 slowrej chunk 3 (2026-08-31) and on the paired test.
+
+    The blocks are the documents in the order the question listed them, so the mapping is
+    recoverable. It is only applied under a strict guard: the number of ordinal blocks must
+    EQUAL the number of documents asked, and no block may already carry a publication number.
+    Anything else returns {} and the chunk stays uncredited rather than risk mis-attributing a
+    grid to the wrong document.
+    """
+    ans = (ev.get("answers") or {}).get("_consolidated") or ""
+    docs = [d for d in (ev.get("docs") or ev.get("asked") or [])]
+    if not docs:
+        return {}
+    if any(re.search(rf"\**{re.escape(n)}\**\s*[)\]]?\s*\**\s*[:\-—]", ans) for n in docs):
+        return {}                       # already number-keyed; nothing to remap
+    idx = sorted({int(m) for m in re.findall(r"^(\d+)\s*[:.]\s*\**F\s*1\s*=", ans, re.M)})
+    if idx != list(range(1, len(docs) + 1)):
+        return {}                       # not a clean 1..N enumeration — refuse to guess
+    return {i: docs[i - 1] for i in idx}
+
+
 def credited(ev):
     """Same rules as the runner: the broad question must have landed, the reply must not have
     rebuilt its own checklist, every part of the doc must be in the live inventory, and the doc
@@ -38,6 +61,20 @@ def credited(ev):
         return set(), "broad/checklist gate failed"
     po, inv = ev.get("parts_ok") or {}, set(ev.get("source_inventory") or [])
     out = set()
+    # index-keyed recovery: attribute each ordinal block to the doc the question listed there
+    imap = index_map(ev)
+    for i, num in imap.items():
+        m = re.search(rf"^{i}\s*[:.]\s*(.*)$", cons, re.M)
+        if not m:
+            continue
+        if not re.search(r"F\s*\d+\s*=\s*(YES|NO|PARTIAL)", m.group(1), re.IGNORECASE):
+            continue
+        p = po.get(num) or {}
+        if not p.get("want") or p.get("ok") != p.get("want"):
+            continue
+        if inv and len([t for t in inv if t and t.startswith(num)]) < p["want"]:
+            continue
+        out.add(num)
     for num, v in (ans or {}).items():
         if num.startswith("_") or not v or v == "QUOTA-ABORT":
             continue
