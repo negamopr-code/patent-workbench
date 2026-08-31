@@ -1185,3 +1185,23 @@ Cumulative record of automated candidate selection against the rejected piles:
 | slow-lane coverage ranking | 3 on t13 | 3.0, 3.0, 2.0 | 0/3 |
 
 **0 of 6 unassisted, 2 of 2 assisted.** Neither NLM instrument nor the supervised filter can order a shortlist; the judgement step between narrowing and reading is doing the work. This is the same ceiling the calibration measured from the other direction (opus>=4 mean coverage 38.7% vs opus=3 38.8% — the instruments stop one level above the decision).
+
+---
+
+## 2026-08-31 — the screen loses champions because of its QUESTION, not its roster size
+
+**Roster size is NOT the cause. Falsified by dose-response.** Champion `KR20260033205` (t12, opus 8.0, rejected by the production screen at roster 20–39) was found at **every** roster size tested — 10, 15, 20, 25, 30 — each in its own fresh notebook, one question each, padded with opus≤3 distractors that genuinely resemble it (all owning fan and/or water-cooling components).
+
+| roster | 10 | 15 | 20 | 25 | 30 |
+|---|---|---|---|---|---|
+| champion | FOUND | FOUND | FOUND | FOUND | FOUND |
+
+Controls: with the champion REMOVED, the same question at roster 10 answered `PICK: NONE` correctly, so it does not force a pick.
+
+**The cause is the question.** The production screen asks *"rank the TOP 10 candidates that best disclose the TARGET FEATURE COMBINATION"* over a weighted 6-feature checklist — so a document whose whole claim to relevance is one weight-5 element loses to documents scoring partially across several. The probe asks for the inventive **mechanism in prose**: *"which one takes air ALREADY CHILLED inside its water-cooled power supply and redirects it to the charging jig, so the enclosure stays free of CONDENSATION and the jig is cooled as a by-product"*.
+
+**This also explains why the core rescue failed at 25%.** The cores derived from claim 1 were correct — the delivery was not. The rescue asked a CONJUNCTION OVER FEATURE NAMES (*"discloses ALL of: [name1] AND [name2]"*), which is still a checklist. The probe describes what the invention DOES. Same core, different question form, 25% versus 5-for-5.
+
+**Methodological correction (user-caught):** the first probe asked all framings in ONE notebook, and NotebookLM keeps chat history within a notebook — so only the FIRST answer of that run was independent. `core-probe.py` now uses a fresh notebook per framing. All dose-response results above are clean by construction.
+
+**Also confirmed:** the reasons NotebookLM gives are expert-quality and independently checkable — *"uses an internal heat exchanger ... rather than reusing chilled air from a water-cooled power supply"*. Comprehension was never the bottleneck. And figures are a corpus-wide blind spot worth noting separately: only **19 of 9720** documents have any figures captured, so a disclosure that lives only in a drawing is invisible to every instrument here.
