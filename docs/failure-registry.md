@@ -1205,3 +1205,24 @@ Controls: with the champion REMOVED, the same question at roster 10 answered `PI
 **Methodological correction (user-caught):** the first probe asked all framings in ONE notebook, and NotebookLM keeps chat history within a notebook — so only the FIRST answer of that run was independent. `core-probe.py` now uses a fresh notebook per framing. All dose-response results above are clean by construction.
 
 **Also confirmed:** the reasons NotebookLM gives are expert-quality and independently checkable — *"uses an internal heat exchanger ... rather than reusing chilled air from a water-cooled power supply"*. Comprehension was never the bottleneck. And figures are a corpus-wide blind spot worth noting separately: only **19 of 9720** documents have any figures captured, so a disclosure that lives only in a drawing is invisible to every instrument here.
+
+---
+
+## 2026-09-02 — "purpose beats components" FALSIFIED; the variable is over-specification
+
+The mechanism-question finding (2026-08-31) held: a prose description of what the invention does finds champions a weighted feature checklist rejects. But the follow-on hypothesis — that a question naming the invention's PURPOSE beats one naming its COMPONENTS — does not survive a controlled test.
+
+**Test.** t13's rejected pile (1304 docs), same account, same roster 30, only the question changed.
+
+| form | question named | picks | result |
+|---|---|---|---|
+| component | "radio in, wired CAN/LIN bus out, in one box" | 5 | recovered `CN117692268` (opus 4.0); 2 unread candidates read at **2.0 and 3.0** |
+| purpose | "replace the tethered signal generator — operator commands from a phone instead of standing at the pack with a wired box" | **0 in 780** | **`CN117692268` was ASKED and REJECTED** |
+
+The purpose form is strictly worse on the one champion we can score.
+
+**The likely variable is SPECIFICITY, not purpose-vs-components.** The t12 question that works at every roster size 10-30 is mechanically specific but narratively neutral — *"takes air ALREADY chilled inside its enclosure and redirects it, so the enclosure stays free of condensation"*. No operator, no workflow, no product framing. The failed t13 purpose form embeds a user, a device and a workflow; `CN117692268` implements the mechanism without matching that story.
+
+This is the same over-specification that made the first t10/t13/t14 questions return NONE correctly (they embedded the claim's narrowest limitation — t10's "different frequencies", which only 2 of 2049 documents disclose). Two different costumes, one error: **the question must describe the mechanism at the level of abstraction the corpus can actually satisfy, and no tighter.**
+
+**Cumulative record of the mechanism scan on genuinely UNREAD documents:** `CN115997317` (t14) **5.0** · `IT202100015797` (t13) 2.0 · `US20130138857` (t13) 3.0. **One in three.** Eleven opus reads across the session produced exactly one document above 4.0, and **no tab's best answer changed**.
