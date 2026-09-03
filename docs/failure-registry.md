@@ -1272,3 +1272,33 @@ rejected documents) has a strictly worse prior than the pool that just came up e
 **Residual after this closure.** The 49 documents scoring opus ≥ 4 that the screen rejected
 (t10 5 · t11 25 · t12 7 · t13 4 · t14 8) remain the live recall problem, and they are free
 controls: any re-pitched mechanism question is validated against verdicts already paid for.
+
+---
+
+## 2026-09-03 — the t12 mechanism scan completes its whole pile: 1 pick from 1369, precision 1/1, champion recall 1/7
+
+The t12 lane finished the entire rejected pile: **1369 of 1369 documents asked, exactly one pick**
+— `KR20260033205`, the tab's opus-8.0 champion and a registered control. All seven of t12's
+rejected champions were staged and asked, so this is a measurement, not a sample:
+
+| t12 rejected champion | opus | asked | picked |
+|---|---|---|---|
+| KR20260033205 | 8.0 | yes | **yes** |
+| CN119833811 | 5.0 | yes | no |
+| CN116190826 | 4.0 | yes | no |
+| CN219576664 | 4.0 | yes | no |
+| CN222146326 | 4.0 | yes | no |
+| CN121906003 | 4.0 | yes | no |
+| KR20260027428 | 4.0 | yes | no |
+
+**Precision 1/1 over 1369 documents; champion recall 1/7 (14 %).** The instrument is extremely
+specific and quite insensitive, and what it recovered was the single best document in the tab —
+the one every other instrument missed (feature-checklist screen rejected it; per-document NLM
+MATCH SCORE correlates −0.00 with opus on t12; the supervised filter never surfaced it; the slow
+lane returned 0 of 110 t12 documents above 40 % coverage).
+
+The honest reading: a mechanism question describes ONE mechanism, so it recovers the documents
+that implement THAT mechanism and is blind to champions that are relevant for other reasons. It
+is a precision instrument for the top of a pile, not a recall instrument for the pile.
+
+**Cost:** ~46 NLM queries, zero Claude tokens.
