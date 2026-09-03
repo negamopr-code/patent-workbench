@@ -1234,3 +1234,41 @@ Everything else had failed on this document: the feature-checklist screen reject
 This is the first live confirmation that the mechanism question generalises beyond the controlled probe. It does NOT rescue the session's other numbers — 2/5 recall on t10, 1-in-3 on unread candidates, and no tab's best answer improved — but it establishes that a correctly-pitched mechanism description can pull a tab's best document out of a discard pile of 1369 for ~35 queries and zero Claude tokens.
 
 The working question form, for reference: mechanically specific, narratively neutral, ending in a NONE escape. Not the claim's narrowest limitation (over-specification, returns NONE correctly), not a user/workflow narrative (over-specification, missed t13's known champion), and not a list of components in a relationship (t13's component form: 5 picks, 1 champion, two unread candidates at opus 2.0 and 3.0).
+
+---
+
+## 2026-09-03 — F3c-ns (`add_failed`) is CLOSED corpus-wide: 120/120 read, 10 champions, tail empty
+
+The staging sink named in H7 as "the single largest champion sink in v2" is now exhaustively
+measured rather than sampled. Every `add_failed` document on t10–t14 carries an opus verdict.
+
+| tab | add_failed | opus-read | opus ≥ 4 |
+|---|---|---|---|
+| t10 | 16 | 16 | 0 |
+| t11 | 27 | 27 | 1 |
+| t12 | 26 | 26 | 0 |
+| t13 | 24 | 24 | 2 |
+| t14 | 27 | 27 | **7** |
+| **total** | **120** | **120** | **10** |
+
+**The last 6 reads (t14 tail, 2026-09-03) returned 0 champions.** Scores: KR102344538 3.0 ·
+KR20260055095 3.0 · WO2025036486 2.0 · CN106992561 2.0 · KR20040066085 2.0 · JP2003207552 2.0.
+The two 3.0s are near misses on the right axis — KR20260055095 has the BOL (initial-state)
+reference comparison and a strain/change-rate computation — but neither reaches 4.
+
+**What this changes.** t14's `add_failed` hit rate was quoted as 7 of 21 read (33 %) and was the
+highest prior of any pool in the corpus; it is now **7 of 27 (26 %)**, and the yield is entirely
+front-loaded in the re-queued cohort. The tail — the documents that stayed unstaged longest —
+contributed nothing. The pool is drained, not merely sampled, so `add_failed` can no longer be
+cited as a place where unfound champions might still sit. Improvement 3 of cycle 6 ("close
+F3c-ns before spending another opus token") is DISCHARGED.
+
+**Read economics.** 6 reads, 0 champions. This was the highest-prior batch available anywhere in
+the corpus by an order of magnitude, and it still returned nothing above 3.0 — a further datum
+for the ceiling already recorded on 2026-09-02 (marginal yield of the last 568 reads: 2
+champions, 0.35 %). The remaining unread bulk (t11 863 · t12 986 · t13 1005 · t14 1268 = 4122
+rejected documents) has a strictly worse prior than the pool that just came up empty.
+
+**Residual after this closure.** The 49 documents scoring opus ≥ 4 that the screen rejected
+(t10 5 · t11 25 · t12 7 · t13 4 · t14 8) remain the live recall problem, and they are free
+controls: any re-pitched mechanism question is validated against verdicts already paid for.
