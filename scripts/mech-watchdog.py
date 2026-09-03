@@ -19,7 +19,10 @@ sys.path.insert(0, "/app/src")
 from patentbench import nlm_bridge  # noqa: E402
 
 LOG = "/data/.mech_watchdog.log"
-TABS = (10, 12, 13, 14)
+# A lane is (tab, tag). The tag selects the QUESTION VARIANT ("" = the tab's original question,
+# "v2" = the 2026-09-03 re-pitch) and gives the run its own progress/picks/log files, so two
+# wordings over the same pile never share a ledger.
+LANES = ((12, ""), (10, "v2"), (13, "v2"), (14, "v2"))
 
 
 def log(m):
@@ -27,7 +30,7 @@ def log(m):
         f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + m + "\n")
 
 
-def alive(tab):
+def alive(tab, tag):
     for p in os.listdir("/proc"):
         if not p.isdigit():
             continue
@@ -37,7 +40,9 @@ def alive(tab):
             continue
         c = [x for x in c if x]
         if len(c) >= 3 and c[1].endswith("mechanism-scan.py") and c[2] == str(tab):
-            return True
+            running_tag = c[c.index("--tag") + 1] if "--tag" in c[:-1] else ""
+            if running_tag == tag:
+                return True
     return False
 
 
@@ -57,29 +62,33 @@ def quota_ok(prof):
 log("watchdog armed")
 while True:
     cx = sqlite3.connect("file:/data/workbench.db?mode=ro", uri=True)
+    def profile_of(t):
+        return (cx.execute("select coalesce(nlm_profile,'default') from tabs where id=?",
+                           (t,)).fetchone() or ["default"])[0]
     busy_accounts = set()
-    for t in TABS:
-        if alive(t):
-            prof = (cx.execute("select coalesce(nlm_profile,'default') from tabs where id=?",
-                               (t,)).fetchone() or ["default"])[0]
-            busy_accounts.add(prof)
-    for t in TABS:
-        if alive(t):
+    for t, tag in LANES:
+        if alive(t, tag):
+            busy_accounts.add(profile_of(t))
+    for t, tag in LANES:
+        if alive(t, tag):
             continue
         pile = cx.execute("""select count(*) from documents where tab_id=? and status='fetched'
                              and nlm_screen_state='rejected'""", (t,)).fetchone()[0]
-        pg = f"/data/audits/mech_t{t}.progress.json"
+        sfx = f"_{tag}" if tag else ""
+        pg = f"/data/audits/mech_t{t}{sfx}.progress.json"
         asked = len(json.load(open(pg))) if os.path.exists(pg) else 0
         if asked >= pile:
             continue                                          # finished
-        prof = (cx.execute("select coalesce(nlm_profile,'default') from tabs where id=?",
-                           (t,)).fetchone() or ["default"])[0]
+        prof = profile_of(t)
         if prof in busy_accounts:
             continue                                          # A2: one job per account
         if not quota_ok(prof):
             log(f"t{t}: {pile-asked} left but {prof} still out of quota — waiting")
             continue
-        subprocess.Popen(["python3", "/data/mechanism-scan.py", str(t), "--roster", "30"])
+        cmd = ["python3", "/data/mechanism-scan.py", str(t), "--roster", "30"]
+        if tag:
+            cmd += ["--tag", tag]
+        subprocess.Popen(cmd)
         busy_accounts.add(prof)
-        log(f"t{t}: re-armed on {prof} ({pile-asked} docs left, {asked} already asked)")
+        log(f"t{t}{sfx}: re-armed on {prof} ({pile-asked} docs left, {asked} already asked)")
     time.sleep(1200)

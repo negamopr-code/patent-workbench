@@ -44,9 +44,14 @@ def log(m):
 cx = sqlite3.connect("file:/data/workbench.db?mode=ro", uri=True)
 PROFILE = (cx.execute("select coalesce(nlm_profile,'default') from tabs where id=?",
                       (TAB,)).fetchone() or ["default"])[0]
-spec = json.load(open("/data/mechanism-questions.json")).get(str(TAB))
+# A tagged run is a DIFFERENT QUESTION over the same pile, never the same question under a new
+# name: it looks up "<tab>_<tag>" and refuses to fall back to the untagged question, so a variant
+# can never be silently credited with the old wording's results (2026-09-03).
+_QS = json.load(open("/data/mechanism-questions.json"))
+_KEY = f"{TAB}_{a.tag}" if a.tag else str(TAB)
+spec = _QS.get(_KEY)
 if not spec:
-    log("no mechanism question for this tab"); sys.exit(3)
+    log(f"no mechanism question under key {_KEY!r} — refusing to fall back"); sys.exit(3)
 QUESTION = spec["question"]
 
 
