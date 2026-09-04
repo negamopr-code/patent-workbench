@@ -85,7 +85,7 @@ while True:
         if prof in busy_accounts:
             continue                                          # A2: one job per account
         if not quota_ok(prof):
-            log(f"t{t}: {pile-asked} left but {prof} still out of quota — waiting")
+            log(f"t{t}{sfx}: {pile-asked} left but {prof} still out of quota — waiting")
             continue
         cmd = ["python3", "/data/mechanism-scan.py", str(t), "--roster", "30"]
         if tag:
