@@ -1302,3 +1302,61 @@ that implement THAT mechanism and is blind to champions that are relevant for ot
 is a precision instrument for the top of a pile, not a recall instrument for the pile.
 
 **Cost:** ~46 NLM queries, zero Claude tokens.
+
+---
+
+## 2026-09-04 — the v2 re-pitch is tab-dependent: 2 NEW champions on t14, a halved recall on t10, a failure on t13
+
+The 09-02 correction ("the variable is over-specification") was applied to t10/t13/t14 as v2
+questions, each dropping one over-tight element. Chunk partitions are identical to v1 (same pile
+order, same roster 30), so every already-asked champion is a clean A/B on the same document.
+
+### t14 — SUPPORTED. Two champions no instrument had ever seen.
+
+3 picks from 900 documents, **2 champions, precision 67 %**:
+
+| pick | opus | |
+|---|---|---|
+| CN121970229 | **5.0** | ties 4th-best on the tab; only 12 of 1835 docs score ≥5 |
+| EP3937335 | **4.0** | new champion |
+| CN111886752 | 3.0 | near miss |
+
+Both were unread, in the rejected pile, invisible to the screen, the filter and the slow lane.
+Their verdicts name the exact mechanism the v2 question describes — *"voltage/capacity curve vs
+pre-stored initial-state (BoL) reference + degradation rate + reduce charge current"* — which is
+precisely what v1 excluded by demanding the CC/CV switchover and the inflection angle. Cost:
+~30 NLM queries + 3 opus reads.
+
+### t10 — REFUTED. v2 halves v1's recall on a complete pile.
+
+All 5 champions staged and asked (998 of 1005 asked; 7 excluded on staging failure).
+
+| | v1 | v2 |
+|---|---|---|
+| champions recovered | **2/5** (CA2552849, CN103683526) | **1/5** (CA2552849) |
+| picks | 6 of 1005 | 4 of 998 |
+| precision | 33 % | 25 % |
+
+`CN103683526` is the casualty: v2's clause "the RELAYING node must itself be beam-powered"
+excluded a document that supplies a *field device* with a wireless module.
+
+### t13 — REFUTED. Zero champions, and its novel picks are the weakest documents in the set.
+
+1182 of 1304 asked, 5 picks, **0 champions**; 3 of its 4 champions asked and rejected (only
+`WO2015139810` still unasked). Picks: CN101606270 3.0 · EP2636117 2.0 · US20100188039 2.0 ·
+**CA3240249 1.0 · US10320034 1.0** — the two previously-unread picks scored lowest of all.
+
+### The rule this yields
+
+The correction works when a **measured** over-specification is deleted, and fails otherwise:
+
+- **t14** — the inflection wording had already been measured at 2/7 by the core rescue. Deleting
+  a known-bad constraint recovered documents it had been excluding. WORKS.
+- **t10** — v1's constraint was not measured as bad; v2 replaced it with a NEW invented
+  constraint (the relay must itself be beam-powered). Trading one over-specification for another
+  costs recall.
+- **t13** — v2 removed structure without knowing which part was wrong, leaving a description so
+  general it matches battery-communication documents at large. Vaguer is not less specified.
+
+**Do not re-pitch a mechanism question unless you can name the specific element that was
+measured to lose documents.** Absent that measurement, the existing wording is the better bet.
