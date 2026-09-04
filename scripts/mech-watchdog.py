@@ -22,7 +22,9 @@ LOG = "/data/.mech_watchdog.log"
 # A lane is (tab, tag). The tag selects the QUESTION VARIANT ("" = the tab's original question,
 # "v2" = the 2026-09-03 re-pitch) and gives the run its own progress/picks/log files, so two
 # wordings over the same pile never share a ledger.
-LANES = ((12, ""), (10, "v2"), (13, "v2"), (14, "v2"))
+# v3 (2026-09-04) applies the CORRECTED t14 lesson: relax incidentals, never the core relation.
+# Order matters only for tie-breaks; the A2 one-job-per-account rule serialises each account.
+LANES = ((12, ""), (10, "v2"), (13, "v2"), (14, "v2"), (10, "v3"), (13, "v3"))
 
 
 def log(m):

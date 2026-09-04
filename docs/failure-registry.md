@@ -1348,15 +1348,27 @@ excluded a document that supplies a *field device* with a wireless module.
 
 ### The rule this yields
 
-The correction works when a **measured** over-specification is deleted, and fails otherwise:
+**CORRECTION (2026-09-04, same day).** The first version of this section said t14 worked because
+a *measured* over-specification (the inflection wording, 2/7 in the core rescue) was deleted.
+That is FALSE: t14's v1 label already reads "NO inflection wording — T14-2/3", so v1 had dropped
+it. What v2 actually deleted was the **CC/CV switchover** constraint, which was never measured.
+The "delete only measured over-specifications" rule is therefore NOT supported by this evidence
+and is withdrawn.
 
-- **t14** — the inflection wording had already been measured at 2/7 by the core rescue. Deleting
-  a known-bad constraint recovered documents it had been excluding. WORKS.
-- **t10** — v1's constraint was not measured as bad; v2 replaced it with a NEW invented
-  constraint (the relay must itself be beam-powered). Trading one over-specification for another
-  costs recall.
-- **t13** — v2 removed structure without knowing which part was wrong, leaving a description so
-  general it matches battery-communication documents at large. Vaguer is not less specified.
+What the three lanes actually separate is **which PART of the question was changed**:
 
-**Do not re-pitch a mechanism question unless you can name the specific element that was
-measured to lose documents.** Absent that measurement, the existing wording is the better bet.
+- **t14 (works)** — relaxed an INCIDENTAL constraint: *where on the charge curve* the comparison
+  must be observed. The core relation was left fully specified — as-new stored reference →
+  degradation number → feedback into the charging. Both new champions satisfy that relation;
+  `CN121970229` never mentions a CC/CV switchover at all.
+- **t10 (worse)** — CHANGED the core relation, and narrowed it: v1 required both tiers to be
+  beam-powered, v2 required the RELAY specifically and declared the sensor insufficient. The
+  core rescue had already established that t10's satisfiable core is "both supplies, ANY grade"
+  and that `CN103683526` — exactly the champion v2 lost — owns both supply features only at
+  PARTIAL.
+- **t13 (fails)** — CHANGED the core relation by dissolving its discriminating parts into a
+  generic "radio in, bus out" conversion, which battery-communication documents satisfy at large.
+
+**Rule: relax the incidentals — measurement locus, packaging, actor, count of devices — and
+never touch the core relation itself, neither narrowing nor generalising it.** Sample is n=3
+(1 success, 2 failures); treat as a working rule, not a law.
