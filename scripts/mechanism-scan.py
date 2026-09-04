@@ -25,6 +25,14 @@ ap.add_argument("tab", type=int)
 ap.add_argument("--roster", type=int, default=30)
 ap.add_argument("--only-file", default=None)
 ap.add_argument("--tag", default="")
+# Which screen states to walk. Default "rejected" = the discard pile the scan was built for.
+# t14 also holds 71 UNREAD GRADUATES that no lane covers while the standing graduate driver is
+# paused, and unread material is where this instrument's only measured yield comes from.
+ap.add_argument("--states", default="rejected")
+# Restrict to documents with NO opus/sonnet verdict. The instrument's only measured yield in
+# this campaign came from UNREAD material (t14: 2 champions from 3 unread picks); re-asking
+# already-scored documents spends quota to tell us what we already know.
+ap.add_argument("--unread-only", action="store_true")
 a = ap.parse_args()
 TAB, TAG = a.tab, ("_" + a.tag if a.tag else "")
 AUD, EV = "/data/audits", "/data/audits/mechanism"
@@ -68,16 +76,19 @@ def heartbeat(state, summary, **counts):
         pass
 
 
-rows = cx.execute("""select number,title,abstract,claims,description,digest from documents
-                     where tab_id=? and status='fetched' and nlm_screen_state='rejected'
-                     order by number""", (TAB,)).fetchall()
+STATES = [x.strip() for x in a.states.split(",") if x.strip()]
+rows = cx.execute(
+    "select number,title,abstract,claims,description,digest from documents "
+    "where tab_id=? and status='fetched' and nlm_screen_state in (%s)%s order by number"
+    % (",".join("?" * len(STATES)), " and score is null" if a.unread_only else ""),
+    (TAB, *STATES)).fetchall()
 if a.only_file:
     keep = set(json.load(open(a.only_file)))
     rows = [r for r in rows if r[0] in keep]
 done = set(json.load(open(PROG))) if os.path.exists(PROG) else set()
 picks = json.load(open(PICKS)) if os.path.exists(PICKS) else []
 todo = [r for r in rows if r[0] not in done]
-log(f"armed tab={TAB} profile={PROFILE} roster={a.roster} pile={len(rows)} todo={len(todo)}")
+log(f"armed tab={TAB} profile={PROFILE} roster={a.roster} states={','.join(STATES)}{' unread-only' if a.unread_only else ''} pile={len(rows)} todo={len(todo)}")
 log(f"  mechanism: {spec['label']}")
 heartbeat("running", f"mechanism rescan armed — {len(todo)} of {len(rows)} rejected docs",
           pile=len(rows), asked=len(done), picks=len(picks))
