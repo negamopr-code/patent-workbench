@@ -11,9 +11,9 @@ Every 20 minutes: for each tab with work left, if no scan process is alive for i
 account answers a trivial probe, re-arm it. Progress files make re-arming free — nothing is
 re-asked. One lane per account at a time (A2).
 
-  docker exec -d patent-bench python3 /data/mech-watchdog.py
+  docker exec -d patent-bench python3 /data/mech-watchdog.py [--only 10:v3]
 """
-import json, os, subprocess, sqlite3, sys, time
+import argparse, hashlib, json, os, subprocess, sqlite3, sys, time
 
 sys.path.insert(0, "/app/src")
 from patentbench import nlm_bridge  # noqa: E402
@@ -32,6 +32,49 @@ LOG = "/data/.mech_watchdog.log"
 # t14 v2's long tail: it is small, and it is the only lane covering t14's unread graduates.
 LANES = ((12, ""), (14, "grad", "graduate", True), (10, "v2"), (13, "v2"), (14, "v2"),
          (10, "v3"), (13, "v3"))
+
+PROFILES = "/home/app/.notebooklm-mcp-cli/profiles"
+
+ap = argparse.ArgumentParser()
+# Arm only a subset of LANES, e.g. --only 10:v3 or --only 10 (all of tab 10's lanes). Used when
+# some accounts are unsafe to drive but others are intact, so the safe lanes still self-heal.
+ap.add_argument("--only", default="")
+ARGS = ap.parse_args()
+ONLY = [x.strip() for x in ARGS.only.split(",") if x.strip()]
+
+
+def selected(tab, tag):
+    if not ONLY:
+        return True
+    return str(tab) in ONLY or f"{tab}:{tag}" in ONLY
+
+
+def ambiguous_profiles():
+    """Profiles whose cookie jar is byte-identical to another profile's.
+
+    The account gate compares tabs.nlm_profile to a registered NAME; it never checks that two
+    names are two accounts. On 2026-09-05 `default` and `work2` held the same jar, so t13's
+    lanes ran on t14's account and A2's one-job-per-account serialisation — which keys on the
+    name — let two lanes drain one real quota pool. Identity is checked here instead, and a
+    profile that cannot be told apart from another is refused rather than driven blind.
+    """
+    seen, dupes = {}, set()
+    try:
+        names = sorted(os.listdir(PROFILES))
+    except OSError:
+        return dupes
+    for n in names:
+        f = os.path.join(PROFILES, n, "cookies.json")
+        try:
+            h = hashlib.md5(open(f, "rb").read()).hexdigest()
+        except OSError:
+            continue
+        if h in seen:
+            dupes.add(n)
+            dupes.add(seen[h])
+        else:
+            seen[h] = n
+    return dupes
 
 
 def log(m):
@@ -86,9 +129,10 @@ while True:
         t, tag, _, _ = lane_parts(lane)
         if alive(t, tag):
             busy_accounts.add(profile_of(t))
+    ambiguous = ambiguous_profiles()
     for lane in LANES:
         t, tag, states, unread_only = lane_parts(lane)
-        if alive(t, tag):
+        if alive(t, tag) or not selected(t, tag):
             continue
         _st = [x.strip() for x in states.split(",") if x.strip()]
         pile = cx.execute(
@@ -102,6 +146,11 @@ while True:
         if asked >= pile:
             continue                                          # finished
         prof = profile_of(t)
+        sfx_ = f"_{tag}" if tag else ""
+        if prof in ambiguous:
+            log(f"t{t}{sfx_}: REFUSED — profile {prof} shares a cookie jar with another "
+                f"profile; re-seed it before this lane may run")
+            continue
         if prof in busy_accounts:
             continue                                          # A2: one job per account
         if not quota_ok(prof):
