@@ -1036,6 +1036,101 @@ Procedure HEAD for src/scripts = **e02278b**.
   ranking-integrity-auditor (`--deploy-head e02278b`) → nlm-followup-verifier (t13's queue on
   `default`, which is free; t10's two docs only after the drawnformula screen ends).
 
+- 2026-09-05 (session start; pre-re-arm of the mechanism-lane watchdog after the
+  2026-09-04 11:23Z host stop; deploy head 4c9f3df, image built 08-30, `/app/src`
+  byte-identical to `/workspace/src` — no deploy drift): supervisor run.
+  **VERDICT: BLOCKED, and the block is the ACCOUNT GATE, not freshness.**
+  `audit_accounts.py` returns PASS — but it compares `tabs.nlm_profile` to the
+  registered NAME and never checks that two names are two ACCOUNTS. Measured this
+  run: `profiles/default/cookies.json` and `profiles/work2/cookies.json` inside
+  patent-bench are BYTE-IDENTICAL (md5 6a866f16…, 14050 B), and
+  `profiles/default/cookies.json` shares an mtime to the nanosecond with the
+  CLI's top-level `auth.json` (rewritten 09:04:51 and again 09:07:03 today), i.e.
+  the no-`--profile` invocation that serves every `default`-bound tab is running
+  on **work2's session**. Confirmed independently: `nlm notebook list` returns the
+  SAME 12 notebooks for `default` and for `work2` (drawnformula returns a distinct
+  6), and that list contains t12's `Exam_3_EP23907723_2026` and t14's
+  `EP25845081_2026` screen/claims notebooks but NO `EP25828490_2026` (t13) and no
+  `cancelled_40_387_2026` (t11) notebook on any profile in the container. The
+  real default jar still exists only in the dev container
+  (`/home/node/.notebooklm-mcp-cli/profiles/default`, md5 6c41bfb1…, last
+  validated 2026-08-17) and was never re-seeded here.
+  Consequences: **A1 is violated in substance for t11 and t13** (bound to
+  `default`, executing on work2) and **A2 is violated by construction** — the
+  watchdog serialises on the profile NAME, so its LANES list runs a `default`
+  lane and a `work2` lane concurrently against ONE quota pool. That is the
+  measured signature of 2026-09-04: t13_v2 on `default` returned empty answers
+  05:15–07:48Z while t14_v2 on `work2` returned empty answers 05:34–09:06Z —
+  overlapping, not independent. **New control gap (F8-class): the account gate is
+  name-deep, not identity-deep. It must additionally assert that cookie jars are
+  pairwise distinct and that each tab's own notebook is visible under its bound
+  profile.**
+  Bridge/keeper health (the re-arm question): HEALTHY. `list_notebooks` succeeds
+  on default/drawnformula/work2 (12/6/12, 1.5–6.0 s); nlm-keeper reports CLI
+  sessions ALIVE for work2/bubu/drawnformula/work4. The `[Errno 111] Connection
+  refused` on notebook-create at 2026-09-04T11:22:19Z came 54 s after a
+  successful `quota_ok()` query probe at 11:21:25Z and coincides with the host
+  stop that took every container down — transient, not a chronic bridge fault.
+  `mech-watchdog.quota_ok()` is fail-closed (bare `except` → False → no launch),
+  so a dead bridge cannot burn quota; it only mislabels the cause as "out of
+  quota". Notebook-cap headroom is fine (12/6/12 of ~100) and no orphan
+  `🔎 mechanism` notebooks leaked from the crash beyond the 3 already listed.
+  Freshness (`--baselines` from this file, `--deploy-head 4c9f3df`): EVERY tab
+  BLOCKED on all three gates. staging 2026-08-30 (head 7e62d08), recall + ranking
+  2026-08-29 (head e02278b), audit_full_staging 2026-08-29 verdict **FAIL**.
+  Watermark drift since those runs is real, not pedantic: t10 `screened_docs`
+  1314 → 2049 (+735) and `max_screened_at` +36 716 s; t12/t13/t14 `max_scored_at`
+  advanced to 2026-09-03. t11 is STALE(deploy) only (no NLM work, per the standing
+  rule). `pending_trigger` absent.
+  **Baseline governance — one unregistered growth: t13 `S5-not-staged-add_failed`
+  = 24 live (and 24 in the 08-30 verdict file) against a registered 13
+  (approved 2026-08-25). GATES every t13 reject-pool negative and coverage line
+  until the user approves a new count.** The other tabs shrank and are within
+  baseline (t10 173→16, t11 40→27, t12 47→26, t14 37→27) — but those registered
+  numbers are now wrong in the other direction and should be corrected in the
+  same approval. Also unregistered and therefore gating: `R2-batch-corridor`
+  FAILs on t11 (46), t12 (61), t14 (80) — the block registers that check only for
+  t10 (59) and t13 (119); `R2-screen-roster39` is a different check and does not
+  cover them.
+  **Contradiction named (doctrine §3):** the 2026-09-03 section of this file says
+  F3c-ns is "CLOSED corpus-wide … can no longer be cited as a place where unfound
+  champions might still sit". The read-coverage claim verifies (live: 120/120
+  `add_failed` docs on t10–t14 carry a score), but the CORPUS-WIDE framing exceeds
+  what C5 permits — C5 is PASS/SCOPED only on t13; t10/t11/t12/t14 are C5 WARN
+  (no verbatim canary registered). That closure must be re-worded to "among the
+  120 add_failed documents read as of 2026-09-03", and it sits on three numbers
+  that disagree for t10 (registry 173 / 08-30 audit 0 / prose 16 / live 16) —
+  resolve before quoting any t10 "not staged" line.
+  Silent tail to disclose with any mechanism-lane conclusion: `mechanism-scan.py`
+  honours the truncation NO-GO (a doc whose parts do not all land is excluded, not
+  asked) but records those exclusions ONLY in the lane log and credits them
+  nowhere — 66 exclusion events across the lane logs to date (t10 17+7+4, t12 13,
+  t13 7+18, t14 0). Second log hazard, same script: a failed `create_notebook`
+  `break`s the chunk loop and then writes `done — N picks of M asked`, which reads
+  as completion. That is exactly what the t13_v2 log says at 11:22:19Z while the
+  lane in fact had 122 documents left. Never read a lane's `done` line as
+  completion without the progress-vs-pile count.
+  Lane state verified against the DB (mechanism-scan is read-only, 2 SELECTs, so
+  the lanes do NOT move the data watermark and refreshed verdicts stay FRESH while
+  they run): t12 1369/1369 done · t10_v2 1005/1005 done · t13_v2 1182/1304 ·
+  t14_v2 900/1328 · t10_v3 420/1005 · t13_v3 0/1304 · t14_grad 0/71. No watchdog
+  and no lane process alive in the container.
+  **Re-arm verdict: NO-GO as configured** — arming `/data/mech-watchdog.py` with
+  the current LANES list would start t13_v2/t13_v3 on an account that is not
+  t13's, concurrently with a t14/t12 lane on the same real account. Re-seed the
+  real `default` jar into patent-bench (`scripts/reseed-nlm-profile.sh default`),
+  establish why the CLI's shared `auth.json` is being rewritten with work2's
+  session every few minutes (it will clobber a re-seed inside the keeper's 300 s
+  refresh window), then re-run the account gate WITH an identity check before
+  arming anything. Arming the drawnformula-only lane (t10_v3, 585 left) is the one
+  action that is sound today.
+  Auditors to spawn, in order, once the account gate passes on identity:
+  full-doc-staging-auditor (its verdict is FAIL and 7 days old; t10 was never
+  probed live) → staging-completeness-auditor (t10 gained 735 screened docs) →
+  recall-integrity-auditor → ranking-integrity-auditor (`--deploy-head 4c9f3df`) →
+  nlm-followup-verifier (t13's 4-doc R6 queue — but NOT until `default` is really
+  t13's account again).
+
 ---
 
 ## 2026-08-29 — F3f priced: the genus wording buys recall and pays more in precision
