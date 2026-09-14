@@ -4072,6 +4072,10 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
         failed = [did for k, did in want_keys.items() if k not in have]
         if failed:
             db.mark_screened(tab_id, failed, "add_failed")
+            db.append_message(tab_id, "s",
+                f"🔬 Mega-screen: {len(failed)} doc(s) never got indexed by NotebookLM "
+                "at all (add likely rejected outright, typically at the 50-source cap) "
+                "— removed from this round and re-queued as add_failed.")
     # a doc whose TAIL could not be re-added must not be questioned as if complete:
     # drop it from this round's roster and stamp it add_failed, the same treatment a
     # doc that never indexed at all receives (truncation NO-GO, user 2026-08-23)

@@ -14,7 +14,7 @@ post-sweep / post-rewording / post-new-reads triggers. Deploys: pass
 verdict recorded under a different head is STALE.
 
 Gate matrix (BLOCKED reasons name the exact red gates):
-  post_sweep_results   needs FRESH staging(S1,S3,S4) + recall(R1,R2,R3)
+  post_sweep_results   needs FRESH staging(S1,S3,S4,S5) + recall(R1,R2,R3)
   champion_report      needs FRESH ranking(C1,C2,C6,C7) + recall(R5 if lanes ran)
   closure_claim        needs FRESH ranking C5 closure_claims_permitted != NONE,
                        C6 PASS, staging S1 blind-tails disclosed, recall R1
@@ -111,9 +111,15 @@ def main():
     ap.add_argument("--tab", type=int, default=None)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--baselines", default=None)
+    ap.add_argument("--baselines-file", default=None,
+                    help="path to the baselines JSON (avoids passing it as a shell arg)")
     ap.add_argument("--deploy-head", default=None)
     args = ap.parse_args()
-    baselines = jload(args.baselines, {}) if args.baselines else {}
+    if args.baselines_file:
+        with open(args.baselines_file) as fh:
+            baselines = json.load(fh)
+    else:
+        baselines = jload(args.baselines, {}) if args.baselines else {}
     cx = sqlite3.connect(DB, uri=True)
     tabs = ([args.tab] if args.tab else
             [r[0] for r in cx.execute(
@@ -158,11 +164,14 @@ def main():
         red = []
         if not blockers:
             red += [r["check"] for r in gating_fail(
-                rows_for(verdicts["staging"], tab, ("S3", "S4")), baselines, tab)]
+                rows_for(verdicts["staging"], tab, ("S3", "S4", "S5")), baselines, tab)]
             red += [r["check"] for r in gating_fail(
                 rows_for(verdicts["recall"], tab, ("R2",)), baselines, tab)]
-            if not rows_for(verdicts["recall"], tab, ("R1",)):
+            r1_rows = rows_for(verdicts["recall"], tab, ("R1",))
+            if not r1_rows:
                 red.append("R1-missing")
+            else:
+                red += [r["check"] for r in gating_fail(r1_rows, baselines, tab)]
         gates["post_sweep_results"] = ("BLOCKED", blockers + red) if (blockers or red) \
             else ("PERMITTED", [])
         # --- gate: champion_report ---
@@ -185,7 +194,7 @@ def main():
         if not blockers:
             c5 = rows_for(verdicts["ranking"], tab, ("C5",))
             perm = (c5[0].get("data") or {}).get("closure_claims_permitted") if c5 else None
-            if perm == "NONE" or not c5:
+            if not c5 or perm in (None, "NONE"):
                 red.append("C5-canary-dark")
             elif perm == "SCOPED":
                 scoped = True

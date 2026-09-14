@@ -3715,3 +3715,44 @@ consolidated answer, `parts_ok`, `source_inventory`); stderr `/data/audits/follo
 `/data/audits/followup_ledger.jsonl`: `{"tab": 13, "ts": 1788043513, "notebook":
 "3df5d030-8b0a-4a4d-a67c-9b8f7a023dec", "mode": "compact", "wording": "verbatim", "docs":
 ["CN218958581","AU2022338850","CN220510820","CN120073105"]}`.
+
+## 2026-09-14 10:22 UTC — NLM follow-up verifier, t13 R6 queue (1 doc, QUOTA ABORT — no evidence produced)
+
+**Trigger.** recall-integrity-auditor flagged t13's R6 row: one quiet ground-truth doc,
+WO2015139810 (DB id 8925, opus-5 score 4.0 — right at the floor, status=fetched, unclaimed
+by any screening/claims sweep), absent from `/data/audits/followup_ledger.jsonl` for tab 13.
+Scope was explicitly t13-only, this doc only; t10/t12/t14 R6 queues are empty per the same
+audit and were not touched, t11 was not touched (permanently excluded from NLM quota).
+
+**Preflight.** DB confirms `documents` row (8925, tab_id=13, number='WO2015139810',
+status='fetched', claims=6441B, description=67256B, digest=NULL) — fully staged, nothing to
+restage in parts. `tabs.nlm_profile` for t13 is NULL → default account, consistent with the
+standing rule (t11/t13=default, t12/t14=work2, t10=drawnformula) — no account switch needed.
+`audit_accounts.py` → PASS, no running NLM jobs. Ledger pre-check: 112 entries total, none for
+WO2015139810 under tab 13 — confirmed absent as the audit claimed.
+
+**Run.** `docker exec -i patent-bench python3 - --tab 13 --docs WO2015139810 --json <
+scripts/nlm_followup.py` → **exit 2 (quota exhausted)**, on the *broad* checklist query itself
+(the very first NLM call in the run — before any per-doc follow-up could even be attempted).
+stderr: `quota exhausted — aborting`. Per the script's own quota-abort handling the
+`🔁 follow-up — tab 13` notebook was deleted immediately (no `--keep-notebook` was passed, so
+no slot leaked) and **nothing was appended to the ledger** — confirmed by re-reading the ledger
+post-run: still 112 entries, last line unchanged (t14, ts 1788176327).
+
+**Verdict on WO2015139810: NONE OBTAINED.** No follow-up evidence exists for this doc as of
+this round. The opus-5 score of 4.0 stands unconfirmed and uncontradicted by NLM — this round
+neither corroborates nor challenges it. t13's recall picture (7/22, 32%, FAIL) is **unchanged**:
+this doc was already counted as a miss in that FAIL and remains so; nothing here moves the
+number in either direction.
+
+**Doctrine applied.** Quota-abort is silent success-so-far, not a failure to retry — per hard
+rule, no retry-loop was run against the exhausted quota. This is a genuinely empty round: zero
+NLM queries answered, zero ledger writes, zero opus tokens. Recording it anyway so a future
+session doesn't re-attempt this exact doc believing it's untried without first checking whether
+quota has since recovered — R6's WO2015139810 entry for t13 **remains open** and should stay in
+the next sweep's follow-up queue.
+
+Evidence: stdout empty, stderr `quota exhausted — aborting` (not persisted to /data/audits —
+script produced no artifact on this path); ledger unchanged at 112 entries (verified
+before/after). No new file to cross-reference — this round's only trace is this journal entry
+and the (unmodified) ledger tail.

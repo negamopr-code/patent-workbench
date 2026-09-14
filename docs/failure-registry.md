@@ -48,11 +48,13 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   },
   "12": {
     "S5-not-staged-add_failed": {"count": 47, "approved": "2026-08-25 user", "scope": "F3c-ns, see tab 10; 32 of these opus-read 08-24/25: 0 ≥3"},
-    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"}
+    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"},
+    "R2-batch-corridor": {"count": 61, "approved": "2026-08-20 user 'go ahead' (same approval as tab 10/13 — entry added 2026-09-14 closing a registry bookkeeping gap, not a new decision)", "scope": "61/118 legacy claims rounds ran roster-35 2026-08-15..08-18, before the corridor doctrine (2026-08-20) — verified via nlm_claims.ts none fall within today's requeue campaign; discovery-only forever, same pattern as tab 10 (59) and tab 13 (119)"}
   },
   "14": {
     "S5-not-staged-add_failed": {"count": 37, "approved": "2026-08-25 user", "scope": "F3c-ns, see tab 10; all 6 opus ≥4 non-graduates on t14 are in this pool"},
-    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"}
+    "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"},
+    "R2-batch-corridor": {"count": 80, "approved": "2026-08-20 user 'go ahead' (same approval as tab 10/13 — entry added 2026-09-14 closing a registry bookkeeping gap, not a new decision)", "scope": "80/139 legacy claims rounds ran roster-35 2026-08-12..08-15, before the corridor doctrine (2026-08-20) — verified via nlm_claims.ts none fall within today's requeue campaign; discovery-only forever, same pattern as tab 10 (59) and tab 13 (119)"}
   }
 }
 ```
@@ -1130,6 +1132,57 @@ Procedure HEAD for src/scripts = **e02278b**.
   recall-integrity-auditor → ranking-integrity-auditor (`--deploy-head 4c9f3df`) →
   nlm-followup-verifier (t13's 4-doc R6 queue — but NOT until `default` is really
   t13's account again).
+- 2026-09-14 (second pass, deploy head 64052f3, scope t10/t12/t13/t14 only,
+  t11 permanently excluded): account gate PASS (A0/A1/A2 all green, no
+  rebinding needed). audit_status.py: staging/recall/ranking FRESH on all 4
+  in-scope tabs, full-doc-staging PASS with live_checked=true on t10/t12/t13/t14
+  and orphan_fix_commit == deploy head. BUT the mechanical gate matrix has
+  THREE structural defects found by reading the underlying verdict files
+  directly, all of which produce false-green gates the caller must not trust
+  as-is:
+  (1) `post_sweep_results` only requires R1 to be *present*, never checks its
+  FAIL level — t13's real R1 recall is 7/22 (32%, FAIL) and this does NOT
+  block post_sweep_results in the script's output. Treat any t13 discovery/
+  sweep-conclusion claim as blocked by this FAIL regardless of the script.
+  (2) `S5-not-staged-add_failed` is checked by NO gate at all (post_sweep,
+  champion, closure all skip it), so baseline governance for it must be
+  applied by hand: t10 173→18, t12 47→26, t14 37→27 all shrank (not gating,
+  but stale baselines — re-baseline decision pending); t13 13→26 GREW past
+  its registered ceiling, wrong direction, unreconciled against the commit's
+  own note of "20 previously-fine docs failed in one run" pre-fix — this
+  GATES per baseline-governance doctrine and the script does not catch it.
+  (3) `closure_claim`'s C5 handling reads `data.closure_claims_permitted`,
+  but the C5-closure-gate row emitted when a tab has NO verbatim canary is a
+  bare WARN with no `data` field at all — `perm` resolves to Python `None`,
+  which matches neither the `"NONE"` string (canary-dark → BLOCKED) nor the
+  `"SCOPED"` string (→ SCOPED-ONLY), so it silently falls through to
+  PERMITTED. This produced false `closure_claim: PERMITTED` for t10, t12,
+  t14 (none of the three has a verbatim canary) — directly contradicting the
+  ranking auditor's own C5 prose ("closure claims must stay scoped") in the
+  same file. Per standing doctrine (C5 green required for corpus-wide
+  negatives) these three must be treated as canary-dark, i.e. closure/
+  negative claims BLOCKED for t10/t12/t14, not permitted. Only t13 has a
+  working verbatim canary (CN223926581, C5 PASS/SCOPED) so its
+  closure_claim SCOPED-ONLY reading is the one gate in this run that is both
+  mechanically correct and substantively trustworthy.
+  Also confirmed: R5-lane-controls has verdict rows for t10 ONLY (FAIL,
+  lexical lane); t11-t14 have zero R5 rows, which the champion_report gate
+  treats as "nothing to block" — this is an unaudited gap (lane controls
+  never generated for t12/t13/t14), not a passing lane, and no lane-coverage
+  claim may be made for those three tabs. R2-batch-corridor for t12 (61/118)
+  and t14 (80/139) is genuinely unregistered (no baseline entry, unlike t10
+  and t13) and correctly BLOCKS post_sweep_results in the script's own
+  output — that part needs no override. R6: t13's one queued item
+  (WO2015139810) was attempted by nlm-followup-verifier but aborted on NLM
+  quota before producing evidence — still open, no verdict either way.
+  VERDICT: BLOCKED for t12/t13/t14 post_sweep/discovery claims (t12/t14
+  unregistered R2; t13 real 32% recall FAIL invisible to the script);
+  BLOCKED for t10/t12/t14 closure/negative claims (canary-dark, script bug
+  masked it as PERMITTED); t13 closure claims SCOPED-ONLY ("among
+  current-key reads") is the one closure claim actually safe to make;
+  champion/lane-coverage claims BLOCKED on t10 (R5 FAIL) and unsupported
+  (gap, not pass) on t12/t13/t14. Full-doc-staging PASS and the orphan-
+  deletion fix (64052f3) are the one clean, trustworthy result this pass.
 
 ---
 
