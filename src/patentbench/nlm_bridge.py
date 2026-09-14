@@ -108,13 +108,26 @@ def _json_after(s: str, brace: str):
     return json.loads(s[i:])
 
 
-def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], timeout: float, profile: str | None = None) -> subprocess.CompletedProcess:
+    """Run one `nlm` subprocess call, serialized behind the process-wide lock.
+
+    NLM_PROFILE tells the CLI's internal token-cache sync (core/auth.py
+    save_tokens_to_cache -> get_auth_manager(), which ignores --profile
+    entirely) which profile it's actually refreshing. Without it, any
+    profile's CSRF/session refresh force-overwrites the "default" profile's
+    cookies.json — measured live 2026-09-13, every ~5 min via nlm-keeper's
+    probe loop, and the root cause of the 2026-09-05 account-identity
+    collision (incident_nlm_account_gate_name_deep.md). Setting it makes that
+    internal sync a harmless self-write into the SAME profile instead.
+    """
     global _last_call
+    env = {**os.environ, "NLM_PROFILE": _prof(profile)}
     with _lock:
         _gap_wait()
         try:
             return subprocess.run(cmd, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=timeout)
+                                  encoding="utf-8", errors="replace", timeout=timeout,
+                                  env=env)
         finally:
             _last_call = time.monotonic()
 
@@ -128,7 +141,8 @@ def list_notebooks(force: bool = False, profile: str | None = None) -> dict:
     if not force and hit and time.monotonic() - hit[0] < LIST_TTL:
         return {"notebooks": hit[1]}
     try:
-        proc = _run(_with_profile([NLM_BIN, "notebook", "list"], profile), LIST_TIMEOUT)
+        proc = _run(_with_profile([NLM_BIN, "notebook", "list"], profile), LIST_TIMEOUT,
+                    profile=profile)
     except subprocess.TimeoutExpired:
         return {"notebooks": [], "error": "nlm notebook list: timeout"}
     if proc.returncode != 0:
@@ -155,7 +169,7 @@ def list_sources(notebook_id: str, force: bool = False, profile: str | None = No
         return {"sources": hit[1]}
     try:
         proc = _run(_with_profile([NLM_BIN, "source", "list", notebook_id, "--json"], profile),
-                    LIST_TIMEOUT)
+                    LIST_TIMEOUT, profile=profile)
     except subprocess.TimeoutExpired:
         return {"sources": [], "error": "nlm source list: timeout"}
     if proc.returncode != 0:
@@ -194,7 +208,7 @@ def create_notebook(title: str, profile: str | None = None) -> dict:
         return {"error": why}
     try:
         proc = _run(_with_profile([NLM_BIN, "notebook", "create", title, "--json"], profile),
-                    LIST_TIMEOUT)
+                    LIST_TIMEOUT, profile=profile)
     except subprocess.TimeoutExpired:
         return {"error": "nlm notebook create: timeout"}
     # the CLI may signal failure via returncode OR a {"status":"error"} JSON payload
@@ -232,7 +246,7 @@ def delete_notebook(notebook_id: str, profile: str | None = None) -> dict:
         return {"error": why}
     try:
         proc = _run(_with_profile([NLM_BIN, "notebook", "delete", notebook_id, "-y"], profile),
-                    LIST_TIMEOUT)
+                    LIST_TIMEOUT, profile=profile)
     except subprocess.TimeoutExpired:
         return {"error": "nlm notebook delete: timeout"}
     if proc.returncode != 0:
@@ -273,7 +287,7 @@ def add_source_text(notebook_id: str, title: str, text: str,
     cmd = _with_profile([NLM_BIN, "source", "add", notebook_id,
                          "--text", _clip_bytes(text), "--title", title[:200]], profile)
     try:
-        proc = _run(cmd, QUERY_TIMEOUT)
+        proc = _run(cmd, QUERY_TIMEOUT, profile=profile)
     except subprocess.TimeoutExpired:
         return {"error": "nlm source add: timeout"}
     if proc.returncode != 0:
@@ -296,7 +310,7 @@ def delete_source(source_ids: list[str], notebook_id: str | None = None,
         return {"ok": True, "deleted": 0}
     cmd = _with_profile([NLM_BIN, "source", "delete", *ids, "-y"], profile)
     try:
-        proc = _run(cmd, LIST_TIMEOUT)
+        proc = _run(cmd, LIST_TIMEOUT, profile=profile)
     except subprocess.TimeoutExpired:
         return {"error": "nlm source delete: timeout"}
     if proc.returncode != 0:
@@ -314,7 +328,7 @@ def source_content(source_id: str, profile: str | None = None) -> dict:
         return {"error": why}
     try:
         proc = _run(_with_profile([NLM_BIN, "source", "content", source_id, "--json"], profile),
-                    QUERY_TIMEOUT)
+                    QUERY_TIMEOUT, profile=profile)
     except subprocess.TimeoutExpired:
         return {"error": "nlm source content: timeout"}
     if proc.returncode != 0:
@@ -397,7 +411,7 @@ def query(notebook_id: str, question: str, source_ids: list[str] | None = None,
     if source_ids:
         cmd += ["--source-ids", ",".join(source_ids)]
     try:
-        proc = _run(cmd, QUERY_TIMEOUT + 30)
+        proc = _run(cmd, QUERY_TIMEOUT + 30, profile=profile)
     except subprocess.TimeoutExpired:
         return {"error": "NotebookLM query timed out"}
     if proc.returncode != 0:

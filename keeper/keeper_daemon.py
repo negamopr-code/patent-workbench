@@ -223,13 +223,22 @@ def _wake_path(name):
 def cli_probe(name):
     """(ok, err): a real notebook listing against the SAVED CLI profile — no
     browser involved, no Q&A quota consumed. This is the quarantine health
-    check: while it passes, patent-bench keeps working and no login is needed."""
+    check: while it passes, patent-bench keeps working and no login is needed.
+
+    NLM_PROFILE tells the CLI's internal token-cache sync (core/auth.py
+    save_tokens_to_cache -> get_auth_manager(), which ignores --profile
+    entirely) which profile it's actually refreshing. Without it, this probe
+    force-overwrote the "default" profile's cookies.json with whichever
+    account it last probed, every ~300s — measured live 2026-09-13, the root
+    cause of the 2026-09-05 account-identity collision
+    (incident_nlm_account_gate_name_deep.md). See nlm_bridge.py's matching fix."""
     cmd = [NLM_BIN, "notebook", "list"]
     # mirror patent-bench's _with_profile: 'default' means no --profile flag
     if name != "default":
         cmd += ["--profile", name]
+    env = {**os.environ, "NLM_PROFILE": name}
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
     except subprocess.TimeoutExpired:
         return False, "timeout"
     except OSError as e:

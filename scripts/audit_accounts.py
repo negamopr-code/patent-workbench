@@ -14,11 +14,24 @@ Run BEFORE any resume/launch/rebind:
   docker exec -i patent-bench python3 - --registry "$(cat docs/controls-registry.json)" < scripts/audit_accounts.py
 Exit 0 = PASS, 2 = FAIL (do not launch). Writes /data/audits/audit_accounts.json.
 """
+import hashlib
 import json
 import os
 import sqlite3
 import sys
 import time
+
+# A0 (added 2026-09-13): two DIFFERENTLY-NAMED registered profiles must not
+# share one cookie jar. A byte-identical pair means they're the same real
+# Google account/quota pool wearing two tab labels — this gate used to be
+# name-deep (compared strings, never the actual jars) and passed clean while
+# t11/t13's "default" was silently work2's session
+# (incident_nlm_account_gate_name_deep.md, 2026-09-05). Root cause: the NLM
+# CLI's internal token-cache sync force-overwrites the "default" profile on
+# every OTHER profile's token refresh unless NLM_PROFILE is set per
+# subprocess call — fixed 2026-09-13 in nlm_bridge.py's _run() and
+# keeper/keeper_daemon.py's cli_probe(); this check re-verifies live rather
+# than trusting that the fix holds forever.
 
 DB = os.environ.get("PB_DB", "/data/workbench.db")
 DATA = os.path.dirname(DB)
@@ -75,6 +88,34 @@ def out_of_band_jobs(tab: int) -> list[str]:
     return out
 
 
+def profile_cookie_hash(prof: str) -> str | None:
+    path = os.path.expanduser(f"~/.notebooklm-mcp-cli/profiles/{prof}/cookies.json")
+    try:
+        with open(path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def identity_checks(reg: dict[str, str]) -> list[dict]:
+    checks = []
+    seen: dict[str, str] = {}
+    for name in sorted(set(reg.values())):
+        h = profile_cookie_hash(name)
+        if h is None:
+            checks.append({"check": "A0-identity", "account": name, "level": "FAIL",
+                           "msg": f"{name}: cookies.json missing/unreadable"})
+        elif h in seen:
+            checks.append({"check": "A0-identity", "account": name, "level": "FAIL",
+                           "msg": f"{name} and {seen[h]}: byte-identical cookie jars "
+                                  f"(md5 {h}) — same real account, not two"})
+        else:
+            seen[h] = name
+            checks.append({"check": "A0-identity", "account": name, "level": "PASS",
+                           "msg": f"{name}: distinct jar (md5 {h[:12]})"})
+    return checks
+
+
 def running_jobs(tab: int) -> list[str]:
     out = []
     for kind, lock in LOCKS.items():
@@ -93,7 +134,7 @@ def main() -> int:
     reg = registered_accounts()
     c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     rows = c.execute("select id, name, nlm_profile from tabs order by id").fetchall()
-    checks, per_account = [], {}
+    checks, per_account = identity_checks(reg), {}
     for tid, name, prof in rows:
         prof = prof or "default"
         want = reg.get(str(tid))
@@ -112,7 +153,7 @@ def main() -> int:
     if not per_account:
         checks.append({"check": "A2-one-job-per-account", "level": "PASS", "msg": "no running NLM jobs"})
     worst = "FAIL" if any(x["level"] == "FAIL" for x in checks) else "PASS"
-    verdict = {"script_version": "2026-08-25.1", "ts": int(time.time()), "worst": worst,
+    verdict = {"script_version": "2026-09-13.1", "ts": int(time.time()), "worst": worst,
                "registered": reg, "checks": checks}
     os.makedirs(os.path.join(DATA, "audits"), exist_ok=True)
     with open(os.path.join(DATA, "audits", "audit_accounts.json"), "w") as f:
