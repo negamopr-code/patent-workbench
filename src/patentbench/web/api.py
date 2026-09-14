@@ -1363,6 +1363,28 @@ def _restage_missing_parts(nb: str, doc: dict, prof: str | None,
     return readded - len(missing) if readded < len(missing) else len(missing)
 
 
+def _delete_orphan_parts(nb: str, prof: str | None, part_short: list[int],
+                         docs_by_id: dict[int, dict]) -> None:
+    """Delete whatever part(s) of a part_short doc already landed in the notebook,
+    so a doc that can't be staged in FULL leaves no trace behind to permanently
+    occupy a cap slot. Root cause found 2026-09-14 by full-doc-staging-auditor:
+    part_short docs were marked add_failed but their already-added part(s) (e.g.
+    part 1 of a 2-part doc, carrying the doc's canonical title) were never rotated
+    out, because _rotate_out_ids only runs at the START of a stage, before this
+    round's own new failures are known. Each failure therefore permanently shrank
+    the effective 50-source budget for every later round — the direct cause of
+    previously-fine docs becoming newly add_failed mid-campaign (t13: 20 of them
+    in one requeue run)."""
+    if not part_short:
+        return
+    raw = nlm_bridge.list_sources(nb, force=True, profile=prof)
+    title_to_id = {(s.get("title") or ""): s["id"] for s in (raw.get("sources") or [])}
+    orphan_ids = [title_to_id[t] for did in part_short
+                  for t, _ in _doc_source_parts(docs_by_id[did]) if t in title_to_id]
+    if orphan_ids:
+        nlm_bridge.delete_source(orphan_ids, nb, profile=prof)
+
+
 def _verify_citations(tab_id: int, answer: str) -> str:
     """Correct [00NN] paragraph locators in a model answer to the paragraph their
     quoted text actually occupies. Runs at the API layer (not in claude_bridge) so
@@ -4054,6 +4076,7 @@ def _screen_stage(tab_id: int, st: dict, want_ids: list[int],
     # drop it from this round's roster and stamp it add_failed, the same treatment a
     # doc that never indexed at all receives (truncation NO-GO, user 2026-08-23)
     if part_short:
+        _delete_orphan_parts(nb, prof, part_short, docs_by_id)
         db.mark_screened(tab_id, part_short, "add_failed")
         failed = list({*failed, *part_short})
         db.append_message(tab_id, "s",
@@ -4778,6 +4801,7 @@ def _claims_stage(tab_id: int, st: dict, want_ids: list[int],
         if k in have and _restage_missing_parts(nb, docs_by_id[did], prof, raw_titles) < 0:
             part_short.append(did)
     if part_short:
+        _delete_orphan_parts(nb, prof, part_short, docs_by_id)
         nlm_bridge.wait_sources_ready(nb, timeout=60, profile=prof)
         num_map, bm_sid = _notebook_source_index(nb, prof, strict=True)
         failed = list({*failed, *part_short})
