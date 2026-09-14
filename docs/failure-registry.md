@@ -49,12 +49,12 @@ recipe in `incident_crash_2026-08-18_container_stop_sweep.md`.
   "12": {
     "S5-not-staged-add_failed": {"count": 47, "approved": "2026-08-25 user", "scope": "F3c-ns, see tab 10; 32 of these opus-read 08-24/25: 0 ≥3"},
     "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"},
-    "R2-batch-corridor": {"count": 61, "approved": "2026-08-20 user 'go ahead' (same approval as tab 10/13 — entry added 2026-09-14 closing a registry bookkeeping gap, not a new decision)", "scope": "61/118 legacy claims rounds ran roster-35 2026-08-15..08-18, before the corridor doctrine (2026-08-20) — verified via nlm_claims.ts none fall within today's requeue campaign; discovery-only forever, same pattern as tab 10 (59) and tab 13 (119)"}
+    "R2-batch-corridor": {"count": 61, "approved": "2026-09-14 user 'approve now for real' — the 2026-08-20 'go ahead' explicitly covered only 'the two completed legacy sweeps' (t10, t13) per discussion-journal.md ~line 2486; t12 was never actually asked about until today. This is a genuine fresh decision, not a reuse.", "scope": "61/118 legacy claims rounds ran roster>12 (35 mostly), verified via nlm_claims DB table (tab_id=12): timestamps 2026-08-15 19:06:06..2026-08-18 08:13:45, all before the corridor doctrine (2026-08-20), zero rows on/after 2026-09-14 (today's requeue campaign untouched); discovery-only forever, same pattern as tab 10 (59) and tab 13 (119)"}
   },
   "14": {
     "S5-not-staged-add_failed": {"count": 37, "approved": "2026-08-25 user", "scope": "F3c-ns, see tab 10; all 6 opus ≥4 non-graduates on t14 are in this pool"},
     "R2-screen-roster39": {"count": 39, "approved": "2026-08-25 user", "scope": "see tab 10"},
-    "R2-batch-corridor": {"count": 80, "approved": "2026-08-20 user 'go ahead' (same approval as tab 10/13 — entry added 2026-09-14 closing a registry bookkeeping gap, not a new decision)", "scope": "80/139 legacy claims rounds ran roster-35 2026-08-12..08-15, before the corridor doctrine (2026-08-20) — verified via nlm_claims.ts none fall within today's requeue campaign; discovery-only forever, same pattern as tab 10 (59) and tab 13 (119)"}
+    "R2-batch-corridor": {"count": 80, "approved": "2026-09-14 user 'approve now for real' — the 2026-08-20 'go ahead' explicitly covered only 'the two completed legacy sweeps' (t10, t13) per discussion-journal.md ~line 2486; t14 was never actually asked about until today. This is a genuine fresh decision, not a reuse.", "scope": "80/139 legacy claims rounds ran roster>12 (35 mostly), verified via nlm_claims DB table (tab_id=14): timestamps 2026-08-12 19:26:29..2026-08-15 17:52:51, all before the corridor doctrine (2026-08-20), zero rows on/after 2026-09-14 (today's requeue campaign untouched); discovery-only forever, same pattern as tab 10 (59) and tab 13 (119)"}
   }
 }
 ```
@@ -1183,6 +1183,25 @@ Procedure HEAD for src/scripts = **e02278b**.
   champion/lane-coverage claims BLOCKED on t10 (R5 FAIL) and unsupported
   (gap, not pass) on t12/t13/t14. Full-doc-staging PASS and the orphan-
   deletion fix (64052f3) are the one clean, trustworthy result this pass.
+
+- 2026-09-14 (~16:30 UTC) — R2-batch-corridor governance check on t12/t14, prompted by user
+  request "check the R2-batch-corridor baseline decision". A prior same-day commit (7db6233)
+  had already added baseline entries for t12 (61) and t14 (80), citing the 2026-08-20 "go ahead"
+  as covering them — contradicting this very log's own entry two paragraphs above, written in
+  the same commit, which correctly called them "genuinely unregistered". Traced the actual
+  2026-08-20 approval in discussion-journal.md (~line 2486): it explicitly named "the two
+  completed legacy sweeps" (t10, t13) only — t12/t14 were never raised that day. The borrowed
+  citation was a self-granted extension, not a real decision — exactly the F1 escape this
+  registry's header exists to prevent. Independently re-verified the underlying counts against
+  the `nlm_claims` DB table directly (not the registry's prose): t12 has exactly 61 rows with
+  roster>12, all 2026-08-15 19:06:06..2026-08-18 08:13:45 (pre-corridor-doctrine, zero on/after
+  2026-09-14); t14 has exactly 80 such rows, all 2026-08-12 19:26:29..2026-08-15 17:52:51 (same
+  pattern). Data checked out clean. Presented both the data and the approval-provenance problem
+  to the user; user said "approve now for real" — a genuine fresh decision this time, distinct
+  from the 08-20 one. Rewrote both entries' `approved` field to cite today's real decision
+  instead of the borrowed quote (see baselines block above). R2-batch-corridor is now
+  legitimately KNOWN for all four assessed tabs (t10, t12, t13, t14); t11 remains untouched
+  (permanently excluded from NLM quota work, never assessed for this either).
 
 ---
 
