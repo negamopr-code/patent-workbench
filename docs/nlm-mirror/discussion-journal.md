@@ -3756,3 +3756,22 @@ Evidence: stdout empty, stderr `quota exhausted — aborting` (not persisted to 
 script produced no artifact on this path); ledger unchanged at 112 entries (verified
 before/after). No new file to cross-reference — this round's only trace is this journal entry
 and the (unmodified) ledger tail.
+
+## 2026-09-14 16:24 UTC — NLM follow-up verifier, t13 WO2015139810, retry #2 (still QUOTA ABORT)
+
+**Trigger.** User-requested retry, ~6h after the 10:22 UTC attempt above (stated 6-12h reset
+window for the `default` account). Account gate re-checked first per standing rule
+(`scripts/audit_accounts.py`): A0/A1/A2 all PASS, `default` free, t13 correctly bound to it, no
+running jobs — nothing blocked the attempt at the gate level.
+
+**Run.** Same invocation as the first attempt: `docker exec -i patent-bench python3 - --tab 13
+--docs WO2015139810 --json < scripts/nlm_followup.py` → **exit 2 (quota exhausted)**, stderr
+`quota exhausted — aborting`, identical failure mode to 10:22 UTC. Ledger re-checked
+before/after: still ends at tab 14 / ts 1788176327 (the same last line as the previous check),
+zero ledger writes, zero opus tokens.
+
+**Verdict: still NONE OBTAINED.** The 6h mark was evidently still inside the exhausted window
+for this account (or the window is longer than the ~6-12h estimate). WO2015139810's opus-5 score
+of 4.0 remains unconfirmed and unrefuted; t13's recall (7/22, 32%, FAIL) is unchanged. Not
+retrying again this session without a fresh user request — leaving it in the next sweep's
+follow-up queue per standing doctrine (quota-abort is silent success-so-far, no retry loop).
