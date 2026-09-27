@@ -198,6 +198,12 @@ def refresh(name, port):
     # would overwrite the last-known-good profile with dead state (bit 2026-08-13:
     # a whole day of cheerful "refreshed" logs while the session was gone).
     build = result.get("build_label") or ""
+    if not build:
+        # no build label at all = the NotebookLM page never finished loading
+        # (slow network / Google hiccup), NOT a logged-out page — reporting it
+        # as LOGIN NEEDED sent the user to re-login a healthy account (2026-09-27)
+        print(f"[{name}] PAGE DID NOT LOAD (no build label) — keeping the last good snapshot, retrying next cycle")
+        return False
     if "tailwind" not in build:
         print(f"[{name}] LOGIN NEEDED (logged-out page: build={build[:40] or '?'}) — "
               f"keeping the last good snapshot; sign in once at {NOVNC_HINT}")
