@@ -39,6 +39,15 @@ then re-probe the CLI. The snapshot stays the ONE consumer that rotates — the
 browser is still parked, so no stale browser ever presents old tokens.
 ROTATE_SECS=0 disables it (kill switch).
 
+ACCOUNT PIN (incident 2026-09-27): during a re-login the drawnformula window
+got signed in to TWO Google accounts (mickaelsh951 first, drawnformula second).
+NotebookLM uses the first (authuser 0), so the 'drawnformula' profile silently
+became work4's account while the extracted "email" flip-flopped between the
+two. Now <name>.email (chrome-profiles volume) pins each profile's account and
+every save is gated by Google's own ListAccounts answer for the extracted
+cookies: authuser 0 must be the pinned address, else WRONG ACCOUNT and nothing
+is saved. A profile's first successful save pins it when no pin exists.
+
 The notebook.google.com rebrand widening mirrors scripts/nlm-login-via-cdp.py
 (f8e9a66): Google redirects some accounts off notebooklm.google.com, which the
 stock URL check would misread as "not logged in".
@@ -110,6 +119,48 @@ def accounts():
     return out
 
 
+def _pin_path(name):
+    return f"{PROFILES_DIR}/{name}.email"
+
+
+def signed_in_accounts(cookies):
+    """Google's own answer: the accounts this cookie set is signed in to, in
+    authuser order ([] on any error). NotebookLM acts as authuser 0."""
+    import re
+    import httpx
+    header = "; ".join(f'{c["name"]}={c["value"]}' for c in cookies
+                       if c.get("domain", "").lstrip(".") in ("google.com", "accounts.google.com"))
+    try:
+        r = httpx.post("https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard",
+                       headers={"Cookie": header, "Origin": "https://www.google.com",
+                                "User-Agent": ROTATE_UA}, timeout=30)
+    except Exception:
+        return []
+    if r.status_code != 200:
+        return []
+    return re.findall(r'"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)"', r.text)
+
+
+def account_gate(name, cookies):
+    """(ok, msg). ok=False → do NOT save these cookies under `name`."""
+    accts = signed_in_accounts(cookies)
+    if not accts:
+        return False, "could not verify the account (ListAccounts gave no answer) — not saving"
+    try:
+        want = open(_pin_path(name)).read().strip().lower()
+    except OSError:
+        want = ""
+    if want and accts[0].lower() != want:
+        return False, (f"WRONG ACCOUNT: this window's first account is {accts[0]} (all: {', '.join(accts)}) "
+                       f"but profile '{name}' is pinned to {want} — NOT saved. In this window sign out of "
+                       f"all accounts and sign in ONLY as {want} at {NOVNC_HINT}")
+    if not want:
+        with open(_pin_path(name), "w") as f:
+            f.write(accts[0])
+    extra = f" (also signed in: {', '.join(accts[1:])})" if len(accts) > 1 else ""
+    return True, accts[0] + extra
+
+
 def refresh(name, port):
     cdp_url = f"http://127.0.0.1:{port}"
     # Visit the OLD domain first: the CLI talks to notebooklm.google.com, but a
@@ -151,6 +202,10 @@ def refresh(name, port):
         print(f"[{name}] LOGIN NEEDED (logged-out page: build={build[:40] or '?'}) — "
               f"keeping the last good snapshot; sign in once at {NOVNC_HINT}")
         return False
+    gok, gmsg = account_gate(name, cookies)
+    if not gok:
+        print(f"[{name}] {gmsg}")
+        return False
     for prof in [name] + ([PROFILE_ALIASES[name]] if name in PROFILE_ALIASES else []):
         AuthManager(prof).save_profile(
             cookies=cookies,
@@ -160,7 +215,7 @@ def refresh(name, port):
             force=True,
             build_label=result.get("build_label", ""),
         )
-    print(f"[{name}] refreshed: {len(cookies)} cookies, email={result.get('email')}"
+    print(f"[{name}] refreshed: {len(cookies)} cookies, email={result.get('email')}, google account={gmsg}"
           + (f" (mirrored to '{PROFILE_ALIASES[name]}')" if name in PROFILE_ALIASES else ""))
     return True
 
