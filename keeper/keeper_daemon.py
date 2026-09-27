@@ -26,6 +26,19 @@ or serve a human login. A <name>.wake file lifts quarantine on demand — with
 the browser's Google cookies WIPED first, because presenting stale rotating
 cookies next to a LIVE CLI session kills the whole session family.
 
+QUARANTINE ROTATION (incident 2026-09-27, all 4 accounts died together): a
+quarantined browser never touches Google, and the CLI never renews the login
+either — it only *reads* __Secure-1PSIDTS, it never calls RotateCookies. So
+quarantine had no renewal at all: daily restarts re-quarantined from 09-13,
+the snapshots aged out ~2 weeks later and every slot went dark at once. Now,
+while an account is quarantined AND its CLI snapshot is alive, the daemon
+itself renews the session every ROTATE_SECS: POST accounts.google.com/
+RotateCookies with the snapshot's own cookies (exactly what a Google page does
+in a browser), merge the fresh PSIDTS/SIDCC into cookies.json (+ alias mirror),
+then re-probe the CLI. The snapshot stays the ONE consumer that rotates — the
+browser is still parked, so no stale browser ever presents old tokens.
+ROTATE_SECS=0 disables it (kill switch).
+
 The notebook.google.com rebrand widening mirrors scripts/nlm-login-via-cdp.py
 (f8e9a66): Google redirects some accounts off notebooklm.google.com, which the
 stock URL check would misread as "not logged in".
@@ -43,6 +56,9 @@ from notebooklm_tools.core.auth import AuthManager
 
 PB_URL = os.environ.get("PB_URL", "http://host.docker.internal:8099")
 REFRESH_SECS = int(os.environ.get("REFRESH_SECS", "900"))
+ROTATE_SECS = int(os.environ.get("ROTATE_SECS", "1800"))
+ROTATE_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+             "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 PROFILES_DIR = "/home/app/chrome-profiles"
 ACCOUNTS_FILE = PROFILES_DIR + "/accounts.conf"
 NOVNC_HINT = "http://localhost:8106/vnc.html"
@@ -248,6 +264,99 @@ def cli_probe(name):
     return False, ((p.stderr or p.stdout) or "").strip()[:200]
 
 
+def _rot_path(name):
+    return f"{PROFILES_DIR}/{name}.rotated"
+
+
+def rotation_due(name):
+    if ROTATE_SECS <= 0:
+        return False
+    try:
+        return time.time() - os.path.getmtime(_rot_path(name)) >= ROTATE_SECS
+    except OSError:
+        return True   # never rotated (or marker lost) → rotate now
+
+
+def _parse_set_cookie(header):
+    """'NAME=VALUE; Domain=.google.com; Expires=...; Max-Age=N; ...' → dict.
+    Hand-rolled: SimpleCookie trips over Google's attribute mix."""
+    parts = [p.strip() for p in header.split(";")]
+    if not parts or "=" not in parts[0]:
+        return None
+    name, value = parts[0].split("=", 1)
+    out = {"name": name.strip(), "value": value.strip(), "domain": ".google.com",
+           "path": "/", "expires": None}
+    for a in parts[1:]:
+        k, _, v = a.partition("=")
+        k = k.strip().lower()
+        if k == "domain" and v:
+            out["domain"] = v if v.startswith(".") else "." + v
+        elif k == "path" and v:
+            out["path"] = v
+        elif k == "max-age":
+            try:
+                out["expires"] = time.time() + int(v)
+            except ValueError:
+                pass
+        elif k == "expires" and out["expires"] is None:
+            try:
+                from email.utils import parsedate_to_datetime
+                out["expires"] = parsedate_to_datetime(v).timestamp()
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def rotate_session(name):
+    """(ok, msg): renew a quarantined account's Google session from the CLI
+    snapshot itself — see QUARANTINE ROTATION in the module docstring."""
+    import httpx
+    from pathlib import Path
+    pdir = Path.home() / ".notebooklm-mcp-cli" / "profiles" / name
+    cookies = json.load(open(pdir / "cookies.json"))
+    header = "; ".join(f'{c["name"]}={c["value"]}' for c in cookies
+                       if c.get("domain", "").lstrip(".") in ("google.com", "accounts.google.com"))
+    try:
+        r = httpx.post("https://accounts.google.com/RotateCookies",
+                       headers={"Content-Type": "application/json", "Cookie": header,
+                                "Origin": "https://accounts.google.com",
+                                "User-Agent": ROTATE_UA},
+                       content='[000,"-0000000000000000000"]', timeout=30)
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    if r.status_code != 200:
+        return False, f"HTTP {r.status_code}"
+    fresh = [c for c in (_parse_set_cookie(h) for h in r.headers.get_list("set-cookie")) if c]
+    if not any("PSIDTS" in c["name"] for c in fresh):
+        return False, f"200 but no PSIDTS in Set-Cookie ({[c['name'] for c in fresh]})"
+    # merge into the list-shaped snapshot: same name+domain → new value/expiry
+    for fc in fresh:
+        hit = False
+        for c in cookies:
+            if c.get("name") == fc["name"] and c.get("domain", "").lstrip(".") == fc["domain"].lstrip("."):
+                c["value"] = fc["value"]
+                if fc["expires"]:
+                    c["expires"] = fc["expires"]
+                hit = True
+        if not hit:
+            cookies.append({"name": fc["name"], "value": fc["value"], "domain": fc["domain"],
+                            "path": fc["path"], "expires": fc["expires"] or -1,
+                            "httpOnly": True, "secure": True, "session": fc["expires"] is None,
+                            "sameSite": "None"})
+    try:
+        meta = json.load(open(pdir / "metadata.json"))
+    except (OSError, ValueError):
+        meta = {}
+    for prof in [name] + ([PROFILE_ALIASES[name]] if name in PROFILE_ALIASES else []):
+        AuthManager(prof).save_profile(
+            cookies=cookies, csrf_token=meta.get("csrf_token"),
+            session_id=meta.get("session_id"), email=meta.get("email"),
+            force=True, build_label=meta.get("build_label"))
+    with open(_rot_path(name), "w") as f:
+        f.write(json.dumps({"at": time.time(), "renewed": [c["name"] for c in fresh]}))
+    return True, f"renewed {', '.join(c['name'] for c in fresh)}"
+
+
 def _chromium_pid(port):
     """Main Chromium process for this account (owns the CDP port; renderers
     carry --type= and are torn down with it)."""
@@ -381,6 +490,15 @@ while True:
                 ever_ok.add(name)
                 print(f"[{name}] quarantined: CLI session ALIVE, browser parked "
                       f"off Google — running login-free")
+                if rotation_due(name):
+                    rok, rmsg = rotate_session(name)
+                    if rok:
+                        pok, perr = cli_probe(name)
+                        print(f"[{name}] ROTATED session from the CLI snapshot ({rmsg}); "
+                              f"CLI after rotation: {'ALIVE' if pok else 'DEAD — ' + perr[:100]}")
+                    else:
+                        print(f"[{name}] ROTATION FAILED ({rmsg[:120]}) — CLI still alive, "
+                              f"retrying next cycle")
             else:
                 quar_fails[name] = quar_fails.get(name, 0) + 1
                 authish = any(w in err.lower()

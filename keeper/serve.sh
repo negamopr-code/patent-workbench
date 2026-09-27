@@ -28,6 +28,7 @@ docker run -d --name nlm-keeper --restart unless-stopped \
   -e PB_URL="${PB_URL:-http://host.docker.internal:8099}" \
   -e REFRESH_SECS="${REFRESH_SECS:-300}" \
   -e PROFILE_ALIASES="${PROFILE_ALIASES:-bubu:default}" \
+  -e ROTATE_SECS="${ROTATE_SECS:-1800}" \
   -v nlm-profile:/home/app/.notebooklm-mcp-cli \
   -v nlm-keeper-chrome:/home/app/chrome-profiles \
   nlm-keeper
