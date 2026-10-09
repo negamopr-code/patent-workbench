@@ -20,7 +20,7 @@ entrypoint launches every Chromium blocked from *.google.com with a
 <name>.quarantine marker. While the marker exists the daemon does NOT drive
 the browser at all — it probes the saved CLI profile (`nlm notebook list`,
 free) instead. CLI alive → nothing to do, audits run login-free. CLI dead
-(auth-class error, or 3 straight probe failures) → lift_quarantine: relaunch
+(LIFT_AFTER straight probe failures) → lift_quarantine: relaunch
 the browser unblocked so it can auto-recover from gracefully-flushed cookies
 or serve a human login. A <name>.wake file lifts quarantine on demand — with
 the browser's Google cookies WIPED first, because presenting stale rotating
@@ -48,6 +48,19 @@ every save is gated by Google's own ListAccounts answer for the extracted
 cookies: authuser 0 must be the pinned address, else WRONG ACCOUNT and nothing
 is saved. A profile's first successful save pins it when no pin exists.
 
+SIGNED-IN GATE (incident 2026-10-06..09): Google finished the rebrand —
+notebooklm.google.com now 301s to notebook.google.com ("Gemini Notebook") and
+its SIGNED-OUT landing page (/trynow) is served by the very same labs-tailwind
+frontend, build label and all. The "tailwind in the build label" tell therefore
+passed on logged-out browsers, and ListAccounts still named the account for
+their stale SID. Result: after one CLI probe failure lifted the quarantine, the
+woken browsers (jar from the 09-27 login, long superseded by RotateCookies)
+overwrote every good snapshot with dead cookies every 5 minutes for 3 days
+while logging "refreshed". Now a save needs Google's own proof: the app page
+fetched WITH the extracted cookies must carry the SNlM0e CSRF token — only a
+signed-in page has one. And quarantine is lifted only after LIFT_AFTER
+consecutive failed CLI probes, never on a single auth-looking hiccup.
+
 The notebook.google.com rebrand widening mirrors scripts/nlm-login-via-cdp.py
 (f8e9a66): Google redirects some accounts off notebooklm.google.com, which the
 stock URL check would misread as "not logged in".
@@ -66,6 +79,7 @@ from notebooklm_tools.core.auth import AuthManager
 PB_URL = os.environ.get("PB_URL", "http://host.docker.internal:8099")
 REFRESH_SECS = int(os.environ.get("REFRESH_SECS", "900"))
 ROTATE_SECS = int(os.environ.get("ROTATE_SECS", "1800"))
+LIFT_AFTER = int(os.environ.get("LIFT_AFTER", "3"))
 ROTATE_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 PROFILES_DIR = "/home/app/chrome-profiles"
@@ -141,6 +155,30 @@ def signed_in_accounts(cookies):
     return re.findall(r'"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+)"', r.text)
 
 
+def snapshot_signed_in(cookies):
+    """True / False / None: does this cookie set open the real app? Fetches the
+    app page the way the CLI does and looks for the SNlM0e CSRF token, which
+    only a signed-in page carries (the signed-out /trynow page has the same
+    build label but no token). None = no answer (network / Google hiccup)."""
+    import re
+    import httpx
+    jar = httpx.Cookies()
+    for c in cookies:
+        if c.get("name") and c.get("domain"):
+            jar.set(c["name"], c.get("value", ""), domain=c["domain"], path=c.get("path") or "/")
+    try:
+        with httpx.Client(cookies=jar, headers={"User-Agent": ROTATE_UA},
+                          follow_redirects=True, timeout=30) as cl:
+            r = cl.get("https://notebooklm.google.com/")
+    except Exception:
+        return None
+    if r.status_code != 200:
+        return None
+    if re.search(r'"SNlM0e":"[^"]+"', r.text):
+        return True
+    return False
+
+
 def account_gate(name, cookies):
     """(ok, msg). ok=False → do NOT save these cookies under `name`."""
     accts = signed_in_accounts(cookies)
@@ -206,6 +244,15 @@ def refresh(name, port):
         return False
     if "tailwind" not in build:
         print(f"[{name}] LOGIN NEEDED (logged-out page: build={build[:40] or '?'}) — "
+              f"keeping the last good snapshot; sign in once at {NOVNC_HINT}")
+        return False
+    signed = snapshot_signed_in(cookies)
+    if signed is None:
+        print(f"[{name}] COULD NOT VERIFY the sign-in (app page gave no answer) — "
+              f"keeping the last good snapshot, retrying next cycle")
+        return False
+    if not signed:
+        print(f"[{name}] LOGIN NEEDED (browser is signed out: the app page has no session token) — "
               f"keeping the last good snapshot; sign in once at {NOVNC_HINT}")
         return False
     gok, gmsg = account_gate(name, cookies)
@@ -562,15 +609,13 @@ while True:
                               f"retrying next cycle")
             else:
                 quar_fails[name] = quar_fails.get(name, 0) + 1
-                authish = any(w in err.lower()
-                              for w in ("auth", "expired", "login", "sign in"))
-                if authish or quar_fails[name] >= 3:
+                if quar_fails[name] >= LIFT_AFTER:
                     print(f"[{name}] quarantine LIFT: CLI snapshot dead "
                           f"({err[:100] or 'no error text'}) — waking the browser")
                     lift_quarantine(name, port, wipe_google_cookies=False)
                 else:
-                    print(f"[{name}] quarantine probe hiccup "
-                          f"({quar_fails[name]}/3: {err[:100]}) — staying parked")
+                    print(f"[{name}] quarantine probe failed "
+                          f"({quar_fails[name]}/{LIFT_AFTER}: {err[:100]}) — staying parked")
             continue
         try:
             if refresh(name, port):
