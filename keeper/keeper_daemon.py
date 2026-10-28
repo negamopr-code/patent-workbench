@@ -120,6 +120,47 @@ _orig = cdp._is_notebooklm_url
 cdp._is_notebooklm_url = lambda url: _orig(url) or "notebook.google.com" in (url or "")
 
 
+def _pages(port):
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=8) as r:
+        return [p for p in json.loads(r.read()) if p.get("type") == "page"]
+
+
+def _is_signin(url):
+    return "accounts.google.com" in (url or "")
+
+
+_create_page = cdp.find_or_create_notebooklm_page_by_cdp_url
+
+
+def work_page(cdp_http_url):
+    """ONE tab per window for the keeper's own navigation (incident 2026-10-28: the
+    library's find-or-create only reuses a NotebookLM tab, so while a window was
+    signed out — tab parked on a Google sign-in / blank page — it opened a new tab
+    every cycle: ~60 tabs in the bubu window, the human's sign-in tab buried).
+    Reuse the NotebookLM tab, else any tab that is not a sign-in in progress; open
+    one only when none is left. Every other tab is closed, except ONE sign-in tab
+    (a human may be typing a password in it). Replaces the library function, so
+    the cookie extraction inside the library reuses the same tab too."""
+    base = cdp_http_url.rstrip("/")
+    port = int(base.rsplit(":", 1)[1])
+    pages = _pages(port)
+    nb = [p for p in pages if cdp._is_notebooklm_url(p.get("url"))]
+    signin = [p for p in pages if _is_signin(p.get("url"))]
+    other = [p for p in pages if p not in nb and p not in signin]
+    keep = (nb or other or [None])[0] or _create_page(base)
+    keep_ids = {keep.get("id")} | ({signin[0]["id"]} if signin else set())
+    for p in pages:
+        if p["id"] not in keep_ids:
+            try:
+                urllib.request.urlopen(f"{base}/json/close/{p['id']}", timeout=5).read()
+            except Exception:
+                pass
+    return keep
+
+
+cdp.find_or_create_notebooklm_page_by_cdp_url = work_page
+
+
 def accounts():
     out = []
     with open(ACCOUNTS_FILE) as f:
@@ -528,19 +569,45 @@ def lift_quarantine(name, port, wipe_google_cookies=False):
     time.sleep(15)  # let it paint before the next probe/refresh touches CDP
 
 
-def bring_to_front(port):
-    """Focus this account's Chrome window so the noVNC page shows the right
-    sign-in screen without the user hunting through stacked windows."""
+BANNER_JS = """(function f(){if(!document.body)return setTimeout(f,200);
+if(document.getElementById('keeper-banner'))return;var d=document.createElement('div');d.id='keeper-banner';
+d.textContent=%s;d.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b00020;'+
+'color:#fff;font:bold 20px/1.4 sans-serif;padding:10px 16px;text-align:center';document.body.appendChild(d)})()"""
+
+
+def show_login(name, port):
+    """noVNC shows ONE window — the first account still waiting for its login. Make
+    it unmistakable (incident 2026-10-28: bbubu2748 was signed into the work2 window
+    twice because the fronted window was a NotebookLM tab with no account name, the
+    real sign-in tab buried under it): a Google sign-in tab with this account's
+    pinned email pre-filled, a red banner naming the account, and that tab in front.
+    An existing sign-in tab is reused untouched — never navigate away from a
+    password a human is typing."""
+    from urllib.parse import quote, urlencode
+    from websocket import create_connection
     try:
-        from websocket import create_connection
-        page = cdp.find_or_create_notebooklm_page_by_cdp_url(f"http://127.0.0.1:{port}")
-        ws_url = cdp._normalize_ws_url(page.get("webSocketDebuggerUrl"))
-        ws = create_connection(ws_url, timeout=5, suppress_origin=True)
-        ws.send(json.dumps({"id": 1, "method": "Page.bringToFront"}))
-        ws.recv()
+        email = open(_pin_path(name)).read().strip()
+    except OSError:
+        email = ""
+    try:
+        tab = next((p for p in _pages(port) if _is_signin(p.get("url"))), None)
+        if tab is None:
+            url = "https://accounts.google.com/ServiceLogin?" + urlencode(
+                {"continue": "https://notebooklm.google.com/", **({"Email": email} if email else {})})
+            with urllib.request.urlopen(urllib.request.Request(
+                    f"http://127.0.0.1:{port}/json/new?{quote(url, safe='')}", method="PUT"), timeout=10) as r:
+                tab = json.loads(r.read())
+            time.sleep(4)
+        text = (f"NotebookLM keeper — window '{name}': sign in ONLY as {email}" if email
+                else f"NotebookLM keeper — window '{name}'")
+        ws = create_connection(cdp._normalize_ws_url(tab["webSocketDebuggerUrl"]), timeout=8, suppress_origin=True)
+        ws.send(json.dumps({"id": 1, "method": "Page.bringToFront"})); ws.recv()
+        ws.send(json.dumps({"id": 2, "method": "Runtime.evaluate",
+                            "params": {"expression": BANNER_JS % json.dumps(text)}})); ws.recv()
         ws.close()
-    except Exception:
-        pass
+        print(f"[{name}] noVNC {NOVNC_HINT} now shows the '{name}' window — sign in there as {email or 'its account'}")
+    except Exception as e:
+        print(f"[{name}] could not show the sign-in window: {type(e).__name__}: {e}")
 
 
 def api(path, payload=None):
@@ -583,7 +650,7 @@ ever_ok = set()
 quar_fails = {}
 while True:
     any_ok = False
-    pending_ports = []
+    pending = []
     for name, port in accounts():
         if os.path.exists(_quar_path(name)):
             if os.path.exists(_wake_path(name)):
@@ -622,11 +689,11 @@ while True:
                 any_ok = True
                 ever_ok.add(name)
             else:
-                pending_ports.append(port)
+                pending.append((name, port))
         except Exception as e:
             print(f"[{name}] refresh failed: {type(e).__name__}: {e}")
-    if pending_ports:
-        bring_to_front(pending_ports[0])
+    if pending:
+        show_login(*pending[0])
     if any_ok:
         try:
             resume_auth_errored()
